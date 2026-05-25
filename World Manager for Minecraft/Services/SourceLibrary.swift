@@ -125,7 +125,7 @@ final class SourceLibrary: ObservableObject {
         updateSource(sourceID) { source in
             source.isScanning = true
             source.scanError = nil
-            source.scanStatus = "Searching for Minecraft content..."
+            source.scanStatus = "Scanning Minecraft library..."
             source.items = []
             source.indexedItemCount = 0
             source.indexedDetailCount = 0
@@ -185,7 +185,7 @@ final class SourceLibrary: ObservableObject {
             updateSource(sourceID) { source in
                 source.items.sort(by: WorldScanner.sortItems)
                 source.scanStatus = source.indexedItemCount == 0
-                    ? "No Minecraft content found."
+                    ? "No Minecraft items found."
                     : "Loaded \(source.indexedDetailCount) items."
                 source.isScanning = false
                 source.lastScanDate = Date()

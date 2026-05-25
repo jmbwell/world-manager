@@ -11,142 +11,86 @@ import UniformTypeIdentifiers
 
 struct ContentView: View {
     @StateObject private var library = SourceLibrary()
-    @State private var selectedItem: MinecraftContentItem?
+    @State private var selectedItemID: MinecraftContentItem.ID?
     @State private var selectedSidebarSelection: SidebarSelection?
     @State private var searchText = ""
     @State private var isDropTargeted = false
     @State private var isPerformingItemAction = false
+    @State private var sortMode: ItemSortMode = .name
 
     private let directoryPreviewLimit = 12
 
     var body: some View {
         NavigationSplitView {
-            VStack(spacing: 0) {
-                SidebarSourcesHeaderView(addSourceAction: pickFolder)
-                    .padding(.horizontal, 12)
-                    .padding(.top, 8)
-                    .padding(.bottom, 4)
-
-                List(selection: $selectedSidebarSelection) {
-                    ForEach(library.sources) { source in
-                        SourceHeaderRow(title: source.displayName)
-                            .listRowSeparator(.hidden)
-                            .padding(.top, 6)
-                            .contextMenu {
-                                Button("Rescan \"\(source.displayName)\"") {
-                                    library.rescanSource(withID: source.id)
-                                }
-
-                                Divider()
-
-                                Button("Remove \"\(source.displayName)\"", role: .destructive) {
-                                    removeSource(source.id)
-                                }
-                            }
-
-                        ForEach(sidebarFilters(for: source)) { filter in
-                            SidebarFilterRow(filter: filter, isIndented: true)
-                                .tag(filter.selection as SidebarSelection?)
-                        }
-                    }
-                }
-                .listStyle(.sidebar)
-
-                if library.sidebarFooterState.style != .idle {
-                    SidebarFooterView(
-                        state: library.sidebarFooterState,
-                        revealAction: revealURLInFinder(_:)
-                    )
-                    .padding(.horizontal, 10)
-                    .padding(.bottom, 10)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-                }
-            }
-            .animation(.easeInOut(duration: 0.2), value: library.sidebarFooterState.style)
+            SourcesSidebarView(
+                sources: library.sources,
+                selection: $selectedSidebarSelection,
+                footerState: library.sidebarFooterState,
+                addSourceAction: pickFolder,
+                rescanSourceAction: { source in
+                    library.rescanSource(withID: source.id)
+                },
+                removeSourceAction: { source in
+                    removeSource(source.id)
+                },
+                revealFooterURLAction: revealURLInFinder(_:),
+                filters: sidebarFilters(for:)
+            )
         } content: {
-            if library.sources.isEmpty {
-                EmptySourcesView(
-                    isDropTargeted: isDropTargeted,
-                    chooseFolder: pickFolder
-                )
-                .onDrop(of: [UTType.fileURL.identifier], isTargeted: $isDropTargeted, perform: handleDroppedProviders)
-            } else {
-                VStack(spacing: 0) {
-                    ContentCollectionHeaderView(
-                        title: collectionHeaderTitle,
-                        subtitle: collectionHeaderSubtitle
-                    )
-
-                    Divider()
-
-                    List(filteredItems, selection: $selectedItem) { item in
-                        ContentRowView(item: item)
-                            .tag(item)
-                            .contextMenu {
-                                itemContextMenu(for: item)
-                            }
-                    }
-                    .listStyle(.inset)
-                }
-            }
+            ItemListColumnView(
+                isEmpty: library.sources.isEmpty,
+                isDropTargeted: $isDropTargeted,
+                selectedItemID: $selectedItemID,
+                searchText: $searchText,
+                sortMode: $sortMode,
+                title: collectionHeaderTitle,
+                subtitle: collectionHeaderSubtitle,
+                items: displayedItems,
+                searchPrompt: searchPrompt,
+                chooseFolderAction: pickFolder,
+                dropAction: handleDroppedProviders(_:),
+                refreshAction: rescanCurrentSource,
+                itemContextMenu: itemContextMenu(for:)
+            )
         } detail: {
-            if library.sources.isEmpty {
-                Text("Add a source folder to start scanning Minecraft content")
-                    .foregroundStyle(.secondary)
-            } else if let selectedItem = currentSelectedItem {
-                ItemDetailView(
-                    item: selectedItem,
-                    behaviorPacks: packReferences(for: selectedItem, type: .behaviorPack),
-                    resourcePacks: packReferences(for: selectedItem, type: .resourcePack),
-                    contents: directoryPreviewEntries(for: selectedItem),
-                    directoryPreviewLimit: directoryPreviewLimit,
-                    isPerformingItemAction: isPerformingItemAction,
-                    primaryActionTitle: primaryActionTitle(for: selectedItem),
-                    primaryActionSubtitle: primaryActionSubtitle(for: selectedItem),
-                    primaryAction: { saveItem(selectedItem) },
-                    shareAction: { anchorView in shareItem(selectedItem, from: anchorView) },
-                    revealAction: { revealInFinder(selectedItem) }
-                )
-            } else {
-                Text("Select a world or pack to see details")
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .searchable(text: $searchText, placement: .toolbar, prompt: searchPrompt)
-        .toolbar {
-            ToolbarItemGroup(placement: .primaryAction) {
-                if let selectedExportableItem = selectedExportableItem {
-                    SharingPickerButton(
-                        title: nil,
-                        systemImage: "square.and.arrow.up",
-                        isEnabled: !isPerformingItemAction
-                    ) { anchorView in
-                        shareItem(selectedExportableItem, from: anchorView)
+            ItemDetailColumnView(
+                item: currentSelectedItem,
+                behaviorPacks: currentSelectedItem.map { packReferences(for: $0, type: .behaviorPack) } ?? [],
+                resourcePacks: currentSelectedItem.map { packReferences(for: $0, type: .resourcePack) } ?? [],
+                contents: currentSelectedItem.map(directoryPreviewEntries(for:)) ?? [],
+                directoryPreviewLimit: directoryPreviewLimit,
+                isEmpty: library.sources.isEmpty,
+                isPerformingItemAction: isPerformingItemAction,
+                exportTitle: currentSelectedItem.map(primaryActionTitle(for:)),
+                exportAction: {
+                    guard let item = currentSelectedItem else {
+                        return
                     }
-                    .help("Share")
 
-                    Button {
-                        saveItem(selectedExportableItem)
-                    } label: {
-                        Label("Export", systemImage: "arrow.down.circle")
+                    saveItem(item)
+                },
+                revealAction: {
+                    guard let item = currentSelectedItem else {
+                        return
                     }
-                    .disabled(isPerformingItemAction)
 
-                    Button {
-                        revealInFinder(selectedExportableItem)
-                    } label: {
-                        Label("Reveal in Finder", systemImage: "folder")
+                    revealInFinder(item)
+                },
+                shareAction: { anchorView in
+                    guard let item = currentSelectedItem else {
+                        return
                     }
-                    .disabled(isPerformingItemAction)
+
+                    shareItem(item, from: anchorView)
                 }
-            }
+            )
         }
-        .onChange(of: filteredItems.map(\.id)) { _, filteredIDs in
-            guard let selectedItem, !filteredIDs.contains(selectedItem.id) else {
+        .onChange(of: displayedItems.map(\.id)) { _, filteredIDs in
+            guard let selectedItemID, !filteredIDs.contains(selectedItemID) else {
                 return
             }
 
-            self.selectedItem = nil
+            self.selectedItemID = nil
         }
         .onChange(of: library.sources.map(\.id)) { _, sourceIDs in
             syncSelection(with: sourceIDs)
@@ -177,6 +121,10 @@ struct ContentView: View {
         }
     }
 
+    private var displayedItems: [MinecraftContentItem] {
+        filteredItems.sorted(by: sortComparator)
+    }
+
     private var currentSource: MinecraftSource? {
         guard let sourceID = selectedSidebarSelection?.sourceID else {
             return library.sources.first
@@ -186,17 +134,56 @@ struct ContentView: View {
     }
 
     private var currentSelectedItem: MinecraftContentItem? {
-        guard let selectedItem else {
+        guard let selectedItemID else {
             return nil
         }
 
         return library.sources
             .flatMap(\.items)
-            .first(where: { $0.id == selectedItem.id }) ?? selectedItem
+            .first(where: { $0.id == selectedItemID })
     }
 
-    private var selectedExportableItem: MinecraftContentItem? {
-        currentSelectedItem
+    private var sortComparator: (MinecraftContentItem, MinecraftContentItem) -> Bool {
+        switch sortMode {
+        case .name:
+            return { lhs, rhs in
+                lhs.displayName.localizedStandardCompare(rhs.displayName) == .orderedAscending
+            }
+        case .modifiedDate:
+            return { lhs, rhs in
+                switch (lhs.displayDate, rhs.displayDate) {
+                case let (lhsDate?, rhsDate?):
+                    if lhsDate != rhsDate {
+                        return lhsDate > rhsDate
+                    }
+                case (.some, nil):
+                    return true
+                case (nil, .some):
+                    return false
+                case (nil, nil):
+                    break
+                }
+
+                return lhs.displayName.localizedStandardCompare(rhs.displayName) == .orderedAscending
+            }
+        case .size:
+            return { lhs, rhs in
+                switch (lhs.sizeBytes, rhs.sizeBytes) {
+                case let (lhsSize?, rhsSize?):
+                    if lhsSize != rhsSize {
+                        return lhsSize > rhsSize
+                    }
+                case (.some, nil):
+                    return true
+                case (nil, .some):
+                    return false
+                case (nil, nil):
+                    break
+                }
+
+                return lhs.displayName.localizedStandardCompare(rhs.displayName) == .orderedAscending
+            }
+        }
     }
 
     private var collectionHeaderTitle: String {
@@ -205,12 +192,12 @@ struct ContentView: View {
         }
 
         guard let selectedSidebarSelection else {
-            return "Minecraft Content"
+            return "Library"
         }
 
         switch selectedSidebarSelection {
         case .allContent:
-            return "All Content"
+            return "All Items"
         case .contentType(_, let contentType):
             return sidebarTitle(for: contentType)
         }
@@ -235,7 +222,7 @@ struct ContentView: View {
         case .some(.contentType(_, let contentType)):
             return sidebarTitle(for: contentType)
         case .none:
-            return "Content"
+            return "Library"
         }
     }
 
@@ -264,18 +251,18 @@ struct ContentView: View {
     private var searchPrompt: String {
         switch selectedSidebarSelection {
         case .some(.allContent):
-            return "Search All Content"
+            return "Search All Items"
         case .some(.contentType(_, let contentType)):
             return "Search \(sidebarTitle(for: contentType))"
         case .none:
-            return "Search Content"
+            return "Search Library"
         }
     }
 
     private func sidebarFilters(for source: MinecraftSource) -> [SidebarFilter] {
         var filters = [
             SidebarFilter(
-                title: "All Content",
+                title: "All Items",
                 iconName: "square.grid.2x2",
                 count: source.items.count,
                 selection: .allContent(sourceID: source.id)
@@ -471,8 +458,8 @@ struct ContentView: View {
             selectedSidebarSelection = fallbackSourceID.map { .allContent(sourceID: $0) }
         }
 
-        if let selectedItem, currentSelectedItem?.id != selectedItem.id {
-            self.selectedItem = nil
+        if let selectedItemID, currentSelectedItem?.id != selectedItemID {
+            self.selectedItemID = nil
         }
     }
 
@@ -483,13 +470,13 @@ struct ContentView: View {
             self.selectedSidebarSelection = .allContent(sourceID: firstSourceID)
         }
 
-        if let selectedItem {
+        if let selectedItemID {
             let itemStillExists = library.sources
                 .flatMap(\.items)
-                .contains(where: { $0.id == selectedItem.id })
+                .contains(where: { $0.id == selectedItemID })
 
             if !itemStillExists {
-                self.selectedItem = nil
+                self.selectedItemID = nil
             }
         }
     }
@@ -588,6 +575,14 @@ struct ContentView: View {
         NSWorkspace.shared.activateFileViewerSelecting([item.folderURL])
     }
 
+    private func rescanCurrentSource() {
+        guard let sourceID = selectedSidebarSelection?.sourceID else {
+            return
+        }
+
+        library.rescanSource(withID: sourceID)
+    }
+
     private func revealURLInFinder(_ url: URL) {
         NSWorkspace.shared.activateFileViewerSelecting([url])
     }
@@ -609,12 +604,93 @@ private enum SidebarSelection: Hashable {
     }
 }
 
+private enum ItemSortMode: String, CaseIterable, Identifiable {
+    case name
+    case modifiedDate
+    case size
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .name:
+            return "Name"
+        case .modifiedDate:
+            return "Modified Date"
+        case .size:
+            return "Size"
+        }
+    }
+}
+
 private struct SidebarFilter: Identifiable, Hashable {
     var id: SidebarSelection { selection }
     let title: String
     let iconName: String
     let count: Int
     let selection: SidebarSelection
+}
+
+private struct SourcesSidebarView: View {
+    let sources: [MinecraftSource]
+    @Binding var selection: SidebarSelection?
+    let footerState: SidebarFooterState
+    let addSourceAction: () -> Void
+    let rescanSourceAction: (MinecraftSource) -> Void
+    let removeSourceAction: (MinecraftSource) -> Void
+    let revealFooterURLAction: (URL) -> Void
+    let filters: (MinecraftSource) -> [SidebarFilter]
+
+    var body: some View {
+        List(selection: $selection) {
+            Section {
+                ForEach(sources) { source in
+                    SourceHeaderRow(title: source.displayName)
+                        .listRowSeparator(.hidden)
+                        .padding(.top, 6)
+                        .contextMenu {
+                            Button("Rescan \"\(source.displayName)\"") {
+                                rescanSourceAction(source)
+                            }
+
+                            Divider()
+
+                            Button("Remove \"\(source.displayName)\"", role: .destructive) {
+                                removeSourceAction(source)
+                            }
+                        }
+
+                    ForEach(filters(source)) { filter in
+                        SidebarFilterRow(filter: filter, isIndented: true)
+                            .tag(filter.selection as SidebarSelection?)
+                    }
+                }
+            } header: {
+                SidebarSourcesSectionHeaderView()
+            }
+        }
+        .listStyle(.sidebar)
+        .overlay(alignment: .bottom) {
+            if footerState.style != .idle {
+                SidebarFooterView(
+                    state: footerState,
+                    revealAction: revealFooterURLAction
+                )
+                .padding(.horizontal, 10)
+                .padding(.bottom, 10)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
+        .toolbar {
+            ToolbarItem {
+                Button(action: addSourceAction) {
+                    Image(systemName: "folder.badge.plus")
+                }
+                .help("Add Source Folder")
+            }
+        }
+        .animation(.easeInOut(duration: 0.2), value: footerState.style)
+    }
 }
 
 private struct SidebarFilterRow: View {
@@ -638,23 +714,12 @@ private struct SidebarFilterRow: View {
     }
 }
 
-private struct SidebarSourcesHeaderView: View {
-    let addSourceAction: () -> Void
-
+private struct SidebarSourcesSectionHeaderView: View {
     var body: some View {
-        HStack {
-            Text("Sources")
-                .font(.headline)
-                .foregroundStyle(.secondary)
-
-            Spacer()
-
-            Button(action: addSourceAction) {
-                Image(systemName: "plus")
-            }
-            .buttonStyle(.borderless)
-            .help("Add Source")
-        }
+        Text("Library")
+            .font(.headline)
+            .foregroundStyle(.secondary)
+        .textCase(nil)
     }
 }
 
@@ -719,23 +784,124 @@ private struct SidebarFooterView: View {
     }
 }
 
-private struct ContentCollectionHeaderView: View {
+private struct ItemListColumnView<MenuContent: View>: View {
+    let isEmpty: Bool
+    @Binding var isDropTargeted: Bool
+    @Binding var selectedItemID: MinecraftContentItem.ID?
+    @Binding var searchText: String
+    @Binding var sortMode: ItemSortMode
     let title: String
     let subtitle: String
+    let items: [MinecraftContentItem]
+    let searchPrompt: String
+    let chooseFolderAction: () -> Void
+    let dropAction: ([NSItemProvider]) -> Bool
+    let refreshAction: () -> Void
+    let itemContextMenu: (MinecraftContentItem) -> MenuContent
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(title)
-                .font(.title2.weight(.semibold))
-
-            Text(subtitle)
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+        Group {
+            if isEmpty {
+                EmptySourcesView(
+                    isDropTargeted: isDropTargeted,
+                    chooseFolder: chooseFolderAction
+                )
+                .onDrop(of: [UTType.fileURL.identifier], isTargeted: $isDropTargeted, perform: dropAction)
+            } else {
+                List(items, selection: $selectedItemID) { item in
+                    ContentRowView(item: item)
+                        .tag(item.id)
+                        .contextMenu {
+                            itemContextMenu(item)
+                        }
+                }
+                .listStyle(.inset)
+            }
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 14)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.background)
+        .searchable(text: $searchText, prompt: searchPrompt)
+        .navigationTitle(isEmpty ? "Library" : title)
+        .navigationSubtitle(isEmpty ? "" : subtitle)
+        .toolbar {
+            if !isEmpty {
+                ToolbarItemGroup {
+                    Button(action: refreshAction) {
+                        Image(systemName: "arrow.clockwise")
+                    }
+                    .help("Rescan Source")
+
+                    Menu {
+                        Picker("Sort By", selection: $sortMode) {
+                            ForEach(ItemSortMode.allCases) { mode in
+                                Text(mode.title).tag(mode)
+                            }
+                        }
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
+                    }
+                    .help("List Options")
+                }
+            }
+        }
+    }
+}
+
+private struct ItemDetailColumnView: View {
+    let item: MinecraftContentItem?
+    let behaviorPacks: [ContentPackReference]
+    let resourcePacks: [ContentPackReference]
+    let contents: [DirectoryPreviewEntry]
+    let directoryPreviewLimit: Int
+    let isEmpty: Bool
+    let isPerformingItemAction: Bool
+    let exportTitle: String?
+    let exportAction: () -> Void
+    let revealAction: () -> Void
+    let shareAction: (NSView?) -> Void
+
+    var body: some View {
+        Group {
+            if isEmpty {
+                Text("Add a source folder to start scanning your Minecraft library")
+                    .foregroundStyle(.secondary)
+            } else if let item {
+                ItemDetailView(
+                    item: item,
+                    behaviorPacks: behaviorPacks,
+                    resourcePacks: resourcePacks,
+                    contents: contents,
+                    directoryPreviewLimit: directoryPreviewLimit
+                )
+            } else {
+                Text("Select a world or pack to see details")
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .toolbar {
+            if item != nil {
+                ToolbarItemGroup {
+                    Button(action: exportAction) {
+                        Image(systemName: "arrow.down.circle")
+                    }
+                    .disabled(isPerformingItemAction)
+                    .help(exportTitle ?? "Export")
+
+                    Button(action: revealAction) {
+                        Image(systemName: "folder")
+                    }
+                    .disabled(isPerformingItemAction)
+                    .help("Reveal in Finder")
+
+                    SharingPickerButton(
+                        title: nil,
+                        systemImage: "square.and.arrow.up",
+                        isEnabled: !isPerformingItemAction
+                    ) { anchorView in
+                        shareAction(anchorView)
+                    }
+                    .help("Share")
+                }
+            }
+        }
     }
 }
 
@@ -785,12 +951,6 @@ private struct ItemDetailView: View {
     let resourcePacks: [ContentPackReference]
     let contents: [DirectoryPreviewEntry]
     let directoryPreviewLimit: Int
-    let isPerformingItemAction: Bool
-    let primaryActionTitle: String
-    let primaryActionSubtitle: String
-    let primaryAction: () -> Void
-    let shareAction: (NSView) -> Void
-    let revealAction: () -> Void
     @State private var isTechnicalDetailsExpanded = false
 
     var body: some View {
@@ -807,39 +967,6 @@ private struct ItemDetailView: View {
                         Text(item.contentType.rawValue)
                             .font(.title3)
                             .foregroundStyle(.secondary)
-                    }
-                }
-
-                detailCard {
-                    VStack(alignment: .leading, spacing: 14) {
-                        Text("Actions")
-                            .font(.headline)
-
-                        Button(primaryActionTitle) {
-                            primaryAction()
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.large)
-                        .disabled(isPerformingItemAction)
-
-                        Text(primaryActionSubtitle)
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-
-                        HStack(spacing: 12) {
-                            SharingPickerButton(
-                                title: "Share...",
-                                systemImage: "square.and.arrow.up",
-                                isEnabled: !isPerformingItemAction
-                            ) { anchorView in
-                                shareAction(anchorView)
-                            }
-
-                            Button("Reveal in Finder") {
-                                revealAction()
-                            }
-                            .disabled(isPerformingItemAction)
-                        }
                     }
                 }
 

@@ -155,7 +155,7 @@ enum ContentPackageExporter {
         )
         let trimmedPunctuation = normalizedWhitespace.trimmingCharacters(in: CharacterSet(charactersIn: " .-_"))
 
-        return trimmedPunctuation.isEmpty ? "Minecraft Content" : trimmedPunctuation
+        return trimmedPunctuation.isEmpty ? "Minecraft Item" : trimmedPunctuation
     }
 
     nonisolated private static func portableASCIIString(from value: String) -> String {
