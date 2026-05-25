@@ -5,92 +5,10 @@
 //  Created by John Burwell on 2026-05-25.
 //
 
-import Combine
 import Foundation
 
-@MainActor
-final class WorldScanner: ObservableObject {
-    @Published var items: [MinecraftContentItem] = []
-    @Published var isScanning = false
-    @Published var scanStatus = ""
-    @Published var scanError: String?
-
-    private var activeScanID = UUID()
-
-    func scan(at searchRootURL: URL) async {
-        let scanID = UUID()
-        activeScanID = scanID
-        isScanning = true
-        scanError = nil
-        scanStatus = "Searching for Minecraft content..."
-        items = []
-
-        do {
-            let discoveredItems = try await Task.detached(priority: .userInitiated) {
-                try Self.discoverItems(in: searchRootURL)
-            }.value
-
-            guard activeScanID == scanID else {
-                return
-            }
-
-            items = discoveredItems
-            scanStatus = discoveredItems.isEmpty
-                ? "No Minecraft content found."
-                : "Found \(discoveredItems.count) items. Loading details..."
-
-            var loadedCount = 0
-
-            await withTaskGroup(of: MinecraftContentItem.self) { group in
-                for item in discoveredItems {
-                    group.addTask {
-                        Self.enrich(item: item)
-                    }
-                }
-
-                for await enrichedItem in group {
-                    await MainActor.run {
-                        guard self.activeScanID == scanID else {
-                            return
-                        }
-
-                        self.replaceItem(with: enrichedItem)
-                        loadedCount += 1
-
-                        if loadedCount == discoveredItems.count {
-                            self.scanStatus = "Loaded \(loadedCount) items."
-                            self.isScanning = false
-                        } else {
-                            self.scanStatus = "Loaded details for \(loadedCount) of \(discoveredItems.count) items..."
-                        }
-                    }
-                }
-            }
-
-            if discoveredItems.isEmpty {
-                isScanning = false
-            }
-        } catch {
-            guard activeScanID == scanID else {
-                return
-            }
-
-            scanError = "Failed to scan folder: \(error.localizedDescription)"
-            scanStatus = ""
-            isScanning = false
-        }
-    }
-
-    private func replaceItem(with updatedItem: MinecraftContentItem) {
-        guard let index = items.firstIndex(where: { $0.id == updatedItem.id }) else {
-            return
-        }
-
-        items[index] = updatedItem
-        items.sort(by: Self.sortItems)
-    }
-
-    nonisolated private static func discoverItems(in searchRootURL: URL) throws -> [MinecraftContentItem] {
+enum WorldScanner {
+    nonisolated static func discoverItems(in searchRootURL: URL) throws -> [MinecraftContentItem] {
         let fileManager = FileManager.default
         let resourceKeys: [URLResourceKey] = [.isDirectoryKey]
 
@@ -139,7 +57,7 @@ final class WorldScanner: ObservableObject {
         return discoveredItems
     }
 
-    nonisolated private static func enrich(item: MinecraftContentItem) -> MinecraftContentItem {
+    nonisolated static func enrich(item: MinecraftContentItem) -> MinecraftContentItem {
         let fileManager = FileManager.default
         var enrichedItem = item
 
@@ -150,6 +68,19 @@ final class WorldScanner: ObservableObject {
         enrichedItem.metadataLoaded = true
 
         return enrichedItem
+    }
+
+    nonisolated static func sortItems(_ lhs: MinecraftContentItem, _ rhs: MinecraftContentItem) -> Bool {
+        if lhs.contentType != rhs.contentType {
+            return lhs.contentType.rawValue.localizedStandardCompare(rhs.contentType.rawValue) == .orderedAscending
+        }
+
+        let displayNameOrder = lhs.displayName.localizedStandardCompare(rhs.displayName)
+        if displayNameOrder != .orderedSame {
+            return displayNameOrder == .orderedAscending
+        }
+
+        return lhs.folderName.localizedStandardCompare(rhs.folderName) == .orderedAscending
     }
 
     nonisolated private static func contentType(forCollectionFolderName folderName: String) -> MinecraftContentType? {
@@ -272,18 +203,5 @@ final class WorldScanner: ObservableObject {
         }
 
         return totalSize
-    }
-
-    nonisolated private static func sortItems(_ lhs: MinecraftContentItem, _ rhs: MinecraftContentItem) -> Bool {
-        if lhs.contentType != rhs.contentType {
-            return lhs.contentType.rawValue.localizedStandardCompare(rhs.contentType.rawValue) == .orderedAscending
-        }
-
-        let displayNameOrder = lhs.displayName.localizedStandardCompare(rhs.displayName)
-        if displayNameOrder != .orderedSame {
-            return displayNameOrder == .orderedAscending
-        }
-
-        return lhs.folderName.localizedStandardCompare(rhs.folderName) == .orderedAscending
     }
 }

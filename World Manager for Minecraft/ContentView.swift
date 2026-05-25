@@ -7,84 +7,76 @@
 
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct ContentView: View {
-    @StateObject private var scanner = WorldScanner()
-    @State private var folderURL: URL?
+    @StateObject private var library = SourceLibrary()
     @State private var selectedItem: MinecraftContentItem?
-    @State private var selectedSidebarSelection: SidebarSelection = .all
+    @State private var selectedSidebarSelection: SidebarSelection?
+    @State private var searchText = ""
+    @State private var isDropTargeted = false
+    @State private var exportAlert: ExportAlert?
+    @State private var isExportingSelectedWorld = false
 
     var body: some View {
         NavigationSplitView {
-            VStack(alignment: .leading, spacing: 12) {
-                Button("Choose Minecraft Folder...") {
-                    pickFolder()
-                }
-
-                if let folderURL {
-                    Text(folderURL.path)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
-                } else {
-                    Text("No folder selected")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
-
-                if let scanError = scanner.scanError {
-                    Text(scanError)
-                        .font(.footnote)
-                        .foregroundStyle(.red)
-                }
-
-                List(selection: $selectedSidebarSelection) {
-                    if let folderURL {
-                        Section(folderURL.lastPathComponent) {
-                            ForEach(sidebarFilters) { filter in
-                                SidebarFilterRow(filter: filter)
-                                    .tag(filter.selection)
-                            }
+            List(selection: $selectedSidebarSelection) {
+                ForEach(library.sources) { source in
+                    Section(source.displayName) {
+                        ForEach(sidebarFilters(for: source)) { filter in
+                            SidebarFilterRow(filter: filter)
+                                .tag(filter.selection as SidebarSelection?)
                         }
                     }
                 }
-                .listStyle(.sidebar)
             }
-            .padding()
-            .navigationTitle("Source")
+            .listStyle(.sidebar)
+            .navigationTitle("Sources")
         } content: {
-            List(filteredItems, selection: $selectedItem) { item in
-                HStack(alignment: .top, spacing: 10) {
-                    ItemThumbnailView(iconURL: item.iconURL)
+            if library.sources.isEmpty {
+                EmptySourcesView(
+                    isDropTargeted: isDropTargeted,
+                    chooseFolder: pickFolder
+                )
+                .onDrop(of: [UTType.fileURL.identifier], isTargeted: $isDropTargeted, perform: handleDroppedProviders)
+            } else {
+                List(filteredItems, selection: $selectedItem) { item in
+                    HStack(alignment: .top, spacing: 10) {
+                        ItemThumbnailView(iconURL: item.iconURL)
 
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(item.displayName)
-                            .lineLimit(1)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(item.displayName)
+                                .lineLimit(1)
 
-                        Text(item.contentType.rawValue)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                            Text(item.contentType.rawValue)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
 
-                        Text(item.folderName)
-                            .font(.caption2)
-                            .foregroundStyle(.tertiary)
-                            .lineLimit(1)
+                            Text(item.folderName)
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                                .lineLimit(1)
+                        }
+
+                        Spacer()
+
+                        if !item.metadataLoaded {
+                            ProgressView()
+                                .controlSize(.small)
+                        }
                     }
-
-                    Spacer()
-
-                    if !item.metadataLoaded {
-                        ProgressView()
-                            .controlSize(.small)
-                    }
+                    .padding(.vertical, 2)
+                    .contentShape(Rectangle())
+                    .tag(item)
                 }
-                .padding(.vertical, 2)
-                .contentShape(Rectangle())
-                .tag(item)
+                .navigationTitle(contentListTitle)
+                .searchable(text: $searchText, placement: .toolbar, prompt: "Search Content")
             }
-            .navigationTitle(contentListTitle)
         } detail: {
-            if let selectedItem = currentSelectedItem {
+            if library.sources.isEmpty {
+                Text("Add a source folder to start scanning Minecraft content")
+                    .foregroundStyle(.secondary)
+            } else if let selectedItem = currentSelectedItem {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 16) {
                         HStack(alignment: .top, spacing: 16) {
@@ -101,6 +93,22 @@ struct ContentView: View {
                                 Text(selectedItem.folderName)
                                     .font(.subheadline)
                                     .foregroundStyle(.secondary)
+                            }
+
+                            Spacer(minLength: 0)
+
+                            if selectedItem.contentType == .world {
+                                Button {
+                                    exportSelectedWorld()
+                                } label: {
+                                    if isExportingSelectedWorld {
+                                        ProgressView()
+                                            .controlSize(.small)
+                                    } else {
+                                        Label("Export .mcworld", systemImage: "square.and.arrow.up")
+                                    }
+                                }
+                                .disabled(isExportingSelectedWorld)
                             }
                         }
 
@@ -135,18 +143,52 @@ struct ContentView: View {
         }
         .navigationTitle("Minecraft World Manager")
         .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                if scanner.isScanning {
+            ToolbarItemGroup(placement: .primaryAction) {
+                if selectedWorld != nil {
+                    Button {
+                        exportSelectedWorld()
+                    } label: {
+                        Label("Export .mcworld", systemImage: "square.and.arrow.up")
+                    }
+                    .disabled(isExportingSelectedWorld)
+                }
+
+                Button {
+                    pickFolder()
+                } label: {
+                    Label("Add Source", systemImage: "plus")
+                }
+
+                if let currentSource = currentSource {
+                    Menu {
+                        Button("Rescan \"\(currentSource.displayName)\"") {
+                            library.rescanSource(withID: currentSource.id)
+                        }
+
+                        Divider()
+
+                        Button("Remove \"\(currentSource.displayName)\"", role: .destructive) {
+                            removeSource(currentSource.id)
+                        }
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
+                    }
+                    .help("Source actions")
+                }
+            }
+
+            ToolbarItem(placement: .secondaryAction) {
+                if let activeScanSummary = library.activeScanSummary {
                     HStack(spacing: 8) {
                         ProgressView()
                             .controlSize(.small)
 
-                        Text(scanner.scanStatus)
+                        Text(activeScanSummary)
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                     }
-                    .frame(maxWidth: 280, alignment: .trailing)
+                    .frame(maxWidth: 320, alignment: .trailing)
                 }
             }
         }
@@ -157,15 +199,50 @@ struct ContentView: View {
 
             self.selectedItem = nil
         }
+        .onChange(of: library.sources.map(\.id)) { _, sourceIDs in
+            syncSelection(with: sourceIDs)
+        }
+        .alert(item: $exportAlert) { alert in
+            Alert(
+                title: Text(alert.title),
+                message: Text(alert.message),
+                dismissButton: .default(Text("OK"))
+            )
+        }
     }
 
     private var filteredItems: [MinecraftContentItem] {
-        switch selectedSidebarSelection {
-        case .all:
-            return scanner.items
-        case .contentType(let contentType):
-            return scanner.items.filter { $0.contentType == contentType }
+        guard let selectedSidebarSelection else {
+            return []
         }
+
+        let scopedItems: [MinecraftContentItem]
+
+        switch selectedSidebarSelection {
+        case .allContent(let sourceID):
+            scopedItems = library.source(withID: sourceID)?.items ?? []
+        case .contentType(let sourceID, let contentType):
+            scopedItems = library.source(withID: sourceID)?.items.filter { $0.contentType == contentType } ?? []
+        }
+
+        let trimmedSearchText = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedSearchText.isEmpty else {
+            return scopedItems
+        }
+
+        return scopedItems.filter { item in
+            item.displayName.localizedCaseInsensitiveContains(trimmedSearchText)
+                || item.folderName.localizedCaseInsensitiveContains(trimmedSearchText)
+                || item.contentType.rawValue.localizedCaseInsensitiveContains(trimmedSearchText)
+        }
+    }
+
+    private var currentSource: MinecraftSource? {
+        guard let sourceID = selectedSidebarSelection?.sourceID else {
+            return library.sources.first
+        }
+
+        return library.source(withID: sourceID)
     }
 
     private var currentSelectedItem: MinecraftContentItem? {
@@ -173,31 +250,45 @@ struct ContentView: View {
             return nil
         }
 
-        return scanner.items.first(where: { $0.id == selectedItem.id }) ?? selectedItem
+        return library.sources
+            .flatMap(\.items)
+            .first(where: { $0.id == selectedItem.id }) ?? selectedItem
+    }
+
+    private var selectedWorld: MinecraftContentItem? {
+        guard let currentSelectedItem, currentSelectedItem.contentType == .world else {
+            return nil
+        }
+
+        return currentSelectedItem
     }
 
     private var contentListTitle: String {
-        switch selectedSidebarSelection {
-        case .all:
+        guard let selectedSidebarSelection else {
             return "Minecraft Content"
-        case .contentType(let contentType):
-            return contentType.rawValue + "s"
+        }
+
+        switch selectedSidebarSelection {
+        case .allContent(let sourceID):
+            return library.source(withID: sourceID)?.displayName ?? "Minecraft Content"
+        case .contentType(_, let contentType):
+            return sidebarTitle(for: contentType)
         }
     }
 
-    private var sidebarFilters: [SidebarFilter] {
+    private func sidebarFilters(for source: MinecraftSource) -> [SidebarFilter] {
         var filters = [
             SidebarFilter(
                 title: "All Content",
                 iconName: "square.grid.2x2",
-                count: scanner.items.count,
-                selection: .all
+                count: source.items.count,
+                selection: .allContent(sourceID: source.id)
             )
         ]
 
         filters.append(
             contentsOf: MinecraftContentType.allCases.compactMap { contentType in
-                let count = scanner.items.filter { $0.contentType == contentType }.count
+                let count = source.items.filter { $0.contentType == contentType }.count
                 guard count > 0 else {
                     return nil
                 }
@@ -206,7 +297,7 @@ struct ContentView: View {
                     title: sidebarTitle(for: contentType),
                     iconName: sidebarIcon(for: contentType),
                     count: count,
-                    selection: .contentType(contentType)
+                    selection: .contentType(sourceID: source.id, contentType: contentType)
                 )
             }
         )
@@ -258,32 +349,145 @@ struct ContentView: View {
 
     private func pickFolder() {
         let panel = NSOpenPanel()
-        panel.allowsMultipleSelection = false
+        panel.allowsMultipleSelection = true
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
-        panel.title = "Choose a Folder to Search"
+        panel.title = "Add Minecraft Source Folders"
 
-        guard panel.runModal() == .OK, let pickedURL = panel.url else {
+        guard panel.runModal() == .OK else {
             return
         }
 
-        folderURL = pickedURL
-        selectedItem = nil
-        selectedSidebarSelection = .all
+        for url in panel.urls {
+            let sourceID = library.addSource(at: url)
+            selectSourceIfNeeded(sourceID)
+        }
+    }
+
+    private func handleDroppedProviders(_ providers: [NSItemProvider]) -> Bool {
+        let fileURLType = UTType.fileURL.identifier
+        let supportedProviders = providers.filter { $0.hasItemConformingToTypeIdentifier(fileURLType) }
+        guard !supportedProviders.isEmpty else {
+            return false
+        }
+
+        for provider in supportedProviders {
+            provider.loadDataRepresentation(forTypeIdentifier: fileURLType) { data, _ in
+                guard
+                    let data,
+                    let url = NSURL(absoluteURLWithDataRepresentation: data, relativeTo: nil) as URL?
+                else {
+                    return
+                }
+
+                Task { @MainActor in
+                    let sourceID = library.addSource(at: url)
+                    selectSourceIfNeeded(sourceID)
+                }
+            }
+        }
+
+        return true
+    }
+
+    private func selectSourceIfNeeded(_ sourceID: URL) {
+        guard selectedSidebarSelection == nil else {
+            return
+        }
+
+        selectedSidebarSelection = .allContent(sourceID: sourceID)
+    }
+
+    private func removeSource(_ sourceID: URL) {
+        let fallbackSourceID = library.sources.first(where: { $0.id != sourceID })?.id
+        library.removeSource(withID: sourceID)
+
+        if selectedSidebarSelection?.sourceID == sourceID {
+            selectedSidebarSelection = fallbackSourceID.map { .allContent(sourceID: $0) }
+        }
+
+        if let selectedItem, currentSelectedItem?.id != selectedItem.id {
+            self.selectedItem = nil
+        }
+    }
+
+    private func syncSelection(with sourceIDs: [URL]) {
+        if let selectedSidebarSelection, !sourceIDs.contains(selectedSidebarSelection.sourceID) {
+            self.selectedSidebarSelection = sourceIDs.first.map { .allContent(sourceID: $0) }
+        } else if self.selectedSidebarSelection == nil, let firstSourceID = sourceIDs.first {
+            self.selectedSidebarSelection = .allContent(sourceID: firstSourceID)
+        }
+
+        if let selectedItem {
+            let itemStillExists = library.sources
+                .flatMap(\.items)
+                .contains(where: { $0.id == selectedItem.id })
+
+            if !itemStillExists {
+                self.selectedItem = nil
+            }
+        }
+    }
+
+    private func exportSelectedWorld() {
+        guard let world = selectedWorld, !isExportingSelectedWorld else {
+            return
+        }
+
+        let panel = NSSavePanel()
+        panel.canCreateDirectories = true
+        panel.isExtensionHidden = false
+        panel.title = "Export Minecraft World"
+        panel.message = "Choose where to save the .mcworld file."
+        panel.nameFieldStringValue = WorldExporter.suggestedFilename(for: world)
+        panel.allowedContentTypes = [UTType(filenameExtension: "mcworld") ?? .data]
+
+        guard panel.runModal() == .OK, let destinationURL = panel.url else {
+            return
+        }
+
+        isExportingSelectedWorld = true
 
         Task {
-            await scanner.scan(at: pickedURL)
+            do {
+                try await Task.detached(priority: .userInitiated) {
+                    try WorldExporter.exportWorld(world, to: destinationURL)
+                }.value
+
+                await MainActor.run {
+                    isExportingSelectedWorld = false
+                    exportAlert = ExportAlert(
+                        title: "Export Complete",
+                        message: "\"\(world.displayName)\" was exported as a .mcworld file."
+                    )
+                }
+            } catch {
+                await MainActor.run {
+                    isExportingSelectedWorld = false
+                    exportAlert = ExportAlert(
+                        title: "Export Failed",
+                        message: error.localizedDescription
+                    )
+                }
+            }
         }
     }
 }
 
 private enum SidebarSelection: Hashable {
-    case all
-    case contentType(MinecraftContentType)
+    case allContent(sourceID: URL)
+    case contentType(sourceID: URL, contentType: MinecraftContentType)
+
+    var sourceID: URL {
+        switch self {
+        case .allContent(let sourceID), .contentType(let sourceID, _):
+            return sourceID
+        }
+    }
 }
 
 private struct SidebarFilter: Identifiable, Hashable {
-    let id = UUID()
+    var id: SidebarSelection { selection }
     let title: String
     let iconName: String
     let count: Int
@@ -306,6 +510,49 @@ private struct SidebarFilterRow: View {
             Text(filter.count, format: .number)
                 .foregroundStyle(.secondary)
         }
+    }
+}
+
+private struct ExportAlert: Identifiable {
+    let id = UUID()
+    let title: String
+    let message: String
+}
+
+private struct EmptySourcesView: View {
+    let isDropTargeted: Bool
+    let chooseFolder: () -> Void
+
+    var body: some View {
+        VStack(spacing: 24) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 24)
+                    .strokeBorder(style: StrokeStyle(lineWidth: 2, dash: [10, 10]))
+                    .foregroundStyle(isDropTargeted ? Color.accentColor : Color.secondary.opacity(0.25))
+                    .frame(width: 220, height: 160)
+
+                Image(systemName: "folder.badge.plus")
+                    .font(.system(size: 56, weight: .regular))
+                    .foregroundStyle(isDropTargeted ? Color.accentColor : Color.secondary)
+            }
+
+            VStack(spacing: 8) {
+                Text("Add a Minecraft Source")
+                    .font(.title2)
+
+                Text("Choose a copied Minecraft folder or drop one here to start scanning worlds, packs, and templates.")
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 420)
+            }
+
+            Button("Choose Minecraft Folder...") {
+                chooseFolder()
+            }
+            .controlSize(.large)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(40)
     }
 }
 
