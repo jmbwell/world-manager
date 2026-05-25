@@ -8,7 +8,10 @@
 import Foundation
 
 enum WorldScanner {
-    nonisolated static func discoverItems(in searchRootURL: URL) throws -> [MinecraftContentItem] {
+    nonisolated static func discoverItems(
+        in searchRootURL: URL,
+        onDiscovered: @Sendable (MinecraftContentItem) -> Void = { _ in }
+    ) throws -> [MinecraftContentItem] {
         let fileManager = FileManager.default
         let resourceKeys: [URLResourceKey] = [.isDirectoryKey]
 
@@ -40,15 +43,15 @@ enum WorldScanner {
                 }
 
                 if isCandidateItem(at: childDirectory, type: contentType, fileManager: fileManager) {
-                    seenItemURLs.insert(itemURL)
-                    discoveredItems.append(
-                        MinecraftContentItem(
-                            folderURL: childDirectory,
-                            folderName: childDirectory.lastPathComponent,
-                            contentType: contentType,
-                            collectionRootURL: directoryURL
-                        )
+                    let item = MinecraftContentItem(
+                        folderURL: childDirectory,
+                        folderName: childDirectory.lastPathComponent,
+                        contentType: contentType,
+                        collectionRootURL: directoryURL
                     )
+                    seenItemURLs.insert(itemURL)
+                    discoveredItems.append(item)
+                    onDiscovered(item)
                 }
             }
         }
@@ -155,6 +158,19 @@ enum WorldScanner {
         }
 
         return name
+    }
+
+    nonisolated private static func packIconURL(in directoryURL: URL, fileManager: FileManager) -> URL? {
+        let candidateNames = ["pack_icon.png", "pack_icon.jpeg", "pack_icon.jpg"]
+
+        for candidateName in candidateNames {
+            let candidateURL = directoryURL.appendingPathComponent(candidateName)
+            if fileManager.fileExists(atPath: candidateURL.path) {
+                return candidateURL
+            }
+        }
+
+        return nil
     }
 
     nonisolated private static func iconURL(for item: MinecraftContentItem, fileManager: FileManager) -> URL? {
@@ -286,20 +302,21 @@ enum WorldScanner {
         return jsonObject.compactMap { entry in
             let uuid = (entry["pack_id"] as? String)?.lowercased()
             let version = versionString(from: entry["version"])
-            let resolvedName = uuid.flatMap {
-                resolvedPackName(
+            let resolvedPack = uuid.flatMap {
+                resolvedPackReference(
                     uuid: $0,
                     type: type,
                     worldCollectionRootURL: worldFolderURL.deletingLastPathComponent(),
                     fileManager: fileManager
                 )
             }
-            let fallbackName = resolvedName ?? uuid ?? "Referenced Pack"
+            let fallbackName = resolvedPack?.name ?? uuid ?? "Referenced Pack"
             return ContentPackReference(
                 name: fallbackName,
                 type: type,
+                iconURL: resolvedPack?.iconURL,
                 uuid: uuid,
-                version: version,
+                version: resolvedPack?.version ?? version,
                 source: .referencedByWorld
             )
         }
@@ -352,18 +369,19 @@ enum WorldScanner {
         return ContentPackReference(
             name: name,
             type: type,
+            iconURL: packIconURL(in: directoryURL, fileManager: fileManager),
             uuid: uuid,
             version: version,
             source: source
         )
     }
 
-    nonisolated private static func resolvedPackName(
+    nonisolated private static func resolvedPackReference(
         uuid: String,
         type: MinecraftContentType,
         worldCollectionRootURL: URL,
         fileManager: FileManager
-    ) -> String? {
+    ) -> ContentPackReference? {
         let siblingCollectionURL = worldCollectionRootURL
             .deletingLastPathComponent()
             .appendingPathComponent(type.collectionFolderName, isDirectory: true)
@@ -388,7 +406,7 @@ enum WorldScanner {
                 continue
             }
 
-            return reference.name
+            return reference
         }
 
         return nil

@@ -134,18 +134,36 @@ enum ContentPackageExporter {
     }
 
     nonisolated private static func sanitizedFilename(_ value: String) -> String {
+        let transliterated = portableASCIIString(from: value)
         let invalidCharacters = CharacterSet(charactersIn: "/:\\?%*|\"<>")
-        let components = value.components(separatedBy: invalidCharacters)
+        let components = transliterated.components(separatedBy: invalidCharacters)
         let collapsed = components.joined(separator: " ")
             .replacingOccurrences(of: "\n", with: " ")
+            .replacingOccurrences(of: "\r", with: " ")
             .trimmingCharacters(in: .whitespacesAndNewlines)
 
-        let normalizedWhitespace = collapsed.replacingOccurrences(
+        let allowedCharacters = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: " -_().,'&+"))
+        let filteredScalars = collapsed.unicodeScalars.map { scalar in
+            allowedCharacters.contains(scalar) ? Character(scalar) : " "
+        }
+        let filtered = String(filteredScalars)
+
+        let normalizedWhitespace = filtered.replacingOccurrences(
             of: "\\s+",
             with: " ",
             options: .regularExpression
         )
+        let trimmedPunctuation = normalizedWhitespace.trimmingCharacters(in: CharacterSet(charactersIn: " .-_"))
 
-        return normalizedWhitespace.isEmpty ? "Minecraft Content" : normalizedWhitespace
+        return trimmedPunctuation.isEmpty ? "Minecraft Content" : trimmedPunctuation
+    }
+
+    nonisolated private static func portableASCIIString(from value: String) -> String {
+        let mutable = NSMutableString(string: value) as CFMutableString
+
+        CFStringTransform(mutable, nil, kCFStringTransformToLatin, false)
+        CFStringTransform(mutable, nil, kCFStringTransformStripCombiningMarks, false)
+
+        return mutable as String
     }
 }

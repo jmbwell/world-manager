@@ -66,6 +66,7 @@ struct ContentPackReference: Identifiable, Hashable, Sendable {
     let id: String
     let name: String
     let type: MinecraftContentType
+    let iconURL: URL?
     let uuid: String?
     let version: String?
     let source: PackSource
@@ -73,11 +74,13 @@ struct ContentPackReference: Identifiable, Hashable, Sendable {
     nonisolated init(
         name: String,
         type: MinecraftContentType,
+        iconURL: URL? = nil,
         uuid: String? = nil,
         version: String? = nil,
         source: PackSource
     ) {
         self.type = type
+        self.iconURL = iconURL
         self.uuid = uuid?.lowercased()
         self.version = version
         self.source = source

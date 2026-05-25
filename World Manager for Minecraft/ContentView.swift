@@ -22,13 +22,31 @@ struct ContentView: View {
     var body: some View {
         NavigationSplitView {
             VStack(spacing: 0) {
+                SidebarSourcesHeaderView(addSourceAction: pickFolder)
+                    .padding(.horizontal, 12)
+                    .padding(.top, 8)
+                    .padding(.bottom, 4)
+
                 List(selection: $selectedSidebarSelection) {
                     ForEach(library.sources) { source in
-                        Section(source.displayName) {
-                            ForEach(sidebarFilters(for: source)) { filter in
-                                SidebarFilterRow(filter: filter)
-                                    .tag(filter.selection as SidebarSelection?)
+                        SourceHeaderRow(title: source.displayName)
+                            .listRowSeparator(.hidden)
+                            .padding(.top, 6)
+                            .contextMenu {
+                                Button("Rescan \"\(source.displayName)\"") {
+                                    library.rescanSource(withID: source.id)
+                                }
+
+                                Divider()
+
+                                Button("Remove \"\(source.displayName)\"", role: .destructive) {
+                                    removeSource(source.id)
+                                }
                             }
+
+                        ForEach(sidebarFilters(for: source)) { filter in
+                            SidebarFilterRow(filter: filter, isIndented: true)
+                                .tag(filter.selection as SidebarSelection?)
                         }
                     }
                 }
@@ -94,7 +112,6 @@ struct ContentView: View {
                     .foregroundStyle(.secondary)
             }
         }
-        .tint(.minecraftAccent)
         .searchable(text: $searchText, placement: .toolbar, prompt: searchPrompt)
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
@@ -121,29 +138,6 @@ struct ContentView: View {
                         Label("Reveal in Finder", systemImage: "folder")
                     }
                     .disabled(isPerformingItemAction)
-                }
-
-                Button {
-                    pickFolder()
-                } label: {
-                    Label("Add Source", systemImage: "plus")
-                }
-
-                if let currentSource = currentSource {
-                    Menu {
-                        Button("Rescan \"\(currentSource.displayName)\"") {
-                            library.rescanSource(withID: currentSource.id)
-                        }
-
-                        Divider()
-
-                        Button("Remove \"\(currentSource.displayName)\"", role: .destructive) {
-                            removeSource(currentSource.id)
-                        }
-                    } label: {
-                        Image(systemName: "ellipsis.circle")
-                    }
-                    .help("Source actions")
                 }
             }
         }
@@ -625,6 +619,7 @@ private struct SidebarFilter: Identifiable, Hashable {
 
 private struct SidebarFilterRow: View {
     let filter: SidebarFilter
+    let isIndented: Bool
 
     var body: some View {
         HStack(spacing: 10) {
@@ -639,6 +634,37 @@ private struct SidebarFilterRow: View {
             Text(filter.count, format: .number)
                 .foregroundStyle(.secondary)
         }
+        .padding(.leading, isIndented ? 16 : 0)
+    }
+}
+
+private struct SidebarSourcesHeaderView: View {
+    let addSourceAction: () -> Void
+
+    var body: some View {
+        HStack {
+            Text("Sources")
+                .font(.headline)
+                .foregroundStyle(.secondary)
+
+            Spacer()
+
+            Button(action: addSourceAction) {
+                Image(systemName: "plus")
+            }
+            .buttonStyle(.borderless)
+            .help("Add Source")
+        }
+    }
+}
+
+private struct SourceHeaderRow: View {
+    let title: String
+
+    var body: some View {
+        Text(title)
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(.secondary)
     }
 }
 
@@ -688,7 +714,7 @@ private struct SidebarFooterView: View {
         case .failure:
             return .red
         case .success:
-            return .minecraftAccent
+            return .appAccent
         }
     }
 }
@@ -765,6 +791,7 @@ private struct ItemDetailView: View {
     let primaryAction: () -> Void
     let shareAction: (NSView) -> Void
     let revealAction: () -> Void
+    @State private var isTechnicalDetailsExpanded = false
 
     var body: some View {
         ScrollView {
@@ -851,7 +878,7 @@ private struct ItemDetailView: View {
                 }
 
                 detailCard {
-                    DisclosureGroup("Technical Details") {
+                    DisclosureGroup(isExpanded: $isTechnicalDetailsExpanded) {
                         VStack(alignment: .leading, spacing: 18) {
                             detailRow(title: "Folder ID", value: item.folderID)
                             detailRow(title: "Folder Path", value: item.folderURL.path)
@@ -885,6 +912,15 @@ private struct ItemDetailView: View {
                             }
                         }
                         .padding(.top, 8)
+                    } label: {
+                        HStack {
+                            Text("Technical Details")
+                            Spacer()
+                        }
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            isTechnicalDetailsExpanded.toggle()
+                        }
                     }
                 }
             }
@@ -908,13 +944,17 @@ private struct ItemDetailView: View {
                 .font(.subheadline.weight(.semibold))
 
             ForEach(packs) { pack in
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(pack.name)
+                HStack(alignment: .top, spacing: 12) {
+                    PackReferenceIconView(iconURL: pack.iconURL)
 
-                    if let secondary = packSecondaryText(pack), !secondary.isEmpty {
-                        Text(secondary)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(pack.name)
+
+                        if let secondary = packSecondaryText(pack), !secondary.isEmpty {
+                            Text(secondary)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
                     }
                 }
             }
@@ -1013,6 +1053,29 @@ private struct SharingPickerButton: NSViewRepresentable {
     }
 }
 
+private struct PackReferenceIconView: View {
+    let iconURL: URL?
+
+    var body: some View {
+        if let image = loadImage(from: iconURL) {
+            Image(nsImage: image)
+                .resizable()
+                .aspectRatio(contentMode: .fill)
+                .frame(width: 34, height: 34)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+        } else {
+            RoundedRectangle(cornerRadius: 8)
+                .fill(.quaternary)
+                .frame(width: 34, height: 34)
+                .overlay(
+                    Image(systemName: "shippingbox")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                )
+        }
+    }
+}
+
 private struct EmptySourcesView: View {
     let isDropTargeted: Bool
     let chooseFolder: () -> Void
@@ -1022,12 +1085,12 @@ private struct EmptySourcesView: View {
             ZStack {
                 RoundedRectangle(cornerRadius: 24)
                     .strokeBorder(style: StrokeStyle(lineWidth: 2, dash: [10, 10]))
-                    .foregroundStyle(isDropTargeted ? Color.minecraftAccent : Color.secondary.opacity(0.25))
+                    .foregroundStyle(isDropTargeted ? Color.appAccent : Color.secondary.opacity(0.25))
                     .frame(width: 220, height: 160)
 
                 Image(systemName: "folder.badge.plus")
                     .font(.system(size: 56, weight: .regular))
-                    .foregroundStyle(isDropTargeted ? Color.minecraftAccent : Color.secondary)
+                    .foregroundStyle(isDropTargeted ? Color.appAccent : Color.secondary)
             }
 
             VStack(spacing: 8) {
@@ -1080,8 +1143,8 @@ private struct LargeItemThumbnailView: View {
         if let image = loadImage(from: iconURL) {
             Image(nsImage: image)
                 .resizable()
-                .aspectRatio(contentMode: .fit)
-                .frame(maxWidth: 420, minHeight: 260, maxHeight: 340)
+                .aspectRatio(image.size, contentMode: .fit)
+                .frame(maxWidth: 420, maxHeight: 340)
                 .clipShape(RoundedRectangle(cornerRadius: 28))
         } else {
             RoundedRectangle(cornerRadius: 28)
@@ -1120,7 +1183,7 @@ private func loadImage(from url: URL?) -> NSImage? {
 }
 
 private extension Color {
-    static let minecraftAccent = Color(red: 0.36, green: 0.63, blue: 0.24)
+    static let appAccent = Color("AccentColor")
 }
 
 struct ContentView_Previews: PreviewProvider {

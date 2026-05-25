@@ -133,66 +133,64 @@ final class SourceLibrary: ObservableObject {
         refreshSidebarFooterState()
 
         do {
-            let discoveredItems = try await Task.detached(priority: .userInitiated) {
-                try WorldScanner.discoverItems(in: sourceID)
-            }.value
-
-            guard !Task.isCancelled else {
-                return
+            let enrichmentTracker = PendingEnrichmentTracker()
+            let applyEnrichedItem: @MainActor (MinecraftContentItem) -> Void = { [weak self] enrichedItem in
+                self?.handleEnrichedItem(enrichedItem, for: sourceID)
             }
-
-            updateSource(sourceID) { source in
-                source.items = discoveredItems
-                source.indexedItemCount = discoveredItems.count
-                source.scanStatus = discoveredItems.isEmpty
-                    ? "No Minecraft content found."
-                    : "Found \(discoveredItems.count) items. Loading details..."
-            }
-            refreshSidebarFooterState()
-
-            var loadedCount = 0
-
-            await withTaskGroup(of: MinecraftContentItem.self) { group in
-                for item in discoveredItems {
-                    group.addTask {
-                        WorldScanner.enrich(item: item)
+            let discoveryStream = AsyncThrowingStream<MinecraftContentItem, Error> { continuation in
+                let discoveryTask = Task.detached(priority: .userInitiated) {
+                    do {
+                        _ = try WorldScanner.discoverItems(in: sourceID) { item in
+                            continuation.yield(item)
+                        }
+                        continuation.finish()
+                    } catch {
+                        continuation.finish(throwing: error)
                     }
                 }
 
-                for await enrichedItem in group {
-                    guard !Task.isCancelled else {
-                        return
-                    }
-
-                    loadedCount += 1
-                    updateSource(sourceID) { source in
-                        guard let index = source.items.firstIndex(where: { $0.id == enrichedItem.id }) else {
-                            return
-                        }
-
-                        source.items[index] = enrichedItem
-                        source.indexedDetailCount = loadedCount
-                        source.items.sort(by: WorldScanner.sortItems)
-
-                        if loadedCount == discoveredItems.count {
-                            source.scanStatus = "Loaded \(loadedCount) items."
-                            source.isScanning = false
-                            source.lastScanDate = Date()
-                        } else {
-                            source.scanStatus = "Loaded details for \(loadedCount) of \(discoveredItems.count) items..."
-                        }
-                    }
-                    refreshSidebarFooterState()
+                continuation.onTermination = { @Sendable _ in
+                    discoveryTask.cancel()
                 }
             }
 
-            if discoveredItems.isEmpty {
+            var discoveredCount = 0
+
+            for try await item in discoveryStream {
+                guard !Task.isCancelled else {
+                    break
+                }
+
+                discoveredCount += 1
                 updateSource(sourceID) { source in
-                    source.isScanning = false
-                    source.lastScanDate = Date()
+                    source.items.append(item)
+                    source.indexedItemCount = discoveredCount
+                    source.scanStatus = "Found \(discoveredCount) items. Loading details..."
                 }
                 refreshSidebarFooterState()
+
+                await enrichmentTracker.beginEnrichment()
+                let tracker = enrichmentTracker
+
+                Task.detached(priority: .utility) {
+                    let enrichedItem = WorldScanner.enrich(item: item)
+                    await applyEnrichedItem(enrichedItem)
+                    await tracker.finishEnrichment()
+                }
             }
+
+            await enrichmentTracker.markDiscoveryFinished()
+            await enrichmentTracker.waitForCompletion()
+
+            updateSource(sourceID) { source in
+                source.items.sort(by: WorldScanner.sortItems)
+                source.scanStatus = source.indexedItemCount == 0
+                    ? "No Minecraft content found."
+                    : "Loaded \(source.indexedDetailCount) items."
+                source.isScanning = false
+                source.lastScanDate = Date()
+            }
+            refreshSidebarFooterState()
         } catch {
             guard !Task.isCancelled else {
                 return
@@ -207,6 +205,22 @@ final class SourceLibrary: ObservableObject {
         }
 
         scanTasks[sourceID] = nil
+    }
+
+    private func handleEnrichedItem(_ enrichedItem: MinecraftContentItem, for sourceID: URL) {
+        updateSource(sourceID) { source in
+            guard let index = source.items.firstIndex(where: { $0.id == enrichedItem.id }) else {
+                return
+            }
+
+            source.items[index] = enrichedItem
+            source.indexedDetailCount += 1
+
+            if source.indexedDetailCount < source.indexedItemCount {
+                source.scanStatus = "Loaded details for \(source.indexedDetailCount) of \(source.indexedItemCount) items..."
+            }
+        }
+        refreshSidebarFooterState()
     }
 
     private func updateSource(_ sourceID: URL, mutate: (inout MinecraftSource) -> Void) {
@@ -266,5 +280,44 @@ final class SourceLibrary: ObservableObject {
 
             self.refreshSidebarFooterState()
         }
+    }
+}
+
+private actor PendingEnrichmentTracker {
+    private var pendingCount = 0
+    private var discoveryFinished = false
+    private var continuation: CheckedContinuation<Void, Never>?
+
+    func beginEnrichment() {
+        pendingCount += 1
+    }
+
+    func finishEnrichment() {
+        pendingCount -= 1
+        resumeIfNeeded()
+    }
+
+    func markDiscoveryFinished() {
+        discoveryFinished = true
+        resumeIfNeeded()
+    }
+
+    func waitForCompletion() async {
+        guard !(discoveryFinished && pendingCount == 0) else {
+            return
+        }
+
+        await withCheckedContinuation { continuation in
+            self.continuation = continuation
+        }
+    }
+
+    private func resumeIfNeeded() {
+        guard discoveryFinished, pendingCount == 0 else {
+            return
+        }
+
+        continuation?.resume()
+        continuation = nil
     }
 }
