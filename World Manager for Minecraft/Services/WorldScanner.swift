@@ -10,99 +10,242 @@ import Foundation
 
 @MainActor
 final class WorldScanner: ObservableObject {
-    @Published var worlds: [MinecraftWorld] = []
+    @Published var items: [MinecraftContentItem] = []
     @Published var isScanning = false
     @Published var scanStatus = ""
     @Published var scanError: String?
 
-    func scan(at parentFolderURL: URL) async {
+    private var activeScanID = UUID()
+
+    func scan(at searchRootURL: URL) async {
+        let scanID = UUID()
+        activeScanID = scanID
         isScanning = true
         scanError = nil
-        scanStatus = "Scanning worlds..."
-        worlds = []
+        scanStatus = "Searching for Minecraft content..."
+        items = []
 
         do {
-            let worlds = try await Task.detached(priority: .userInitiated) {
-                try Self.scanWorlds(at: parentFolderURL)
+            let discoveredItems = try await Task.detached(priority: .userInitiated) {
+                try Self.discoverItems(in: searchRootURL)
             }.value
 
-            self.worlds = worlds
-            self.scanStatus = worlds.isEmpty ? "No worlds found." : "Found \(worlds.count) worlds."
+            guard activeScanID == scanID else {
+                return
+            }
+
+            items = discoveredItems
+            scanStatus = discoveredItems.isEmpty
+                ? "No Minecraft content found."
+                : "Found \(discoveredItems.count) items. Loading details..."
+
+            var loadedCount = 0
+
+            await withTaskGroup(of: MinecraftContentItem.self) { group in
+                for item in discoveredItems {
+                    group.addTask {
+                        Self.enrich(item: item)
+                    }
+                }
+
+                for await enrichedItem in group {
+                    await MainActor.run {
+                        guard self.activeScanID == scanID else {
+                            return
+                        }
+
+                        self.replaceItem(with: enrichedItem)
+                        loadedCount += 1
+
+                        if loadedCount == discoveredItems.count {
+                            self.scanStatus = "Loaded \(loadedCount) items."
+                            self.isScanning = false
+                        } else {
+                            self.scanStatus = "Loaded details for \(loadedCount) of \(discoveredItems.count) items..."
+                        }
+                    }
+                }
+            }
+
+            if discoveredItems.isEmpty {
+                isScanning = false
+            }
         } catch {
+            guard activeScanID == scanID else {
+                return
+            }
+
             scanError = "Failed to scan folder: \(error.localizedDescription)"
             scanStatus = ""
+            isScanning = false
         }
-
-        isScanning = false
     }
 
-    nonisolated private static func scanWorlds(at parentFolderURL: URL) throws -> [MinecraftWorld] {
+    private func replaceItem(with updatedItem: MinecraftContentItem) {
+        guard let index = items.firstIndex(where: { $0.id == updatedItem.id }) else {
+            return
+        }
+
+        items[index] = updatedItem
+        items.sort(by: Self.sortItems)
+    }
+
+    nonisolated private static func discoverItems(in searchRootURL: URL) throws -> [MinecraftContentItem] {
         let fileManager = FileManager.default
-        let resourceKeys: Set<URLResourceKey> = [.isDirectoryKey, .contentModificationDateKey]
+        let resourceKeys: [URLResourceKey] = [.isDirectoryKey]
+
+        guard let enumerator = fileManager.enumerator(
+            at: searchRootURL,
+            includingPropertiesForKeys: resourceKeys,
+            options: [.skipsHiddenFiles]
+        ) else {
+            return []
+        }
+
+        var discoveredItems: [MinecraftContentItem] = []
+        var seenItemURLs = Set<URL>()
+
+        for case let directoryURL as URL in enumerator {
+            guard (try? directoryURL.resourceValues(forKeys: Set(resourceKeys)).isDirectory) == true else {
+                continue
+            }
+
+            guard let contentType = contentType(forCollectionFolderName: directoryURL.lastPathComponent) else {
+                continue
+            }
+
+            let childDirectories = try immediateChildDirectories(of: directoryURL, fileManager: fileManager)
+            for childDirectory in childDirectories {
+                let itemURL = childDirectory.standardizedFileURL
+                guard !seenItemURLs.contains(itemURL) else {
+                    continue
+                }
+
+                if isCandidateItem(at: childDirectory, type: contentType, fileManager: fileManager) {
+                    seenItemURLs.insert(itemURL)
+                    discoveredItems.append(
+                        MinecraftContentItem(
+                            folderURL: childDirectory,
+                            folderName: childDirectory.lastPathComponent,
+                            contentType: contentType,
+                            collectionRootURL: directoryURL
+                        )
+                    )
+                }
+            }
+        }
+
+        discoveredItems.sort(by: sortItems)
+        return discoveredItems
+    }
+
+    nonisolated private static func enrich(item: MinecraftContentItem) -> MinecraftContentItem {
+        let fileManager = FileManager.default
+        var enrichedItem = item
+
+        enrichedItem.displayName = displayName(for: item, fileManager: fileManager)
+        enrichedItem.iconURL = iconURL(for: item, fileManager: fileManager)
+        enrichedItem.modifiedDate = modifiedDate(for: item.folderURL)
+        enrichedItem.sizeBytes = folderSize(at: item.folderURL, fileManager: fileManager)
+        enrichedItem.metadataLoaded = true
+
+        return enrichedItem
+    }
+
+    nonisolated private static func contentType(forCollectionFolderName folderName: String) -> MinecraftContentType? {
+        let normalizedFolderName = folderName.lowercased()
+
+        return MinecraftContentType.allCases.first { type in
+            type.collectionFolderName.lowercased() == normalizedFolderName
+        }
+    }
+
+    nonisolated private static func immediateChildDirectories(of directoryURL: URL, fileManager: FileManager) throws -> [URL] {
         let children = try fileManager.contentsOfDirectory(
-            at: parentFolderURL,
-            includingPropertiesForKeys: Array(resourceKeys),
+            at: directoryURL,
+            includingPropertiesForKeys: [.isDirectoryKey],
             options: [.skipsHiddenFiles]
         )
 
-        return try children.compactMap { childURL in
-            let values = try childURL.resourceValues(forKeys: resourceKeys)
-            guard values.isDirectory == true else {
-                return nil
-            }
-
-            let isValidWorld = isLikelyWorldFolder(childURL, fileManager: fileManager)
-            guard isValidWorld else {
-                return nil
-            }
-
-            let folderName = childURL.lastPathComponent
-            let displayName = readDisplayName(in: childURL, fallback: folderName)
-            let iconURL = iconURL(in: childURL, fileManager: fileManager)
-            let sizeBytes = folderSize(at: childURL, fileManager: fileManager)
-
-            return MinecraftWorld(
-                folderURL: childURL,
-                folderName: folderName,
-                displayName: displayName,
-                iconURL: iconURL,
-                modifiedDate: values.contentModificationDate,
-                sizeBytes: sizeBytes,
-                isValidWorld: true
-            )
-        }
-        .sorted { lhs, rhs in
-            lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName) == .orderedAscending
+        return children.filter {
+            (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
         }
     }
 
-    nonisolated private static func isLikelyWorldFolder(_ url: URL, fileManager: FileManager) -> Bool {
-        let levelDatURL = url.appendingPathComponent("level.dat")
-        let dbURL = url.appendingPathComponent("db", isDirectory: true)
-        let levelNameURL = url.appendingPathComponent("levelname.txt")
-
-        return fileManager.fileExists(atPath: levelDatURL.path)
-            || fileManager.fileExists(atPath: dbURL.path)
-            || fileManager.fileExists(atPath: levelNameURL.path)
+    nonisolated private static func isCandidateItem(at directoryURL: URL, type: MinecraftContentType, fileManager: FileManager) -> Bool {
+        switch type {
+        case .world:
+            return fileManager.fileExists(atPath: directoryURL.appendingPathComponent("level.dat").path)
+                || fileManager.fileExists(atPath: directoryURL.appendingPathComponent("db", isDirectory: true).path)
+                || fileManager.fileExists(atPath: directoryURL.appendingPathComponent("levelname.txt").path)
+        case .behaviorPack, .resourcePack, .skinPack, .worldTemplate:
+            return fileManager.fileExists(atPath: directoryURL.appendingPathComponent("manifest.json").path)
+                || fileManager.fileExists(atPath: directoryURL.appendingPathComponent("pack_icon.png").path)
+                || fileManager.fileExists(atPath: directoryURL.appendingPathComponent("pack_icon.jpeg").path)
+                || fileManager.fileExists(atPath: directoryURL.appendingPathComponent("pack_icon.jpg").path)
+        }
     }
 
-    nonisolated private static func readDisplayName(in worldURL: URL, fallback: String) -> String {
-        let levelNameURL = worldURL.appendingPathComponent("levelname.txt")
+    nonisolated private static func displayName(for item: MinecraftContentItem, fileManager: FileManager) -> String {
+        switch item.contentType {
+        case .world:
+            let levelNameURL = item.folderURL.appendingPathComponent("levelname.txt")
+            guard
+                let name = try? String(contentsOf: levelNameURL, encoding: .utf8)
+                    .trimmingCharacters(in: .whitespacesAndNewlines),
+                !name.isEmpty
+            else {
+                return item.folderName
+            }
 
+            return name
+        case .behaviorPack, .resourcePack, .skinPack, .worldTemplate:
+            if let manifestName = manifestName(in: item.folderURL, fileManager: fileManager) {
+                return manifestName
+            }
+
+            return item.folderName
+        }
+    }
+
+    nonisolated private static func manifestName(in directoryURL: URL, fileManager: FileManager) -> String? {
+        let manifestURL = directoryURL.appendingPathComponent("manifest.json")
         guard
-            let name = try? String(contentsOf: levelNameURL, encoding: .utf8)
-                .trimmingCharacters(in: .whitespacesAndNewlines),
+            fileManager.fileExists(atPath: manifestURL.path),
+            let data = try? Data(contentsOf: manifestURL),
+            let jsonObject = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let header = jsonObject["header"] as? [String: Any],
+            let name = (header["name"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
             !name.isEmpty
         else {
-            return fallback
+            return nil
         }
 
         return name
     }
 
-    nonisolated private static func iconURL(in worldURL: URL, fileManager: FileManager) -> URL? {
-        let iconURL = worldURL.appendingPathComponent("world_icon.jpeg")
-        return fileManager.fileExists(atPath: iconURL.path) ? iconURL : nil
+    nonisolated private static func iconURL(for item: MinecraftContentItem, fileManager: FileManager) -> URL? {
+        let candidateNames: [String]
+
+        switch item.contentType {
+        case .world:
+            candidateNames = ["world_icon.jpeg", "world_icon.jpg", "world_icon.png"]
+        case .behaviorPack, .resourcePack, .skinPack, .worldTemplate:
+            candidateNames = ["pack_icon.png", "pack_icon.jpeg", "pack_icon.jpg"]
+        }
+
+        for candidateName in candidateNames {
+            let candidateURL = item.folderURL.appendingPathComponent(candidateName)
+            if fileManager.fileExists(atPath: candidateURL.path) {
+                return candidateURL
+            }
+        }
+
+        return nil
+    }
+
+    nonisolated private static func modifiedDate(for directoryURL: URL) -> Date? {
+        try? directoryURL.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
     }
 
     nonisolated private static func folderSize(at folderURL: URL, fileManager: FileManager) -> Int64? {
@@ -129,5 +272,18 @@ final class WorldScanner: ObservableObject {
         }
 
         return totalSize
+    }
+
+    nonisolated private static func sortItems(_ lhs: MinecraftContentItem, _ rhs: MinecraftContentItem) -> Bool {
+        if lhs.contentType != rhs.contentType {
+            return lhs.contentType.rawValue.localizedStandardCompare(rhs.contentType.rawValue) == .orderedAscending
+        }
+
+        let displayNameOrder = lhs.displayName.localizedStandardCompare(rhs.displayName)
+        if displayNameOrder != .orderedSame {
+            return displayNameOrder == .orderedAscending
+        }
+
+        return lhs.folderName.localizedStandardCompare(rhs.folderName) == .orderedAscending
     }
 }
