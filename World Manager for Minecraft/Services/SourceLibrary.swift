@@ -27,12 +27,13 @@ final class SourceLibrary: ObservableObject {
     @Published var sources: [MinecraftSource] = []
     @Published private(set) var sidebarFooterState = SidebarFooterState(
         style: .idle,
-        title: "Ready",
+        title: "",
         subtitle: nil,
         revealURL: nil
     )
 
     private var scanTasks: [URL: Task<Void, Never>] = [:]
+    private var footerResetTask: Task<Void, Never>?
 
     func addSource(at url: URL) -> URL {
         let normalizedURL = url.standardizedFileURL
@@ -64,6 +65,7 @@ final class SourceLibrary: ObservableObject {
     }
 
     func setItemActionInProgress(_ description: String) {
+        cancelFooterReset()
         sidebarFooterState = SidebarFooterState(
             style: .inProgress,
             title: description,
@@ -79,6 +81,7 @@ final class SourceLibrary: ObservableObject {
             subtitle: message,
             revealURL: nil
         )
+        scheduleFooterReset()
     }
 
     func setItemActionSuccess(title: String, subtitle: String, revealURL: URL?) {
@@ -88,6 +91,7 @@ final class SourceLibrary: ObservableObject {
             subtitle: subtitle,
             revealURL: revealURL
         )
+        scheduleFooterReset()
     }
 
     var activeScanSummary: String? {
@@ -216,7 +220,7 @@ final class SourceLibrary: ObservableObject {
     private func refreshSidebarFooterState() {
         let scanningSources = sources.filter(\.isScanning)
         if let source = scanningSources.first {
-            let title = source.itemCount == 0 ? "Scanning worlds..." : "Scanning worlds..."
+            cancelFooterReset()
             let subtitle: String
             if source.indexedItemCount > 0 {
                 subtitle = "\(source.indexedDetailCount) of \(source.indexedItemCount) indexed"
@@ -226,7 +230,7 @@ final class SourceLibrary: ObservableObject {
 
             sidebarFooterState = SidebarFooterState(
                 style: .inProgress,
-                title: title,
+                title: "Scanning...",
                 subtitle: subtitle,
                 revealURL: nil
             )
@@ -240,21 +244,27 @@ final class SourceLibrary: ObservableObject {
                 subtitle: source.scanError,
                 revealURL: nil
             )
+            scheduleFooterReset()
             return
         }
+        cancelFooterReset()
+        sidebarFooterState = SidebarFooterState(style: .idle, title: "", subtitle: nil, revealURL: nil)
+    }
 
-        let totalItems = sources.reduce(0) { $0 + $1.itemCount }
-        let subtitle = totalItems == 0 ? "No content indexed" : "\(totalItems.formatted(.number)) items indexed"
-        let lastUpdatedDate = sources.compactMap(\.lastScanDate).max()
-        let secondaryText = lastUpdatedDate.map {
-            "\(subtitle) \u{2022} Last updated \($0.formatted(.relative(presentation: .named)))"
-        } ?? subtitle
+    private func cancelFooterReset() {
+        footerResetTask?.cancel()
+        footerResetTask = nil
+    }
 
-        sidebarFooterState = SidebarFooterState(
-            style: .idle,
-            title: "Ready",
-            subtitle: secondaryText,
-            revealURL: nil
-        )
+    private func scheduleFooterReset(after seconds: Double = 5) {
+        cancelFooterReset()
+        footerResetTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(seconds))
+            guard let self, !Task.isCancelled else {
+                return
+            }
+
+            self.refreshSidebarFooterState()
+        }
     }
 }

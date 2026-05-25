@@ -33,15 +33,18 @@ struct ContentView: View {
                     }
                 }
                 .listStyle(.sidebar)
-                .navigationTitle("Sources")
 
-                Divider()
-
-                SidebarFooterView(
-                    state: library.sidebarFooterState,
-                    revealAction: revealURLInFinder(_:)
-                )
+                if library.sidebarFooterState.style != .idle {
+                    SidebarFooterView(
+                        state: library.sidebarFooterState,
+                        revealAction: revealURLInFinder(_:)
+                    )
+                    .padding(.horizontal, 10)
+                    .padding(.bottom, 10)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
             }
+            .animation(.easeInOut(duration: 0.2), value: library.sidebarFooterState.style)
         } content: {
             if library.sources.isEmpty {
                 EmptySourcesView(
@@ -53,9 +56,7 @@ struct ContentView: View {
                 VStack(spacing: 0) {
                     ContentCollectionHeaderView(
                         title: collectionHeaderTitle,
-                        subtitle: collectionHeaderSubtitle,
-                        prompt: searchPrompt,
-                        searchText: $searchText
+                        subtitle: collectionHeaderSubtitle
                     )
 
                     Divider()
@@ -93,8 +94,8 @@ struct ContentView: View {
                     .foregroundStyle(.secondary)
             }
         }
-        .navigationTitle("Minecraft World Manager")
         .tint(.minecraftAccent)
+        .searchable(text: $searchText, placement: .toolbar, prompt: searchPrompt)
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
                 if let selectedExportableItem = selectedExportableItem {
@@ -205,6 +206,10 @@ struct ContentView: View {
     }
 
     private var collectionHeaderTitle: String {
+        if isSearching {
+            return "Searching “\(searchScopeTitle)”"
+        }
+
         guard let selectedSidebarSelection else {
             return "Minecraft Content"
         }
@@ -222,11 +227,26 @@ struct ContentView: View {
         let filteredCount = filteredItems.count
         let noun = collectionCountNoun
 
-        if searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        if !isSearching {
             return "\(totalCount.formatted(.number)) \(noun)"
         }
 
         return "\(filteredCount.formatted(.number)) of \(totalCount.formatted(.number)) \(noun)"
+    }
+
+    private var searchScopeTitle: String {
+        switch selectedSidebarSelection {
+        case .some(.allContent):
+            return "All"
+        case .some(.contentType(_, let contentType)):
+            return sidebarTitle(for: contentType)
+        case .none:
+            return "Content"
+        }
+    }
+
+    private var isSearching: Bool {
+        !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private var collectionCountNoun: String {
@@ -658,7 +678,7 @@ private struct SidebarFooterView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
-        .background(.bar)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 
     private var primaryColor: Color {
@@ -676,22 +696,18 @@ private struct SidebarFooterView: View {
 private struct ContentCollectionHeaderView: View {
     let title: String
     let subtitle: String
-    let prompt: String
-    @Binding var searchText: String
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 4) {
             Text(title)
                 .font(.title2.weight(.semibold))
 
             Text(subtitle)
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
-
-            TextField(prompt, text: $searchText)
-                .textFieldStyle(.roundedBorder)
         }
-        .padding(16)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(.background)
     }
@@ -752,9 +768,10 @@ private struct ItemDetailView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
-                VStack(alignment: .leading, spacing: 16) {
-                    LargeItemThumbnailView(iconURL: item.iconURL)
+            VStack(alignment: .leading, spacing: 20) {
+                VStack(alignment: .leading, spacing: 18) {
+                    LargeItemThumbnailView(iconURL: item.iconURL, contentType: item.contentType)
+                        .frame(maxWidth: .infinity)
 
                     VStack(alignment: .leading, spacing: 6) {
                         Text(item.displayName)
@@ -764,49 +781,60 @@ private struct ItemDetailView: View {
                             .font(.title3)
                             .foregroundStyle(.secondary)
                     }
-
-                    HStack(spacing: 18) {
-                        metadataChip(title: "Size", value: sizeText)
-                        metadataChip(title: item.displayDateLabel, value: displayDateText)
-
-                        if item.lastPlayedDate == nil, item.contentType == .world {
-                            metadataChip(title: "Last Played", value: "Not available")
-                        }
-                    }
                 }
 
-                VStack(alignment: .leading, spacing: 12) {
-                    Text("Actions")
-                        .font(.headline)
+                detailCard {
+                    VStack(alignment: .leading, spacing: 14) {
+                        Text("Actions")
+                            .font(.headline)
 
-                    Button(primaryActionTitle) {
-                        primaryAction()
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(isPerformingItemAction)
-
-                    Text(primaryActionSubtitle)
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-
-                    HStack(spacing: 12) {
-                        SharingPickerButton(
-                            title: "Share...",
-                            systemImage: "square.and.arrow.up",
-                            isEnabled: !isPerformingItemAction
-                        ) { anchorView in
-                            shareAction(anchorView)
+                        Button(primaryActionTitle) {
+                            primaryAction()
                         }
-
-                        Button("Reveal in Finder") {
-                            revealAction()
-                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.large)
                         .disabled(isPerformingItemAction)
+
+                        Text(primaryActionSubtitle)
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+
+                        HStack(spacing: 12) {
+                            SharingPickerButton(
+                                title: "Share...",
+                                systemImage: "square.and.arrow.up",
+                                isEnabled: !isPerformingItemAction
+                            ) { anchorView in
+                                shareAction(anchorView)
+                            }
+
+                            Button("Reveal in Finder") {
+                                revealAction()
+                            }
+                            .disabled(isPerformingItemAction)
+                        }
                     }
                 }
 
-                if item.contentType == .world {
-                    if !behaviorPacks.isEmpty || !resourcePacks.isEmpty {
+                detailCard {
+                    VStack(alignment: .leading, spacing: 14) {
+                        Text("Details")
+                            .font(.headline)
+
+                        detailValueRow(title: "Size", value: sizeText)
+                        detailValueRow(title: item.displayDateLabel, value: displayDateText)
+
+                        if item.contentType == .world {
+                            detailValueRow(
+                                title: "Last Played",
+                                value: item.lastPlayedDate?.formatted(date: .abbreviated, time: .omitted) ?? "Not available"
+                            )
+                        }
+                    }
+                }
+
+                if item.contentType == .world, !behaviorPacks.isEmpty || !resourcePacks.isEmpty {
+                    detailCard {
                         VStack(alignment: .leading, spacing: 14) {
                             Text("Packs Used")
                                 .font(.headline)
@@ -822,55 +850,55 @@ private struct ItemDetailView: View {
                     }
                 }
 
-                DisclosureGroup("Technical Details") {
-                    VStack(alignment: .leading, spacing: 18) {
-                        detailRow(title: "Folder ID", value: item.folderID)
-                        detailRow(title: "Folder Path", value: item.folderURL.path)
-                        detailRow(title: "Collection Root", value: item.collectionRootURL.path)
+                detailCard {
+                    DisclosureGroup("Technical Details") {
+                        VStack(alignment: .leading, spacing: 18) {
+                            detailRow(title: "Folder ID", value: item.folderID)
+                            detailRow(title: "Folder Path", value: item.folderURL.path)
+                            detailRow(title: "Collection Root", value: item.collectionRootURL.path)
 
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Contents")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-
-                            if contents.isEmpty {
-                                Text("No visible files or folders")
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("Contents")
+                                    .font(.caption)
                                     .foregroundStyle(.secondary)
-                            } else {
-                                ForEach(contents) { entry in
-                                    HStack(spacing: 10) {
-                                        Image(systemName: entry.isDirectory ? "folder" : "doc")
-                                            .foregroundStyle(.secondary)
-                                        Text(entry.name)
-                                            .lineLimit(1)
-                                        Spacer()
-                                    }
-                                }
 
-                                if contents.count == directoryPreviewLimit {
-                                    Text("Showing the first \(directoryPreviewLimit) items")
-                                        .font(.caption)
+                                if contents.isEmpty {
+                                    Text("No visible files or folders")
                                         .foregroundStyle(.secondary)
+                                } else {
+                                    ForEach(contents) { entry in
+                                        HStack(spacing: 10) {
+                                            Image(systemName: entry.isDirectory ? "folder" : "doc")
+                                                .foregroundStyle(.secondary)
+                                            Text(entry.name)
+                                                .lineLimit(1)
+                                            Spacer()
+                                        }
+                                    }
+
+                                    if contents.count == directoryPreviewLimit {
+                                        Text("Showing the first \(directoryPreviewLimit) items")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
                                 }
                             }
                         }
+                        .padding(.top, 8)
                     }
-                    .padding(.top, 8)
                 }
             }
-            .padding(24)
+            .padding(28)
+            .frame(maxWidth: 760, alignment: .leading)
         }
     }
 
     @ViewBuilder
-    private func metadataChip(title: String, value: String) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(title)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Text(value)
-                .font(.body.weight(.medium))
-        }
+    private func detailCard<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+        content()
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(18)
+            .background(.quaternary.opacity(0.45), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
     }
 
     @ViewBuilder
@@ -902,6 +930,18 @@ private struct ItemDetailView: View {
 
             Text(value)
                 .textSelection(.enabled)
+        }
+    }
+
+    @ViewBuilder
+    private func detailValueRow(title: String, value: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 16) {
+            Text(title)
+                .foregroundStyle(.secondary)
+            Spacer()
+            Text(value)
+                .fontWeight(.medium)
+                .multilineTextAlignment(.trailing)
         }
     }
 
@@ -1034,23 +1074,39 @@ private struct ItemThumbnailView: View {
 
 private struct LargeItemThumbnailView: View {
     let iconURL: URL?
+    let contentType: MinecraftContentType
 
     var body: some View {
         if let image = loadImage(from: iconURL) {
             Image(nsImage: image)
                 .resizable()
                 .aspectRatio(contentMode: .fit)
-                .frame(width: 180, height: 180)
-                .clipShape(RoundedRectangle(cornerRadius: 16))
+                .frame(maxWidth: 420, minHeight: 260, maxHeight: 340)
+                .clipShape(RoundedRectangle(cornerRadius: 28))
         } else {
-            RoundedRectangle(cornerRadius: 16)
+            RoundedRectangle(cornerRadius: 28)
                 .fill(.quaternary)
-                .frame(width: 180, height: 180)
+                .frame(maxWidth: 420, minHeight: 260, maxHeight: 340)
                 .overlay(
-                    Image(systemName: "shippingbox")
-                        .font(.largeTitle)
+                    Image(systemName: fallbackIconName)
+                        .font(.system(size: 56))
                         .foregroundStyle(.secondary)
                 )
+        }
+    }
+
+    private var fallbackIconName: String {
+        switch contentType {
+        case .world:
+            return "globe.europe.africa"
+        case .behaviorPack:
+            return "shippingbox"
+        case .resourcePack:
+            return "paintpalette"
+        case .skinPack:
+            return "person.crop.square"
+        case .worldTemplate:
+            return "doc.on.doc"
         }
     }
 }
