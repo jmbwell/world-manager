@@ -63,8 +63,10 @@ enum WorldScanner {
 
         enrichedItem.displayName = displayName(for: item, fileManager: fileManager)
         enrichedItem.iconURL = iconURL(for: item, fileManager: fileManager)
+        enrichedItem.lastPlayedDate = lastPlayedDate(for: item, fileManager: fileManager)
         enrichedItem.modifiedDate = modifiedDate(for: item.folderURL)
         enrichedItem.sizeBytes = folderSize(at: item.folderURL, fileManager: fileManager)
+        enrichedItem.packReferences = packReferences(for: item, fileManager: fileManager)
         enrichedItem.metadataLoaded = true
 
         return enrichedItem
@@ -175,6 +177,18 @@ enum WorldScanner {
         return nil
     }
 
+    nonisolated private static func lastPlayedDate(for item: MinecraftContentItem, fileManager: FileManager) -> Date? {
+        guard item.contentType == .world else {
+            return nil
+        }
+
+        // Bedrock's level.dat requires format-specific parsing to distinguish a true
+        // last-played timestamp from general save metadata. Until that is implemented
+        // reliably, prefer surfacing the filesystem modified date only.
+        _ = fileManager
+        return nil
+    }
+
     nonisolated private static func modifiedDate(for directoryURL: URL) -> Date? {
         try? directoryURL.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
     }
@@ -203,5 +217,225 @@ enum WorldScanner {
         }
 
         return totalSize
+    }
+
+    nonisolated private static func packReferences(for item: MinecraftContentItem, fileManager: FileManager) -> [ContentPackReference] {
+        switch item.contentType {
+        case .world:
+            var references = referencedWorldPacks(for: item, fileManager: fileManager)
+            references.append(contentsOf: embeddedWorldPacks(for: item, fileManager: fileManager))
+            return uniquePackReferences(references)
+        case .behaviorPack, .resourcePack, .skinPack, .worldTemplate:
+            return []
+        }
+    }
+
+    nonisolated private static func referencedWorldPacks(for item: MinecraftContentItem, fileManager: FileManager) -> [ContentPackReference] {
+        let behaviorReferences = packReferences(
+            fromWorldReferenceFileNamed: "world_behavior_packs.json",
+            type: .behaviorPack,
+            worldFolderURL: item.folderURL,
+            fileManager: fileManager
+        )
+        let resourceReferences = packReferences(
+            fromWorldReferenceFileNamed: "world_resource_packs.json",
+            type: .resourcePack,
+            worldFolderURL: item.folderURL,
+            fileManager: fileManager
+        )
+
+        return behaviorReferences + resourceReferences
+    }
+
+    nonisolated private static func embeddedWorldPacks(for item: MinecraftContentItem, fileManager: FileManager) -> [ContentPackReference] {
+        var references: [ContentPackReference] = []
+
+        references.append(
+            contentsOf: embeddedPackReferences(
+                in: item.folderURL.appendingPathComponent("behavior_packs", isDirectory: true),
+                type: .behaviorPack,
+                fileManager: fileManager
+            )
+        )
+        references.append(
+            contentsOf: embeddedPackReferences(
+                in: item.folderURL.appendingPathComponent("resource_packs", isDirectory: true),
+                type: .resourcePack,
+                fileManager: fileManager
+            )
+        )
+
+        return references
+    }
+
+    nonisolated private static func packReferences(
+        fromWorldReferenceFileNamed filename: String,
+        type: MinecraftContentType,
+        worldFolderURL: URL,
+        fileManager: FileManager
+    ) -> [ContentPackReference] {
+        let fileURL = worldFolderURL.appendingPathComponent(filename)
+        guard
+            fileManager.fileExists(atPath: fileURL.path),
+            let data = try? Data(contentsOf: fileURL),
+            let jsonObject = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]]
+        else {
+            return []
+        }
+
+        return jsonObject.compactMap { entry in
+            let uuid = (entry["pack_id"] as? String)?.lowercased()
+            let version = versionString(from: entry["version"])
+            let resolvedName = uuid.flatMap {
+                resolvedPackName(
+                    uuid: $0,
+                    type: type,
+                    worldCollectionRootURL: worldFolderURL.deletingLastPathComponent(),
+                    fileManager: fileManager
+                )
+            }
+            let fallbackName = resolvedName ?? uuid ?? "Referenced Pack"
+            return ContentPackReference(
+                name: fallbackName,
+                type: type,
+                uuid: uuid,
+                version: version,
+                source: .referencedByWorld
+            )
+        }
+    }
+
+    nonisolated private static func embeddedPackReferences(
+        in directoryURL: URL,
+        type: MinecraftContentType,
+        fileManager: FileManager
+    ) -> [ContentPackReference] {
+        guard
+            fileManager.fileExists(atPath: directoryURL.path),
+            let childDirectories = try? immediateChildDirectories(of: directoryURL, fileManager: fileManager)
+        else {
+            return []
+        }
+
+        return childDirectories.compactMap { childDirectory in
+            packReference(
+                fromPackFolder: childDirectory,
+                type: type,
+                source: .embeddedInWorld,
+                fileManager: fileManager
+            )
+        }
+    }
+
+    nonisolated private static func packReference(
+        fromPackFolder directoryURL: URL,
+        type: MinecraftContentType,
+        source: PackSource,
+        fileManager: FileManager
+    ) -> ContentPackReference? {
+        let manifestURL = directoryURL.appendingPathComponent("manifest.json")
+        guard
+            fileManager.fileExists(atPath: manifestURL.path),
+            let data = try? Data(contentsOf: manifestURL),
+            let jsonObject = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else {
+            return nil
+        }
+
+        let header = jsonObject["header"] as? [String: Any]
+        let name = ((header?["name"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)).flatMap {
+            $0.isEmpty ? nil : $0
+        } ?? directoryURL.lastPathComponent
+        let uuid = (header?["uuid"] as? String)?.lowercased()
+        let version = versionString(from: header?["version"])
+
+        return ContentPackReference(
+            name: name,
+            type: type,
+            uuid: uuid,
+            version: version,
+            source: source
+        )
+    }
+
+    nonisolated private static func resolvedPackName(
+        uuid: String,
+        type: MinecraftContentType,
+        worldCollectionRootURL: URL,
+        fileManager: FileManager
+    ) -> String? {
+        let siblingCollectionURL = worldCollectionRootURL
+            .deletingLastPathComponent()
+            .appendingPathComponent(type.collectionFolderName, isDirectory: true)
+
+        guard
+            fileManager.fileExists(atPath: siblingCollectionURL.path),
+            let childDirectories = try? immediateChildDirectories(of: siblingCollectionURL, fileManager: fileManager)
+        else {
+            return nil
+        }
+
+        for childDirectory in childDirectories {
+            guard
+                let reference = packReference(
+                    fromPackFolder: childDirectory,
+                    type: type,
+                    source: .foundInCollection,
+                    fileManager: fileManager
+                ),
+                reference.uuid == uuid
+            else {
+                continue
+            }
+
+            return reference.name
+        }
+
+        return nil
+    }
+
+    nonisolated private static func versionString(from value: Any?) -> String? {
+        if let versionString = value as? String, !versionString.isEmpty {
+            return versionString
+        }
+
+        if let versionArray = value as? [Any] {
+            let components = versionArray.compactMap { component -> String? in
+                if let intComponent = component as? Int {
+                    return String(intComponent)
+                }
+                if let stringComponent = component as? String {
+                    return stringComponent
+                }
+                return nil
+            }
+
+            return components.isEmpty ? nil : components.joined(separator: ".")
+        }
+
+        return nil
+    }
+
+    nonisolated private static func uniquePackReferences(_ references: [ContentPackReference]) -> [ContentPackReference] {
+        var seen = Set<String>()
+        var uniqueReferences: [ContentPackReference] = []
+
+        for reference in references {
+            let dedupeKey = [reference.type.rawValue, reference.uuid ?? reference.name, reference.version ?? ""]
+                .joined(separator: "::")
+            guard seen.insert(dedupeKey).inserted else {
+                continue
+            }
+
+            uniqueReferences.append(reference)
+        }
+
+        return uniqueReferences.sorted { lhs, rhs in
+            if lhs.type != rhs.type {
+                return lhs.type.rawValue.localizedStandardCompare(rhs.type.rawValue) == .orderedAscending
+            }
+
+            return lhs.name.localizedStandardCompare(rhs.name) == .orderedAscending
+        }
     }
 }

@@ -21,7 +21,7 @@ enum ContentPackageExporter {
 
     nonisolated static func exportItem(_ item: MinecraftContentItem, to destinationURL: URL) throws {
         let fileManager = FileManager.default
-        let archiveURL = normalizedArchiveURL(for: item, destinationURL: destinationURL)
+        let archiveURL = finalArchiveURL(for: item, destinationURL: destinationURL)
         let temporaryArchiveURL = temporaryArchiveURL(for: item, fileManager: fileManager)
 
         defer {
@@ -61,6 +61,10 @@ enum ContentPackageExporter {
 
     nonisolated static func suggestedFilename(for item: MinecraftContentItem) -> String {
         "\(suggestedBaseFilename(for: item)).\(item.contentType.archiveExtension)"
+    }
+
+    nonisolated static func finalArchiveURL(for item: MinecraftContentItem, destinationURL: URL) -> URL {
+        normalizedArchiveURL(for: item, destinationURL: destinationURL)
     }
 
     nonisolated private static func createArchive(for item: MinecraftContentItem, at archiveURL: URL) throws {

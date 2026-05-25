@@ -15,23 +15,33 @@ struct ContentView: View {
     @State private var selectedSidebarSelection: SidebarSelection?
     @State private var searchText = ""
     @State private var isDropTargeted = false
-    @State private var itemActionAlert: ItemActionAlert?
     @State private var isPerformingItemAction = false
+
+    private let directoryPreviewLimit = 12
 
     var body: some View {
         NavigationSplitView {
-            List(selection: $selectedSidebarSelection) {
-                ForEach(library.sources) { source in
-                    Section(source.displayName) {
-                        ForEach(sidebarFilters(for: source)) { filter in
-                            SidebarFilterRow(filter: filter)
-                                .tag(filter.selection as SidebarSelection?)
+            VStack(spacing: 0) {
+                List(selection: $selectedSidebarSelection) {
+                    ForEach(library.sources) { source in
+                        Section(source.displayName) {
+                            ForEach(sidebarFilters(for: source)) { filter in
+                                SidebarFilterRow(filter: filter)
+                                    .tag(filter.selection as SidebarSelection?)
+                            }
                         }
                     }
                 }
+                .listStyle(.sidebar)
+                .navigationTitle("Sources")
+
+                Divider()
+
+                SidebarFooterView(
+                    state: library.sidebarFooterState,
+                    revealAction: revealURLInFinder(_:)
+                )
             }
-            .listStyle(.sidebar)
-            .navigationTitle("Sources")
         } content: {
             if library.sources.isEmpty {
                 EmptySourcesView(
@@ -40,150 +50,51 @@ struct ContentView: View {
                 )
                 .onDrop(of: [UTType.fileURL.identifier], isTargeted: $isDropTargeted, perform: handleDroppedProviders)
             } else {
-                List(filteredItems, selection: $selectedItem) { item in
-                    HStack(alignment: .top, spacing: 10) {
-                        ItemThumbnailView(iconURL: item.iconURL)
+                VStack(spacing: 0) {
+                    ContentCollectionHeaderView(
+                        title: collectionHeaderTitle,
+                        subtitle: collectionHeaderSubtitle,
+                        prompt: searchPrompt,
+                        searchText: $searchText
+                    )
 
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(item.displayName)
-                                .lineLimit(1)
+                    Divider()
 
-                            Text(item.contentType.rawValue)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-
-                            Text(item.folderName)
-                                .font(.caption2)
-                                .foregroundStyle(.tertiary)
-                                .lineLimit(1)
-                        }
-
-                        Spacer()
-
-                        if !item.metadataLoaded {
-                            ProgressView()
-                                .controlSize(.small)
-                        }
+                    List(filteredItems, selection: $selectedItem) { item in
+                        ContentRowView(item: item)
+                            .tag(item)
+                            .contextMenu {
+                                itemContextMenu(for: item)
+                            }
                     }
-                    .padding(.vertical, 2)
-                    .contentShape(Rectangle())
-                    .tag(item)
-                    .contextMenu {
-                        itemContextMenu(for: item)
-                    }
+                    .listStyle(.inset)
                 }
-                .navigationTitle(contentListTitle)
-                .searchable(text: $searchText, placement: .toolbar, prompt: "Search Content")
             }
         } detail: {
             if library.sources.isEmpty {
                 Text("Add a source folder to start scanning Minecraft content")
                     .foregroundStyle(.secondary)
             } else if let selectedItem = currentSelectedItem {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 20) {
-                        HStack(alignment: .top, spacing: 16) {
-                            LargeItemThumbnailView(iconURL: selectedItem.iconURL)
-
-                            VStack(alignment: .leading, spacing: 8) {
-                                Text(selectedItem.displayName)
-                                    .font(.title2)
-
-                                Text(selectedItem.contentType.rawValue)
-                                    .font(.headline)
-                                    .foregroundStyle(.secondary)
-
-                                Text(selectedItem.folderName)
-                                    .font(.subheadline)
-                                    .foregroundStyle(.secondary)
-                            }
-
-                            Spacer(minLength: 0)
-
-                            VStack(alignment: .trailing, spacing: 8) {
-                                SharingPickerButton(
-                                    title: "Share",
-                                    systemImage: "square.and.arrow.up",
-                                    isEnabled: !isPerformingItemAction
-                                ) { anchorView in
-                                    shareItem(selectedItem, from: anchorView)
-                                }
-
-                                Button {
-                                    saveItem(selectedItem)
-                                } label: {
-                                    Label("Export .\(selectedItem.contentType.archiveExtension)", systemImage: "square.and.arrow.down")
-                                }
-                                .disabled(isPerformingItemAction)
-
-                                Button {
-                                    revealInFinder(selectedItem)
-                                } label: {
-                                    Label("Reveal in Finder", systemImage: "folder")
-                                }
-                                .disabled(isPerformingItemAction)
-                            }
-                        }
-
-                        detailSection("Location") {
-                            detailRow(title: "Folder Path", value: selectedItem.folderURL.path)
-                            detailRow(title: "Collection Root", value: selectedItem.collectionRootURL.path)
-                        }
-
-                        detailSection("Details") {
-                            if let modifiedDate = selectedItem.modifiedDate {
-                                detailRow(
-                                    title: "Modified",
-                                    value: modifiedDate.formatted(date: .abbreviated, time: .shortened)
-                                )
-                            }
-
-                            if let sizeBytes = selectedItem.sizeBytes {
-                                detailRow(
-                                    title: "Size",
-                                    value: ByteCountFormatter.string(fromByteCount: sizeBytes, countStyle: .file)
-                                )
-                            }
-
-                            detailRow(
-                                title: "Metadata",
-                                value: selectedItem.metadataLoaded ? "Loaded" : "Loading..."
-                            )
-                        }
-
-                        detailSection("Contents") {
-                            let previewEntries = directoryPreviewEntries(for: selectedItem)
-
-                            if previewEntries.isEmpty {
-                                Text("No visible files or folders")
-                                    .foregroundStyle(.secondary)
-                            } else {
-                                ForEach(previewEntries) { entry in
-                                    HStack(spacing: 10) {
-                                        Image(systemName: entry.isDirectory ? "folder" : "doc")
-                                            .foregroundStyle(.secondary)
-                                        Text(entry.name)
-                                            .lineLimit(1)
-                                        Spacer()
-                                    }
-                                }
-
-                                if previewEntries.count == directoryPreviewLimit {
-                                    Text("Showing the first \(directoryPreviewLimit) items")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-                            }
-                        }
-                    }
-                    .padding()
-                }
+                ItemDetailView(
+                    item: selectedItem,
+                    behaviorPacks: packReferences(for: selectedItem, type: .behaviorPack),
+                    resourcePacks: packReferences(for: selectedItem, type: .resourcePack),
+                    contents: directoryPreviewEntries(for: selectedItem),
+                    directoryPreviewLimit: directoryPreviewLimit,
+                    isPerformingItemAction: isPerformingItemAction,
+                    primaryActionTitle: primaryActionTitle(for: selectedItem),
+                    primaryActionSubtitle: primaryActionSubtitle(for: selectedItem),
+                    primaryAction: { saveItem(selectedItem) },
+                    shareAction: { anchorView in shareItem(selectedItem, from: anchorView) },
+                    revealAction: { revealInFinder(selectedItem) }
+                )
             } else {
                 Text("Select a world or pack to see details")
                     .foregroundStyle(.secondary)
             }
         }
         .navigationTitle("Minecraft World Manager")
+        .tint(.minecraftAccent)
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
                 if let selectedExportableItem = selectedExportableItem {
@@ -194,11 +105,12 @@ struct ContentView: View {
                     ) { anchorView in
                         shareItem(selectedExportableItem, from: anchorView)
                     }
+                    .help("Share")
 
                     Button {
                         saveItem(selectedExportableItem)
                     } label: {
-                        Label("Export", systemImage: "square.and.arrow.down")
+                        Label("Export", systemImage: "arrow.down.circle")
                     }
                     .disabled(isPerformingItemAction)
 
@@ -233,21 +145,6 @@ struct ContentView: View {
                     .help("Source actions")
                 }
             }
-
-            ToolbarItem(placement: .secondaryAction) {
-                if let activeScanSummary = library.activeScanSummary {
-                    HStack(spacing: 8) {
-                        ProgressView()
-                            .controlSize(.small)
-
-                        Text(activeScanSummary)
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    }
-                    .frame(maxWidth: 320, alignment: .trailing)
-                }
-            }
         }
         .onChange(of: filteredItems.map(\.id)) { _, filteredIDs in
             guard let selectedItem, !filteredIDs.contains(selectedItem.id) else {
@@ -259,40 +156,29 @@ struct ContentView: View {
         .onChange(of: library.sources.map(\.id)) { _, sourceIDs in
             syncSelection(with: sourceIDs)
         }
-        .alert(item: $itemActionAlert) { alert in
-            Alert(
-                title: Text(alert.title),
-                message: Text(alert.message),
-                dismissButton: .default(Text("OK"))
-            )
-        }
     }
 
-    private let directoryPreviewLimit = 12
-
-    private var filteredItems: [MinecraftContentItem] {
+    private var scopedItems: [MinecraftContentItem] {
         guard let selectedSidebarSelection else {
             return []
         }
 
-        let scopedItems: [MinecraftContentItem]
-
         switch selectedSidebarSelection {
         case .allContent(let sourceID):
-            scopedItems = library.source(withID: sourceID)?.items ?? []
+            return library.source(withID: sourceID)?.items ?? []
         case .contentType(let sourceID, let contentType):
-            scopedItems = library.source(withID: sourceID)?.items.filter { $0.contentType == contentType } ?? []
+            return library.source(withID: sourceID)?.items.filter { $0.contentType == contentType } ?? []
         }
+    }
 
+    private var filteredItems: [MinecraftContentItem] {
         let trimmedSearchText = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedSearchText.isEmpty else {
             return scopedItems
         }
 
         return scopedItems.filter { item in
-            item.displayName.localizedCaseInsensitiveContains(trimmedSearchText)
-                || item.folderName.localizedCaseInsensitiveContains(trimmedSearchText)
-                || item.contentType.rawValue.localizedCaseInsensitiveContains(trimmedSearchText)
+            item.searchText.localizedCaseInsensitiveContains(trimmedSearchText)
         }
     }
 
@@ -318,16 +204,57 @@ struct ContentView: View {
         currentSelectedItem
     }
 
-    private var contentListTitle: String {
+    private var collectionHeaderTitle: String {
         guard let selectedSidebarSelection else {
             return "Minecraft Content"
         }
 
         switch selectedSidebarSelection {
-        case .allContent(let sourceID):
-            return library.source(withID: sourceID)?.displayName ?? "Minecraft Content"
+        case .allContent:
+            return "All Content"
         case .contentType(_, let contentType):
             return sidebarTitle(for: contentType)
+        }
+    }
+
+    private var collectionHeaderSubtitle: String {
+        let totalCount = scopedItems.count
+        let filteredCount = filteredItems.count
+        let noun = collectionCountNoun
+
+        if searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return "\(totalCount.formatted(.number)) \(noun)"
+        }
+
+        return "\(filteredCount.formatted(.number)) of \(totalCount.formatted(.number)) \(noun)"
+    }
+
+    private var collectionCountNoun: String {
+        guard let selectedSidebarSelection else {
+            return "items"
+        }
+
+        switch selectedSidebarSelection {
+        case .allContent:
+            return scopedItems.count == 1 ? "item" : "items"
+        case .contentType(_, let contentType):
+            switch contentType {
+            case .world:
+                return scopedItems.count == 1 ? "world" : "worlds"
+            case .behaviorPack, .resourcePack, .skinPack, .worldTemplate:
+                return scopedItems.count == 1 ? "pack" : "packs"
+            }
+        }
+    }
+
+    private var searchPrompt: String {
+        switch selectedSidebarSelection {
+        case .some(.allContent):
+            return "Search All Content"
+        case .some(.contentType(_, let contentType)):
+            return "Search \(sidebarTitle(for: contentType))"
+        case .none:
+            return "Search Content"
         }
     }
 
@@ -391,34 +318,12 @@ struct ContentView: View {
     }
 
     @ViewBuilder
-    private func detailSection<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(title)
-                .font(.headline)
-
-            content()
-        }
-    }
-
-    @ViewBuilder
-    private func detailRow(title: String, value: String) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(title)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
-            Text(value)
-                .textSelection(.enabled)
-        }
-    }
-
-    @ViewBuilder
     private func itemContextMenu(for item: MinecraftContentItem) -> some View {
         Button("Share...") {
             shareItem(item, from: nil)
         }
 
-        Button("Export .\(item.contentType.archiveExtension)") {
+        Button(exportMenuTitle(for: item)) {
             saveItem(item)
         }
 
@@ -427,6 +332,43 @@ struct ContentView: View {
         Button("Reveal in Finder") {
             revealInFinder(item)
         }
+    }
+
+    private func exportMenuTitle(for item: MinecraftContentItem) -> String {
+        switch item.contentType {
+        case .world:
+            return "Create Minecraft World File..."
+        case .behaviorPack, .resourcePack, .skinPack:
+            return "Create Minecraft Pack File..."
+        case .worldTemplate:
+            return "Create Minecraft Template File..."
+        }
+    }
+
+    private func primaryActionTitle(for item: MinecraftContentItem) -> String {
+        switch item.contentType {
+        case .world:
+            return "Create Minecraft World File..."
+        case .behaviorPack, .resourcePack, .skinPack:
+            return "Create Minecraft Pack File..."
+        case .worldTemplate:
+            return "Create Minecraft Template File..."
+        }
+    }
+
+    private func primaryActionSubtitle(for item: MinecraftContentItem) -> String {
+        switch item.contentType {
+        case .world:
+            return "Creates a .mcworld file that can be opened on another device to import this world into Minecraft."
+        case .behaviorPack, .resourcePack, .skinPack:
+            return "Creates a .mcpack file that can be shared or opened on another device."
+        case .worldTemplate:
+            return "Creates a .mctemplate file that can be opened on another device."
+        }
+    }
+
+    private func packReferences(for item: MinecraftContentItem, type: MinecraftContentType) -> [ContentPackReference] {
+        item.packReferences.filter { $0.type == type }
     }
 
     private func directoryPreviewEntries(for item: MinecraftContentItem) -> [DirectoryPreviewEntry] {
@@ -546,8 +488,8 @@ struct ContentView: View {
         let panel = NSSavePanel()
         panel.canCreateDirectories = true
         panel.isExtensionHidden = false
-        panel.title = "Export \(item.contentType.exportTitle)"
-        panel.message = "Choose where to save the .\(item.contentType.archiveExtension) file."
+        panel.title = primaryActionTitle(for: item)
+        panel.message = primaryActionSubtitle(for: item)
         panel.nameFieldStringValue = ContentPackageExporter.suggestedBaseFilename(for: item)
         panel.allowedContentTypes = [archiveType(for: item)]
 
@@ -556,6 +498,7 @@ struct ContentView: View {
         }
 
         isPerformingItemAction = true
+        library.setItemActionInProgress("Creating \(item.contentType.archiveExtension) file...")
 
         Task {
             do {
@@ -563,20 +506,20 @@ struct ContentView: View {
                     try ContentPackageExporter.exportItem(item, to: destinationURL)
                 }.value
 
+                let finalURL = ContentPackageExporter.finalArchiveURL(for: item, destinationURL: destinationURL)
+
                 await MainActor.run {
                     isPerformingItemAction = false
-                    itemActionAlert = ItemActionAlert(
-                        title: "Export Complete",
-                        message: "\"\(item.displayName)\" was exported as \(ContentPackageExporter.suggestedFilename(for: item))."
+                    library.setItemActionSuccess(
+                        title: "Created \(finalURL.lastPathComponent)",
+                        subtitle: "Ready to move to another device",
+                        revealURL: finalURL
                     )
                 }
             } catch {
                 await MainActor.run {
                     isPerformingItemAction = false
-                    itemActionAlert = ItemActionAlert(
-                        title: "Export Failed",
-                        message: error.localizedDescription
-                    )
+                    library.setItemActionFailure(error.localizedDescription)
                 }
             }
         }
@@ -588,6 +531,7 @@ struct ContentView: View {
         }
 
         isPerformingItemAction = true
+        library.setItemActionInProgress("Preparing \(item.contentType.archiveExtension) file...")
 
         Task {
             do {
@@ -600,24 +544,27 @@ struct ContentView: View {
 
                     let presentationView = anchorView ?? NSApp.keyWindow?.contentView
                     guard let presentationView else {
-                        itemActionAlert = ItemActionAlert(
-                            title: "Share Failed",
-                            message: "Could not find a view to present the sharing menu."
-                        )
+                        library.setItemActionFailure("Could not present the share menu.")
                         return
                     }
 
+                    library.setItemActionSuccess(
+                        title: "Share ready",
+                        subtitle: shareURL.lastPathComponent,
+                        revealURL: shareURL
+                    )
+
                     let picker = NSSharingServicePicker(items: [shareURL])
-                    let targetRect = anchorView?.bounds ?? presentationView.bounds.insetBy(dx: presentationView.bounds.width / 2, dy: presentationView.bounds.height / 2)
+                    let targetRect = anchorView?.bounds ?? presentationView.bounds.insetBy(
+                        dx: presentationView.bounds.width / 2,
+                        dy: presentationView.bounds.height / 2
+                    )
                     picker.show(relativeTo: targetRect, of: presentationView, preferredEdge: .minY)
                 }
             } catch {
                 await MainActor.run {
                     isPerformingItemAction = false
-                    itemActionAlert = ItemActionAlert(
-                        title: "Share Failed",
-                        message: error.localizedDescription
-                    )
+                    library.setItemActionFailure(error.localizedDescription)
                 }
             }
         }
@@ -625,6 +572,10 @@ struct ContentView: View {
 
     private func revealInFinder(_ item: MinecraftContentItem) {
         NSWorkspace.shared.activateFileViewerSelecting([item.folderURL])
+    }
+
+    private func revealURLInFinder(_ url: URL) {
+        NSWorkspace.shared.activateFileViewerSelecting([url])
     }
 
     private func archiveType(for item: MinecraftContentItem) -> UTType {
@@ -671,10 +622,302 @@ private struct SidebarFilterRow: View {
     }
 }
 
-private struct ItemActionAlert: Identifiable {
-    let id = UUID()
+private struct SidebarFooterView: View {
+    let state: SidebarFooterState
+    let revealAction: (URL) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                if state.style == .inProgress {
+                    ProgressView()
+                        .controlSize(.small)
+                }
+
+                Text(state.title)
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(primaryColor)
+                    .lineLimit(2)
+            }
+
+            if let subtitle = state.subtitle {
+                Text(subtitle)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(3)
+            }
+
+            if let revealURL = state.revealURL {
+                Button("Reveal in Finder") {
+                    revealAction(revealURL)
+                }
+                .buttonStyle(.link)
+                .font(.footnote)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(.bar)
+    }
+
+    private var primaryColor: Color {
+        switch state.style {
+        case .idle, .inProgress:
+            return .primary
+        case .failure:
+            return .red
+        case .success:
+            return .minecraftAccent
+        }
+    }
+}
+
+private struct ContentCollectionHeaderView: View {
     let title: String
-    let message: String
+    let subtitle: String
+    let prompt: String
+    @Binding var searchText: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(title)
+                .font(.title2.weight(.semibold))
+
+            Text(subtitle)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+
+            TextField(prompt, text: $searchText)
+                .textFieldStyle(.roundedBorder)
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.background)
+    }
+}
+
+private struct ContentRowView: View {
+    let item: MinecraftContentItem
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 10) {
+            ItemThumbnailView(iconURL: item.iconURL)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(item.displayName)
+                    .lineLimit(1)
+
+                Text(metadataLine)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+
+            Spacer()
+
+            if !item.metadataLoaded {
+                ProgressView()
+                    .controlSize(.small)
+            }
+        }
+        .padding(.vertical, 2)
+        .contentShape(Rectangle())
+    }
+
+    private var metadataLine: String {
+        let sizeText = item.sizeBytes.map {
+            ByteCountFormatter.string(fromByteCount: $0, countStyle: .file)
+        } ?? "Size unavailable"
+        let dateText = item.displayDate.map {
+            $0.formatted(date: .abbreviated, time: .omitted)
+        } ?? "Date unavailable"
+
+        return "\(item.contentType.rawValue) • \(sizeText) • \(item.displayDateLabel) \(dateText)"
+    }
+}
+
+private struct ItemDetailView: View {
+    let item: MinecraftContentItem
+    let behaviorPacks: [ContentPackReference]
+    let resourcePacks: [ContentPackReference]
+    let contents: [DirectoryPreviewEntry]
+    let directoryPreviewLimit: Int
+    let isPerformingItemAction: Bool
+    let primaryActionTitle: String
+    let primaryActionSubtitle: String
+    let primaryAction: () -> Void
+    let shareAction: (NSView) -> Void
+    let revealAction: () -> Void
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 24) {
+                VStack(alignment: .leading, spacing: 16) {
+                    LargeItemThumbnailView(iconURL: item.iconURL)
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(item.displayName)
+                            .font(.largeTitle.weight(.semibold))
+
+                        Text(item.contentType.rawValue)
+                            .font(.title3)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    HStack(spacing: 18) {
+                        metadataChip(title: "Size", value: sizeText)
+                        metadataChip(title: item.displayDateLabel, value: displayDateText)
+
+                        if item.lastPlayedDate == nil, item.contentType == .world {
+                            metadataChip(title: "Last Played", value: "Not available")
+                        }
+                    }
+                }
+
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Actions")
+                        .font(.headline)
+
+                    Button(primaryActionTitle) {
+                        primaryAction()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(isPerformingItemAction)
+
+                    Text(primaryActionSubtitle)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+
+                    HStack(spacing: 12) {
+                        SharingPickerButton(
+                            title: "Share...",
+                            systemImage: "square.and.arrow.up",
+                            isEnabled: !isPerformingItemAction
+                        ) { anchorView in
+                            shareAction(anchorView)
+                        }
+
+                        Button("Reveal in Finder") {
+                            revealAction()
+                        }
+                        .disabled(isPerformingItemAction)
+                    }
+                }
+
+                if item.contentType == .world {
+                    if !behaviorPacks.isEmpty || !resourcePacks.isEmpty {
+                        VStack(alignment: .leading, spacing: 14) {
+                            Text("Packs Used")
+                                .font(.headline)
+
+                            if !behaviorPacks.isEmpty {
+                                packSection(title: "Behavior Packs", packs: behaviorPacks)
+                            }
+
+                            if !resourcePacks.isEmpty {
+                                packSection(title: "Resource Packs", packs: resourcePacks)
+                            }
+                        }
+                    }
+                }
+
+                DisclosureGroup("Technical Details") {
+                    VStack(alignment: .leading, spacing: 18) {
+                        detailRow(title: "Folder ID", value: item.folderID)
+                        detailRow(title: "Folder Path", value: item.folderURL.path)
+                        detailRow(title: "Collection Root", value: item.collectionRootURL.path)
+
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Contents")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+
+                            if contents.isEmpty {
+                                Text("No visible files or folders")
+                                    .foregroundStyle(.secondary)
+                            } else {
+                                ForEach(contents) { entry in
+                                    HStack(spacing: 10) {
+                                        Image(systemName: entry.isDirectory ? "folder" : "doc")
+                                            .foregroundStyle(.secondary)
+                                        Text(entry.name)
+                                            .lineLimit(1)
+                                        Spacer()
+                                    }
+                                }
+
+                                if contents.count == directoryPreviewLimit {
+                                    Text("Showing the first \(directoryPreviewLimit) items")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+                    }
+                    .padding(.top, 8)
+                }
+            }
+            .padding(24)
+        }
+    }
+
+    @ViewBuilder
+    private func metadataChip(title: String, value: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Text(value)
+                .font(.body.weight(.medium))
+        }
+    }
+
+    @ViewBuilder
+    private func packSection(title: String, packs: [ContentPackReference]) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title)
+                .font(.subheadline.weight(.semibold))
+
+            ForEach(packs) { pack in
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(pack.name)
+
+                    if let secondary = packSecondaryText(pack), !secondary.isEmpty {
+                        Text(secondary)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func detailRow(title: String, value: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            Text(value)
+                .textSelection(.enabled)
+        }
+    }
+
+    private var sizeText: String {
+        item.sizeBytes.map { ByteCountFormatter.string(fromByteCount: $0, countStyle: .file) } ?? "Unknown"
+    }
+
+    private var displayDateText: String {
+        item.displayDate.map { $0.formatted(date: .abbreviated, time: .omitted) } ?? "Unknown"
+    }
+
+    private func packSecondaryText(_ pack: ContentPackReference) -> String? {
+        let components = [pack.version.map { "v\($0)" }, pack.uuid]
+            .compactMap { $0 }
+        return components.isEmpty ? nil : components.joined(separator: " • ")
+    }
 }
 
 private struct DirectoryPreviewEntry: Identifiable {
@@ -739,12 +982,12 @@ private struct EmptySourcesView: View {
             ZStack {
                 RoundedRectangle(cornerRadius: 24)
                     .strokeBorder(style: StrokeStyle(lineWidth: 2, dash: [10, 10]))
-                    .foregroundStyle(isDropTargeted ? Color.accentColor : Color.secondary.opacity(0.25))
+                    .foregroundStyle(isDropTargeted ? Color.minecraftAccent : Color.secondary.opacity(0.25))
                     .frame(width: 220, height: 160)
 
                 Image(systemName: "folder.badge.plus")
                     .font(.system(size: 56, weight: .regular))
-                    .foregroundStyle(isDropTargeted ? Color.accentColor : Color.secondary)
+                    .foregroundStyle(isDropTargeted ? Color.minecraftAccent : Color.secondary)
             }
 
             VStack(spacing: 8) {
@@ -775,12 +1018,12 @@ private struct ItemThumbnailView: View {
             Image(nsImage: image)
                 .resizable()
                 .aspectRatio(contentMode: .fill)
-                .frame(width: 36, height: 36)
-                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .frame(width: 40, height: 40)
+                .clipShape(RoundedRectangle(cornerRadius: 7))
         } else {
-            RoundedRectangle(cornerRadius: 6)
+            RoundedRectangle(cornerRadius: 7)
                 .fill(.quaternary)
-                .frame(width: 36, height: 36)
+                .frame(width: 40, height: 40)
                 .overlay(
                     Image(systemName: "shippingbox")
                         .foregroundStyle(.secondary)
@@ -797,12 +1040,12 @@ private struct LargeItemThumbnailView: View {
             Image(nsImage: image)
                 .resizable()
                 .aspectRatio(contentMode: .fit)
-                .frame(width: 128, height: 128)
-                .clipShape(RoundedRectangle(cornerRadius: 12))
+                .frame(width: 180, height: 180)
+                .clipShape(RoundedRectangle(cornerRadius: 16))
         } else {
-            RoundedRectangle(cornerRadius: 12)
+            RoundedRectangle(cornerRadius: 16)
                 .fill(.quaternary)
-                .frame(width: 128, height: 128)
+                .frame(width: 180, height: 180)
                 .overlay(
                     Image(systemName: "shippingbox")
                         .font(.largeTitle)
@@ -818,6 +1061,10 @@ private func loadImage(from url: URL?) -> NSImage? {
     }
 
     return NSImage(contentsOf: url)
+}
+
+private extension Color {
+    static let minecraftAccent = Color(red: 0.36, green: 0.63, blue: 0.24)
 }
 
 struct ContentView_Previews: PreviewProvider {

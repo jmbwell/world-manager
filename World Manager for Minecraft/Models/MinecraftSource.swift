@@ -15,6 +15,9 @@ struct MinecraftSource: Identifiable, Hashable, Sendable {
     var isScanning: Bool
     var scanStatus: String
     var scanError: String?
+    var indexedItemCount: Int
+    var indexedDetailCount: Int
+    var lastScanDate: Date?
 
     init(folderURL: URL) {
         let normalizedURL = folderURL.standardizedFileURL
@@ -25,6 +28,9 @@ struct MinecraftSource: Identifiable, Hashable, Sendable {
         self.isScanning = false
         self.scanStatus = ""
         self.scanError = nil
+        self.indexedItemCount = 0
+        self.indexedDetailCount = 0
+        self.lastScanDate = nil
     }
 
     var itemCount: Int {

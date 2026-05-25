@@ -8,9 +8,29 @@
 import Combine
 import Foundation
 
+struct SidebarFooterState {
+    enum Style {
+        case idle
+        case inProgress
+        case failure
+        case success
+    }
+
+    let style: Style
+    let title: String
+    let subtitle: String?
+    let revealURL: URL?
+}
+
 @MainActor
 final class SourceLibrary: ObservableObject {
     @Published var sources: [MinecraftSource] = []
+    @Published private(set) var sidebarFooterState = SidebarFooterState(
+        style: .idle,
+        title: "Ready",
+        subtitle: nil,
+        revealURL: nil
+    )
 
     private var scanTasks: [URL: Task<Void, Never>] = [:]
 
@@ -40,6 +60,34 @@ final class SourceLibrary: ObservableObject {
         scanTasks[sourceID]?.cancel()
         scanTasks[sourceID] = nil
         sources.removeAll { $0.id == sourceID }
+        refreshSidebarFooterState()
+    }
+
+    func setItemActionInProgress(_ description: String) {
+        sidebarFooterState = SidebarFooterState(
+            style: .inProgress,
+            title: description,
+            subtitle: nil,
+            revealURL: nil
+        )
+    }
+
+    func setItemActionFailure(_ message: String) {
+        sidebarFooterState = SidebarFooterState(
+            style: .failure,
+            title: "Action Failed",
+            subtitle: message,
+            revealURL: nil
+        )
+    }
+
+    func setItemActionSuccess(title: String, subtitle: String, revealURL: URL?) {
+        sidebarFooterState = SidebarFooterState(
+            style: .success,
+            title: title,
+            subtitle: subtitle,
+            revealURL: revealURL
+        )
     }
 
     var activeScanSummary: String? {
@@ -75,7 +123,10 @@ final class SourceLibrary: ObservableObject {
             source.scanError = nil
             source.scanStatus = "Searching for Minecraft content..."
             source.items = []
+            source.indexedItemCount = 0
+            source.indexedDetailCount = 0
         }
+        refreshSidebarFooterState()
 
         do {
             let discoveredItems = try await Task.detached(priority: .userInitiated) {
@@ -88,10 +139,12 @@ final class SourceLibrary: ObservableObject {
 
             updateSource(sourceID) { source in
                 source.items = discoveredItems
+                source.indexedItemCount = discoveredItems.count
                 source.scanStatus = discoveredItems.isEmpty
                     ? "No Minecraft content found."
                     : "Found \(discoveredItems.count) items. Loading details..."
             }
+            refreshSidebarFooterState()
 
             var loadedCount = 0
 
@@ -114,22 +167,27 @@ final class SourceLibrary: ObservableObject {
                         }
 
                         source.items[index] = enrichedItem
+                        source.indexedDetailCount = loadedCount
                         source.items.sort(by: WorldScanner.sortItems)
 
                         if loadedCount == discoveredItems.count {
                             source.scanStatus = "Loaded \(loadedCount) items."
                             source.isScanning = false
+                            source.lastScanDate = Date()
                         } else {
                             source.scanStatus = "Loaded details for \(loadedCount) of \(discoveredItems.count) items..."
                         }
                     }
+                    refreshSidebarFooterState()
                 }
             }
 
             if discoveredItems.isEmpty {
                 updateSource(sourceID) { source in
                     source.isScanning = false
+                    source.lastScanDate = Date()
                 }
+                refreshSidebarFooterState()
             }
         } catch {
             guard !Task.isCancelled else {
@@ -141,6 +199,7 @@ final class SourceLibrary: ObservableObject {
                 source.scanStatus = ""
                 source.isScanning = false
             }
+            refreshSidebarFooterState()
         }
 
         scanTasks[sourceID] = nil
@@ -152,5 +211,50 @@ final class SourceLibrary: ObservableObject {
         }
 
         mutate(&sources[index])
+    }
+
+    private func refreshSidebarFooterState() {
+        let scanningSources = sources.filter(\.isScanning)
+        if let source = scanningSources.first {
+            let title = source.itemCount == 0 ? "Scanning worlds..." : "Scanning worlds..."
+            let subtitle: String
+            if source.indexedItemCount > 0 {
+                subtitle = "\(source.indexedDetailCount) of \(source.indexedItemCount) indexed"
+            } else {
+                subtitle = "Searching \(source.displayName)"
+            }
+
+            sidebarFooterState = SidebarFooterState(
+                style: .inProgress,
+                title: title,
+                subtitle: subtitle,
+                revealURL: nil
+            )
+            return
+        }
+
+        if let source = sources.first(where: { $0.scanError != nil }) {
+            sidebarFooterState = SidebarFooterState(
+                style: .failure,
+                title: "Scan failed",
+                subtitle: source.scanError,
+                revealURL: nil
+            )
+            return
+        }
+
+        let totalItems = sources.reduce(0) { $0 + $1.itemCount }
+        let subtitle = totalItems == 0 ? "No content indexed" : "\(totalItems.formatted(.number)) items indexed"
+        let lastUpdatedDate = sources.compactMap(\.lastScanDate).max()
+        let secondaryText = lastUpdatedDate.map {
+            "\(subtitle) \u{2022} Last updated \($0.formatted(.relative(presentation: .named)))"
+        } ?? subtitle
+
+        sidebarFooterState = SidebarFooterState(
+            style: .idle,
+            title: "Ready",
+            subtitle: secondaryText,
+            revealURL: nil
+        )
     }
 }
