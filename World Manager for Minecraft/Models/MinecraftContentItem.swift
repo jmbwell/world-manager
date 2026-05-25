@@ -28,6 +28,32 @@ enum MinecraftContentType: String, CaseIterable, Hashable, Sendable {
             return "world_templates"
         }
     }
+
+    nonisolated var archiveExtension: String {
+        switch self {
+        case .world:
+            return "mcworld"
+        case .behaviorPack, .resourcePack, .skinPack:
+            return "mcpack"
+        case .worldTemplate:
+            return "mctemplate"
+        }
+    }
+
+    nonisolated var exportTitle: String {
+        switch self {
+        case .world:
+            return "Minecraft World"
+        case .behaviorPack:
+            return "Behavior Pack"
+        case .resourcePack:
+            return "Resource Pack"
+        case .skinPack:
+            return "Skin Pack"
+        case .worldTemplate:
+            return "World Template"
+        }
+    }
 }
 
 struct MinecraftContentItem: Identifiable, Hashable, Sendable {

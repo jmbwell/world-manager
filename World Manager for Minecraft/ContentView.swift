@@ -15,8 +15,8 @@ struct ContentView: View {
     @State private var selectedSidebarSelection: SidebarSelection?
     @State private var searchText = ""
     @State private var isDropTargeted = false
-    @State private var exportAlert: ExportAlert?
-    @State private var isExportingSelectedWorld = false
+    @State private var itemActionAlert: ItemActionAlert?
+    @State private var isPerformingItemAction = false
 
     var body: some View {
         NavigationSplitView {
@@ -68,6 +68,9 @@ struct ContentView: View {
                     .padding(.vertical, 2)
                     .contentShape(Rectangle())
                     .tag(item)
+                    .contextMenu {
+                        itemContextMenu(for: item)
+                    }
                 }
                 .navigationTitle(contentListTitle)
                 .searchable(text: $searchText, placement: .toolbar, prompt: "Search Content")
@@ -78,7 +81,7 @@ struct ContentView: View {
                     .foregroundStyle(.secondary)
             } else if let selectedItem = currentSelectedItem {
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 16) {
+                    VStack(alignment: .leading, spacing: 20) {
                         HStack(alignment: .top, spacing: 16) {
                             LargeItemThumbnailView(iconURL: selectedItem.iconURL)
 
@@ -97,42 +100,81 @@ struct ContentView: View {
 
                             Spacer(minLength: 0)
 
-                            if selectedItem.contentType == .world {
-                                Button {
-                                    exportSelectedWorld()
-                                } label: {
-                                    if isExportingSelectedWorld {
-                                        ProgressView()
-                                            .controlSize(.small)
-                                    } else {
-                                        Label("Export .mcworld", systemImage: "square.and.arrow.up")
-                                    }
+                            VStack(alignment: .trailing, spacing: 8) {
+                                SharingPickerButton(
+                                    title: "Share",
+                                    systemImage: "square.and.arrow.up",
+                                    isEnabled: !isPerformingItemAction
+                                ) { anchorView in
+                                    shareItem(selectedItem, from: anchorView)
                                 }
-                                .disabled(isExportingSelectedWorld)
+
+                                Button {
+                                    saveItem(selectedItem)
+                                } label: {
+                                    Label("Export .\(selectedItem.contentType.archiveExtension)", systemImage: "square.and.arrow.down")
+                                }
+                                .disabled(isPerformingItemAction)
+
+                                Button {
+                                    revealInFinder(selectedItem)
+                                } label: {
+                                    Label("Reveal in Finder", systemImage: "folder")
+                                }
+                                .disabled(isPerformingItemAction)
                             }
                         }
 
-                        detailRow(title: "Folder Path", value: selectedItem.folderURL.path)
-                        detailRow(title: "Collection Root", value: selectedItem.collectionRootURL.path)
+                        detailSection("Location") {
+                            detailRow(title: "Folder Path", value: selectedItem.folderURL.path)
+                            detailRow(title: "Collection Root", value: selectedItem.collectionRootURL.path)
+                        }
 
-                        if let modifiedDate = selectedItem.modifiedDate {
+                        detailSection("Details") {
+                            if let modifiedDate = selectedItem.modifiedDate {
+                                detailRow(
+                                    title: "Modified",
+                                    value: modifiedDate.formatted(date: .abbreviated, time: .shortened)
+                                )
+                            }
+
+                            if let sizeBytes = selectedItem.sizeBytes {
+                                detailRow(
+                                    title: "Size",
+                                    value: ByteCountFormatter.string(fromByteCount: sizeBytes, countStyle: .file)
+                                )
+                            }
+
                             detailRow(
-                                title: "Modified",
-                                value: modifiedDate.formatted(date: .abbreviated, time: .shortened)
+                                title: "Metadata",
+                                value: selectedItem.metadataLoaded ? "Loaded" : "Loading..."
                             )
                         }
 
-                        if let sizeBytes = selectedItem.sizeBytes {
-                            detailRow(
-                                title: "Size",
-                                value: ByteCountFormatter.string(fromByteCount: sizeBytes, countStyle: .file)
-                            )
-                        }
+                        detailSection("Contents") {
+                            let previewEntries = directoryPreviewEntries(for: selectedItem)
 
-                        detailRow(
-                            title: "Metadata",
-                            value: selectedItem.metadataLoaded ? "Loaded" : "Loading..."
-                        )
+                            if previewEntries.isEmpty {
+                                Text("No visible files or folders")
+                                    .foregroundStyle(.secondary)
+                            } else {
+                                ForEach(previewEntries) { entry in
+                                    HStack(spacing: 10) {
+                                        Image(systemName: entry.isDirectory ? "folder" : "doc")
+                                            .foregroundStyle(.secondary)
+                                        Text(entry.name)
+                                            .lineLimit(1)
+                                        Spacer()
+                                    }
+                                }
+
+                                if previewEntries.count == directoryPreviewLimit {
+                                    Text("Showing the first \(directoryPreviewLimit) items")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                        }
                     }
                     .padding()
                 }
@@ -144,13 +186,28 @@ struct ContentView: View {
         .navigationTitle("Minecraft World Manager")
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
-                if selectedWorld != nil {
-                    Button {
-                        exportSelectedWorld()
-                    } label: {
-                        Label("Export .mcworld", systemImage: "square.and.arrow.up")
+                if let selectedExportableItem = selectedExportableItem {
+                    SharingPickerButton(
+                        title: nil,
+                        systemImage: "square.and.arrow.up",
+                        isEnabled: !isPerformingItemAction
+                    ) { anchorView in
+                        shareItem(selectedExportableItem, from: anchorView)
                     }
-                    .disabled(isExportingSelectedWorld)
+
+                    Button {
+                        saveItem(selectedExportableItem)
+                    } label: {
+                        Label("Export", systemImage: "square.and.arrow.down")
+                    }
+                    .disabled(isPerformingItemAction)
+
+                    Button {
+                        revealInFinder(selectedExportableItem)
+                    } label: {
+                        Label("Reveal in Finder", systemImage: "folder")
+                    }
+                    .disabled(isPerformingItemAction)
                 }
 
                 Button {
@@ -202,7 +259,7 @@ struct ContentView: View {
         .onChange(of: library.sources.map(\.id)) { _, sourceIDs in
             syncSelection(with: sourceIDs)
         }
-        .alert(item: $exportAlert) { alert in
+        .alert(item: $itemActionAlert) { alert in
             Alert(
                 title: Text(alert.title),
                 message: Text(alert.message),
@@ -210,6 +267,8 @@ struct ContentView: View {
             )
         }
     }
+
+    private let directoryPreviewLimit = 12
 
     private var filteredItems: [MinecraftContentItem] {
         guard let selectedSidebarSelection else {
@@ -255,12 +314,8 @@ struct ContentView: View {
             .first(where: { $0.id == selectedItem.id }) ?? selectedItem
     }
 
-    private var selectedWorld: MinecraftContentItem? {
-        guard let currentSelectedItem, currentSelectedItem.contentType == .world else {
-            return nil
-        }
-
-        return currentSelectedItem
+    private var selectedExportableItem: MinecraftContentItem? {
+        currentSelectedItem
     }
 
     private var contentListTitle: String {
@@ -336,6 +391,16 @@ struct ContentView: View {
     }
 
     @ViewBuilder
+    private func detailSection<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(title)
+                .font(.headline)
+
+            content()
+        }
+    }
+
+    @ViewBuilder
     private func detailRow(title: String, value: String) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title)
@@ -345,6 +410,50 @@ struct ContentView: View {
             Text(value)
                 .textSelection(.enabled)
         }
+    }
+
+    @ViewBuilder
+    private func itemContextMenu(for item: MinecraftContentItem) -> some View {
+        Button("Share...") {
+            shareItem(item, from: nil)
+        }
+
+        Button("Export .\(item.contentType.archiveExtension)") {
+            saveItem(item)
+        }
+
+        Divider()
+
+        Button("Reveal in Finder") {
+            revealInFinder(item)
+        }
+    }
+
+    private func directoryPreviewEntries(for item: MinecraftContentItem) -> [DirectoryPreviewEntry] {
+        let fileManager = FileManager.default
+
+        guard let urls = try? fileManager.contentsOfDirectory(
+            at: item.folderURL,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return []
+        }
+
+        return urls
+            .map { url in
+                let isDirectory = (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
+                return DirectoryPreviewEntry(name: url.lastPathComponent, isDirectory: isDirectory)
+            }
+            .sorted { lhs, rhs in
+                if lhs.isDirectory != rhs.isDirectory {
+                    return lhs.isDirectory && !rhs.isDirectory
+                }
+
+                return lhs.name.localizedStandardCompare(rhs.name) == .orderedAscending
+            }
+            .prefix(directoryPreviewLimit)
+            .map { $0 }
     }
 
     private func pickFolder() {
@@ -429,48 +538,97 @@ struct ContentView: View {
         }
     }
 
-    private func exportSelectedWorld() {
-        guard let world = selectedWorld, !isExportingSelectedWorld else {
+    private func saveItem(_ item: MinecraftContentItem) {
+        guard !isPerformingItemAction else {
             return
         }
 
         let panel = NSSavePanel()
         panel.canCreateDirectories = true
         panel.isExtensionHidden = false
-        panel.title = "Export Minecraft World"
-        panel.message = "Choose where to save the .mcworld file."
-        panel.nameFieldStringValue = WorldExporter.suggestedFilename(for: world)
-        panel.allowedContentTypes = [UTType(filenameExtension: "mcworld") ?? .data]
+        panel.title = "Export \(item.contentType.exportTitle)"
+        panel.message = "Choose where to save the .\(item.contentType.archiveExtension) file."
+        panel.nameFieldStringValue = ContentPackageExporter.suggestedBaseFilename(for: item)
+        panel.allowedContentTypes = [archiveType(for: item)]
 
         guard panel.runModal() == .OK, let destinationURL = panel.url else {
             return
         }
 
-        isExportingSelectedWorld = true
+        isPerformingItemAction = true
 
         Task {
             do {
                 try await Task.detached(priority: .userInitiated) {
-                    try WorldExporter.exportWorld(world, to: destinationURL)
+                    try ContentPackageExporter.exportItem(item, to: destinationURL)
                 }.value
 
                 await MainActor.run {
-                    isExportingSelectedWorld = false
-                    exportAlert = ExportAlert(
+                    isPerformingItemAction = false
+                    itemActionAlert = ItemActionAlert(
                         title: "Export Complete",
-                        message: "\"\(world.displayName)\" was exported as a .mcworld file."
+                        message: "\"\(item.displayName)\" was exported as \(ContentPackageExporter.suggestedFilename(for: item))."
                     )
                 }
             } catch {
                 await MainActor.run {
-                    isExportingSelectedWorld = false
-                    exportAlert = ExportAlert(
+                    isPerformingItemAction = false
+                    itemActionAlert = ItemActionAlert(
                         title: "Export Failed",
                         message: error.localizedDescription
                     )
                 }
             }
         }
+    }
+
+    private func shareItem(_ item: MinecraftContentItem, from anchorView: NSView?) {
+        guard !isPerformingItemAction else {
+            return
+        }
+
+        isPerformingItemAction = true
+
+        Task {
+            do {
+                let shareURL = try await Task.detached(priority: .userInitiated) {
+                    try ContentPackageExporter.prepareShareFile(for: item)
+                }.value
+
+                await MainActor.run {
+                    isPerformingItemAction = false
+
+                    let presentationView = anchorView ?? NSApp.keyWindow?.contentView
+                    guard let presentationView else {
+                        itemActionAlert = ItemActionAlert(
+                            title: "Share Failed",
+                            message: "Could not find a view to present the sharing menu."
+                        )
+                        return
+                    }
+
+                    let picker = NSSharingServicePicker(items: [shareURL])
+                    let targetRect = anchorView?.bounds ?? presentationView.bounds.insetBy(dx: presentationView.bounds.width / 2, dy: presentationView.bounds.height / 2)
+                    picker.show(relativeTo: targetRect, of: presentationView, preferredEdge: .minY)
+                }
+            } catch {
+                await MainActor.run {
+                    isPerformingItemAction = false
+                    itemActionAlert = ItemActionAlert(
+                        title: "Share Failed",
+                        message: error.localizedDescription
+                    )
+                }
+            }
+        }
+    }
+
+    private func revealInFinder(_ item: MinecraftContentItem) {
+        NSWorkspace.shared.activateFileViewerSelecting([item.folderURL])
+    }
+
+    private func archiveType(for item: MinecraftContentItem) -> UTType {
+        UTType(filenameExtension: item.contentType.archiveExtension) ?? .data
     }
 }
 
@@ -513,10 +671,63 @@ private struct SidebarFilterRow: View {
     }
 }
 
-private struct ExportAlert: Identifiable {
+private struct ItemActionAlert: Identifiable {
     let id = UUID()
     let title: String
     let message: String
+}
+
+private struct DirectoryPreviewEntry: Identifiable {
+    let id = UUID()
+    let name: String
+    let isDirectory: Bool
+}
+
+private struct SharingPickerButton: NSViewRepresentable {
+    let title: String?
+    let systemImage: String
+    let isEnabled: Bool
+    let action: (NSView) -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(action: action)
+    }
+
+    func makeNSView(context: Context) -> NSButton {
+        let button = NSButton()
+        button.target = context.coordinator
+        button.action = #selector(Coordinator.didPressButton(_:))
+        button.bezelStyle = .texturedRounded
+        update(button)
+        return button
+    }
+
+    func updateNSView(_ nsView: NSButton, context: Context) {
+        context.coordinator.action = action
+        update(nsView)
+    }
+
+    private func update(_ button: NSButton) {
+        button.image = NSImage(
+            systemSymbolName: systemImage,
+            accessibilityDescription: title ?? "Share"
+        )
+        button.imagePosition = title == nil ? .imageOnly : .imageLeading
+        button.title = title ?? ""
+        button.isEnabled = isEnabled
+    }
+
+    final class Coordinator: NSObject {
+        var action: (NSView) -> Void
+
+        init(action: @escaping (NSView) -> Void) {
+            self.action = action
+        }
+
+        @objc func didPressButton(_ sender: NSButton) {
+            action(sender)
+        }
+    }
 }
 
 private struct EmptySourcesView: View {
