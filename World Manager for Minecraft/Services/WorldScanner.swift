@@ -8,6 +8,22 @@
 import Foundation
 
 enum WorldScanner {
+    nonisolated static func loadSize(for item: MinecraftContentItem) -> MinecraftContentItem {
+        let fileManager = FileManager.default
+        var sizedItem = item
+        sizedItem.sizeBytes = folderSize(at: item.folderURL, fileManager: fileManager)
+        sizedItem.sizeLoaded = true
+        return sizedItem
+    }
+
+    nonisolated static func beginScanSession(for sourceRootURL: URL) async {
+        await packReferenceIndexStore.reset(for: sourceRootURL)
+    }
+
+    nonisolated static func endScanSession(for sourceRootURL: URL) async {
+        await packReferenceIndexStore.reset(for: sourceRootURL)
+    }
+
     nonisolated static func discoverItems(
         in searchRootURL: URL,
         onDiscovered: @Sendable (MinecraftContentItem) -> Void = { _ in }
@@ -52,6 +68,16 @@ enum WorldScanner {
                     seenItemURLs.insert(itemURL)
                     discoveredItems.append(item)
                     onDiscovered(item)
+
+                    if contentType == .world {
+                        let embeddedPackItems = discoverEmbeddedPackItems(
+                            in: childDirectory,
+                            fileManager: fileManager,
+                            seenItemURLs: &seenItemURLs
+                        )
+                        discoveredItems.append(contentsOf: embeddedPackItems)
+                        embeddedPackItems.forEach(onDiscovered)
+                    }
                 }
             }
         }
@@ -60,7 +86,7 @@ enum WorldScanner {
         return discoveredItems
     }
 
-    nonisolated static func enrich(item: MinecraftContentItem) -> MinecraftContentItem {
+    nonisolated static func enrich(item: MinecraftContentItem) async -> MinecraftContentItem {
         let fileManager = FileManager.default
         var enrichedItem = item
 
@@ -68,9 +94,16 @@ enum WorldScanner {
         enrichedItem.iconURL = iconURL(for: item, fileManager: fileManager)
         enrichedItem.lastPlayedDate = lastPlayedDate(for: item, fileManager: fileManager)
         enrichedItem.modifiedDate = modifiedDate(for: item.folderURL)
-        enrichedItem.sizeBytes = folderSize(at: item.folderURL, fileManager: fileManager)
-        enrichedItem.packReferences = packReferences(for: item, fileManager: fileManager)
+        if let manifestMetadata = manifestMetadata(in: item.folderURL, fileManager: fileManager) {
+            enrichedItem.packUUID = manifestMetadata.uuid
+            enrichedItem.packVersion = manifestMetadata.version
+            if !manifestMetadata.name.isEmpty {
+                enrichedItem.displayName = manifestMetadata.name
+            }
+        }
+        enrichedItem.packReferences = await packReferences(for: item, fileManager: fileManager)
         enrichedItem.metadataLoaded = true
+        enrichedItem.sizeLoaded = false
 
         return enrichedItem
     }
@@ -96,7 +129,7 @@ enum WorldScanner {
         }
     }
 
-    nonisolated private static func immediateChildDirectories(of directoryURL: URL, fileManager: FileManager) throws -> [URL] {
+    nonisolated fileprivate static func immediateChildDirectories(of directoryURL: URL, fileManager: FileManager) throws -> [URL] {
         let children = try fileManager.contentsOfDirectory(
             at: directoryURL,
             includingPropertiesForKeys: [.isDirectoryKey],
@@ -122,6 +155,50 @@ enum WorldScanner {
         }
     }
 
+    nonisolated private static func discoverEmbeddedPackItems(
+        in worldDirectoryURL: URL,
+        fileManager: FileManager,
+        seenItemURLs: inout Set<URL>
+    ) -> [MinecraftContentItem] {
+        let embeddedCollections: [(MinecraftContentType, URL)] = [
+            (.behaviorPack, worldDirectoryURL.appendingPathComponent("behavior_packs", isDirectory: true)),
+            (.resourcePack, worldDirectoryURL.appendingPathComponent("resource_packs", isDirectory: true))
+        ]
+
+        var embeddedItems: [MinecraftContentItem] = []
+
+        for (contentType, collectionURL) in embeddedCollections {
+            guard
+                fileManager.fileExists(atPath: collectionURL.path),
+                let childDirectories = try? immediateChildDirectories(of: collectionURL, fileManager: fileManager)
+            else {
+                continue
+            }
+
+            for childDirectory in childDirectories {
+                let itemURL = childDirectory.standardizedFileURL
+                guard !seenItemURLs.contains(itemURL) else {
+                    continue
+                }
+
+                guard isCandidateItem(at: childDirectory, type: contentType, fileManager: fileManager) else {
+                    continue
+                }
+
+                let item = MinecraftContentItem(
+                    folderURL: childDirectory,
+                    folderName: childDirectory.lastPathComponent,
+                    contentType: contentType,
+                    collectionRootURL: collectionURL
+                )
+                seenItemURLs.insert(itemURL)
+                embeddedItems.append(item)
+            }
+        }
+
+        return embeddedItems
+    }
+
     nonisolated private static func displayName(for item: MinecraftContentItem, fileManager: FileManager) -> String {
         switch item.contentType {
         case .world:
@@ -145,19 +222,7 @@ enum WorldScanner {
     }
 
     nonisolated private static func manifestName(in directoryURL: URL, fileManager: FileManager) -> String? {
-        let manifestURL = directoryURL.appendingPathComponent("manifest.json")
-        guard
-            fileManager.fileExists(atPath: manifestURL.path),
-            let data = try? Data(contentsOf: manifestURL),
-            let jsonObject = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-            let header = jsonObject["header"] as? [String: Any],
-            let name = (header["name"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
-            !name.isEmpty
-        else {
-            return nil
-        }
-
-        return name
+        manifestMetadata(in: directoryURL, fileManager: fileManager)?.name
     }
 
     nonisolated private static func packIconURL(in directoryURL: URL, fileManager: FileManager) -> URL? {
@@ -235,10 +300,10 @@ enum WorldScanner {
         return totalSize
     }
 
-    nonisolated private static func packReferences(for item: MinecraftContentItem, fileManager: FileManager) -> [ContentPackReference] {
+    nonisolated private static func packReferences(for item: MinecraftContentItem, fileManager: FileManager) async -> [ContentPackReference] {
         switch item.contentType {
         case .world:
-            var references = referencedWorldPacks(for: item, fileManager: fileManager)
+            var references = await referencedWorldPacks(for: item, fileManager: fileManager)
             references.append(contentsOf: embeddedWorldPacks(for: item, fileManager: fileManager))
             return uniquePackReferences(references)
         case .behaviorPack, .resourcePack, .skinPack, .worldTemplate:
@@ -246,14 +311,14 @@ enum WorldScanner {
         }
     }
 
-    nonisolated private static func referencedWorldPacks(for item: MinecraftContentItem, fileManager: FileManager) -> [ContentPackReference] {
-        let behaviorReferences = packReferences(
+    nonisolated private static func referencedWorldPacks(for item: MinecraftContentItem, fileManager: FileManager) async -> [ContentPackReference] {
+        let behaviorReferences = await packReferences(
             fromWorldReferenceFileNamed: "world_behavior_packs.json",
             type: .behaviorPack,
             worldFolderURL: item.folderURL,
             fileManager: fileManager
         )
-        let resourceReferences = packReferences(
+        let resourceReferences = await packReferences(
             fromWorldReferenceFileNamed: "world_resource_packs.json",
             type: .resourcePack,
             worldFolderURL: item.folderURL,
@@ -289,7 +354,7 @@ enum WorldScanner {
         type: MinecraftContentType,
         worldFolderURL: URL,
         fileManager: FileManager
-    ) -> [ContentPackReference] {
+    ) async -> [ContentPackReference] {
         let fileURL = worldFolderURL.appendingPathComponent(filename)
         guard
             fileManager.fileExists(atPath: fileURL.path),
@@ -299,27 +364,35 @@ enum WorldScanner {
             return []
         }
 
-        return jsonObject.compactMap { entry in
+        var references: [ContentPackReference] = []
+
+        for entry in jsonObject {
             let uuid = (entry["pack_id"] as? String)?.lowercased()
             let version = versionString(from: entry["version"])
-            let resolvedPack = uuid.flatMap {
-                resolvedPackReference(
-                    uuid: $0,
+            let resolvedPack: ContentPackReference?
+            if let uuid {
+                resolvedPack = await resolvedPackReference(
+                    uuid: uuid,
                     type: type,
-                    worldCollectionRootURL: worldFolderURL.deletingLastPathComponent(),
-                    fileManager: fileManager
+                    worldCollectionRootURL: worldFolderURL.deletingLastPathComponent()
                 )
+            } else {
+                resolvedPack = nil
             }
             let fallbackName = resolvedPack?.name ?? uuid ?? "Referenced Pack"
-            return ContentPackReference(
-                name: fallbackName,
-                type: type,
-                iconURL: resolvedPack?.iconURL,
-                uuid: uuid,
-                version: resolvedPack?.version ?? version,
-                source: .referencedByWorld
+            references.append(
+                ContentPackReference(
+                    name: fallbackName,
+                    type: type,
+                    iconURL: resolvedPack?.iconURL,
+                    uuid: uuid,
+                    version: resolvedPack?.version ?? version,
+                    source: .referencedByWorld
+                )
             )
         }
+
+        return references
     }
 
     nonisolated private static func embeddedPackReferences(
@@ -344,34 +417,22 @@ enum WorldScanner {
         }
     }
 
-    nonisolated private static func packReference(
+    nonisolated fileprivate static func packReference(
         fromPackFolder directoryURL: URL,
         type: MinecraftContentType,
         source: PackSource,
         fileManager: FileManager
     ) -> ContentPackReference? {
-        let manifestURL = directoryURL.appendingPathComponent("manifest.json")
-        guard
-            fileManager.fileExists(atPath: manifestURL.path),
-            let data = try? Data(contentsOf: manifestURL),
-            let jsonObject = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else {
+        guard let metadata = manifestMetadata(in: directoryURL, fileManager: fileManager) else {
             return nil
         }
 
-        let header = jsonObject["header"] as? [String: Any]
-        let name = ((header?["name"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)).flatMap {
-            $0.isEmpty ? nil : $0
-        } ?? directoryURL.lastPathComponent
-        let uuid = (header?["uuid"] as? String)?.lowercased()
-        let version = versionString(from: header?["version"])
-
         return ContentPackReference(
-            name: name,
+            name: metadata.name,
             type: type,
             iconURL: packIconURL(in: directoryURL, fileManager: fileManager),
-            uuid: uuid,
-            version: version,
+            uuid: metadata.uuid,
+            version: metadata.version,
             source: source
         )
     }
@@ -379,37 +440,17 @@ enum WorldScanner {
     nonisolated private static func resolvedPackReference(
         uuid: String,
         type: MinecraftContentType,
-        worldCollectionRootURL: URL,
-        fileManager: FileManager
-    ) -> ContentPackReference? {
+        worldCollectionRootURL: URL
+    ) async -> ContentPackReference? {
         let siblingCollectionURL = worldCollectionRootURL
             .deletingLastPathComponent()
             .appendingPathComponent(type.collectionFolderName, isDirectory: true)
 
-        guard
-            fileManager.fileExists(atPath: siblingCollectionURL.path),
-            let childDirectories = try? immediateChildDirectories(of: siblingCollectionURL, fileManager: fileManager)
-        else {
-            return nil
-        }
-
-        for childDirectory in childDirectories {
-            guard
-                let reference = packReference(
-                    fromPackFolder: childDirectory,
-                    type: type,
-                    source: .foundInCollection,
-                    fileManager: fileManager
-                ),
-                reference.uuid == uuid
-            else {
-                continue
-            }
-
-            return reference
-        }
-
-        return nil
+        return await packReferenceIndexStore.reference(
+            forUUID: uuid,
+            type: type,
+            in: siblingCollectionURL
+        )
     }
 
     nonisolated private static func versionString(from value: Any?) -> String? {
@@ -432,6 +473,28 @@ enum WorldScanner {
         }
 
         return nil
+    }
+
+    nonisolated private static func manifestMetadata(in directoryURL: URL, fileManager: FileManager) -> ManifestMetadata? {
+        let manifestURL = directoryURL.appendingPathComponent("manifest.json")
+        guard
+            fileManager.fileExists(atPath: manifestURL.path),
+            let data = try? Data(contentsOf: manifestURL),
+            let jsonObject = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let header = jsonObject["header"] as? [String: Any]
+        else {
+            return nil
+        }
+
+        let name = ((header["name"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)).flatMap {
+            $0.isEmpty ? nil : $0
+        } ?? directoryURL.lastPathComponent
+
+        return ManifestMetadata(
+            name: name,
+            uuid: (header["uuid"] as? String)?.lowercased(),
+            version: versionString(from: header["version"])
+        )
     }
 
     nonisolated private static func uniquePackReferences(_ references: [ContentPackReference]) -> [ContentPackReference] {
@@ -457,3 +520,62 @@ enum WorldScanner {
         }
     }
 }
+
+private struct ManifestMetadata {
+    let name: String
+    let uuid: String?
+    let version: String?
+}
+
+private actor PackReferenceIndexStore {
+    private var referencesByCollectionURL: [URL: [String: ContentPackReference]] = [:]
+
+    func reset(for sourceRootURL: URL) {
+        let sourceRootPath = sourceRootURL.standardizedFileURL.path
+        referencesByCollectionURL = referencesByCollectionURL.filter { collectionURL, _ in
+            !collectionURL.standardizedFileURL.path.hasPrefix(sourceRootPath + "/")
+        }
+    }
+
+    func reference(forUUID uuid: String, type: MinecraftContentType, in collectionURL: URL) -> ContentPackReference? {
+        let normalizedCollectionURL = collectionURL.standardizedFileURL
+
+        if let cachedReferences = referencesByCollectionURL[normalizedCollectionURL] {
+            return cachedReferences[uuid]
+        }
+
+        let fileManager = FileManager.default
+        guard
+            fileManager.fileExists(atPath: normalizedCollectionURL.path),
+            let childDirectories = try? WorldScanner.immediateChildDirectories(
+                of: normalizedCollectionURL,
+                fileManager: fileManager
+            )
+        else {
+            referencesByCollectionURL[normalizedCollectionURL] = [:]
+            return nil
+        }
+
+        var referencesByUUID: [String: ContentPackReference] = [:]
+        for childDirectory in childDirectories {
+            guard
+                let reference = WorldScanner.packReference(
+                    fromPackFolder: childDirectory,
+                    type: type,
+                    source: .foundInCollection,
+                    fileManager: fileManager
+                ),
+                let referenceUUID = reference.uuid
+            else {
+                continue
+            }
+
+            referencesByUUID[referenceUUID] = reference
+        }
+
+        referencesByCollectionURL[normalizedCollectionURL] = referencesByUUID
+        return referencesByUUID[uuid]
+    }
+}
+
+private let packReferenceIndexStore = PackReferenceIndexStore()

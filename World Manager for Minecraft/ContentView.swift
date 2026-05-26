@@ -36,6 +36,7 @@ struct ContentView: View {
                 revealFooterURLAction: revealURLInFinder(_:),
                 filters: sidebarFilters(for:)
             )
+            .navigationSplitViewColumnWidth(min: 280, ideal: 320, max: 380)
         } content: {
             ItemListColumnView(
                 isEmpty: library.sources.isEmpty,
@@ -52,11 +53,15 @@ struct ContentView: View {
                 refreshAction: rescanCurrentSource,
                 itemContextMenu: itemContextMenu(for:)
             )
+            .navigationSplitViewColumnWidth(min: 340, ideal: 400, max: 460)
         } detail: {
             ItemDetailColumnView(
                 item: currentSelectedItem,
-                behaviorPacks: currentSelectedItem.map { packReferences(for: $0, type: .behaviorPack) } ?? [],
-                resourcePacks: currentSelectedItem.map { packReferences(for: $0, type: .resourcePack) } ?? [],
+                behaviorPacks: currentSelectedItem.map { logicalPackReferences(for: $0, type: .behaviorPack) } ?? [],
+                resourcePacks: currentSelectedItem.map { logicalPackReferences(for: $0, type: .resourcePack) } ?? [],
+                worldsUsingPack: currentSelectedItem.map(worldsUsingPack(for:)) ?? [],
+                backingPackInstances: currentSelectedItem.map(backingPackInstances(for:)) ?? [],
+                isSuspiciousPack: currentSelectedItem.map(isSuspiciousPack(_:)) ?? false,
                 contents: currentSelectedItem.map(directoryPreviewEntries(for:)) ?? [],
                 directoryPreviewLimit: directoryPreviewLimit,
                 isEmpty: library.sources.isEmpty,
@@ -84,6 +89,7 @@ struct ContentView: View {
                     shareItem(item, from: anchorView)
                 }
             )
+            .frame(minWidth: 450)
         }
         .onChange(of: displayedItems.map(\.id)) { _, filteredIDs in
             guard let selectedItemID, !filteredIDs.contains(selectedItemID) else {
@@ -368,8 +374,54 @@ struct ContentView: View {
         }
     }
 
-    private func packReferences(for item: MinecraftContentItem, type: MinecraftContentType) -> [ContentPackReference] {
-        item.packReferences.filter { $0.type == type }
+    private func logicalPackReferences(for item: MinecraftContentItem, type: MinecraftContentType) -> [ContentPackReference] {
+        guard
+            item.contentType == .world,
+            let source = currentSource
+        else {
+            return []
+        }
+
+        return source.resolvedPackReferences(for: item.id, type: type)
+    }
+
+    private func worldsUsingPack(for item: MinecraftContentItem) -> [MinecraftContentItem] {
+        guard
+            (item.contentType == .behaviorPack || item.contentType == .resourcePack),
+            let source = currentSource,
+            let logicalPack = source.logicalPack(forRepresentativeItemID: item.id)
+        else {
+            return []
+        }
+
+        return source.worldsUsingPack(logicalPack.id).sorted(by: sortComparator)
+    }
+
+    private func backingPackInstances(for item: MinecraftContentItem) -> [MinecraftContentItem] {
+        guard
+            (item.contentType == .behaviorPack || item.contentType == .resourcePack),
+            let source = currentSource,
+            let logicalPack = source.logicalPack(forRepresentativeItemID: item.id)
+        else {
+            return []
+        }
+
+        return source
+            .packInstances(for: logicalPack.id)
+            .compactMap { source.rawItem(withID: $0.itemID) }
+            .sorted(by: WorldScanner.sortItems)
+    }
+
+    private func isSuspiciousPack(_ item: MinecraftContentItem) -> Bool {
+        guard
+            (item.contentType == .behaviorPack || item.contentType == .resourcePack),
+            let source = currentSource,
+            let logicalPack = source.logicalPack(forRepresentativeItemID: item.id)
+        else {
+            return false
+        }
+
+        return logicalPack.isSuspicious
     }
 
     private func directoryPreviewEntries(for item: MinecraftContentItem) -> [DirectoryPreviewEntry] {
@@ -716,7 +768,7 @@ private struct SidebarFilterRow: View {
 
 private struct SidebarSourcesSectionHeaderView: View {
     var body: some View {
-        Text("Library")
+        Text("Libraries")
             .font(.headline)
             .foregroundStyle(.secondary)
         .textCase(nil)
@@ -849,6 +901,9 @@ private struct ItemDetailColumnView: View {
     let item: MinecraftContentItem?
     let behaviorPacks: [ContentPackReference]
     let resourcePacks: [ContentPackReference]
+    let worldsUsingPack: [MinecraftContentItem]
+    let backingPackInstances: [MinecraftContentItem]
+    let isSuspiciousPack: Bool
     let contents: [DirectoryPreviewEntry]
     let directoryPreviewLimit: Int
     let isEmpty: Bool
@@ -868,6 +923,9 @@ private struct ItemDetailColumnView: View {
                     item: item,
                     behaviorPacks: behaviorPacks,
                     resourcePacks: resourcePacks,
+                    worldsUsingPack: worldsUsingPack,
+                    backingPackInstances: backingPackInstances,
+                    isSuspiciousPack: isSuspiciousPack,
                     contents: contents,
                     directoryPreviewLimit: directoryPreviewLimit
                 )
@@ -924,7 +982,7 @@ private struct ContentRowView: View {
 
             Spacer()
 
-            if !item.metadataLoaded {
+            if !item.metadataLoaded || !item.sizeLoaded {
                 ProgressView()
                     .controlSize(.small)
             }
@@ -934,9 +992,14 @@ private struct ContentRowView: View {
     }
 
     private var metadataLine: String {
-        let sizeText = item.sizeBytes.map {
-            ByteCountFormatter.string(fromByteCount: $0, countStyle: .file)
-        } ?? "Size unavailable"
+        let sizeText: String
+        if let sizeBytes = item.sizeBytes {
+            sizeText = ByteCountFormatter.string(fromByteCount: sizeBytes, countStyle: .file)
+        } else if item.metadataLoaded {
+            sizeText = "Calculating size..."
+        } else {
+            sizeText = "Loading metadata..."
+        }
         let dateText = item.displayDate.map {
             $0.formatted(date: .abbreviated, time: .omitted)
         } ?? "Date unavailable"
@@ -949,6 +1012,9 @@ private struct ItemDetailView: View {
     let item: MinecraftContentItem
     let behaviorPacks: [ContentPackReference]
     let resourcePacks: [ContentPackReference]
+    let worldsUsingPack: [MinecraftContentItem]
+    let backingPackInstances: [MinecraftContentItem]
+    let isSuspiciousPack: Bool
     let contents: [DirectoryPreviewEntry]
     let directoryPreviewLimit: Int
     @State private var isTechnicalDetailsExpanded = false
@@ -975,6 +1041,12 @@ private struct ItemDetailView: View {
                         Text("Details")
                             .font(.headline)
 
+                        if isSuspiciousPack {
+                            Label("Manifest UUID is missing or unreadable for this pack.", systemImage: "exclamationmark.triangle")
+                                .font(.subheadline)
+                                .foregroundStyle(.orange)
+                        }
+
                         detailValueRow(title: "Size", value: sizeText)
                         detailValueRow(title: item.displayDateLabel, value: displayDateText)
 
@@ -999,6 +1071,52 @@ private struct ItemDetailView: View {
 
                             if !resourcePacks.isEmpty {
                                 packSection(title: "Resource Packs", packs: resourcePacks)
+                            }
+                        }
+                    }
+                }
+
+                if (item.contentType == .behaviorPack || item.contentType == .resourcePack), !worldsUsingPack.isEmpty {
+                    detailCard {
+                        VStack(alignment: .leading, spacing: 14) {
+                            Text("Used By Worlds")
+                                .font(.headline)
+
+                            ForEach(worldsUsingPack) { world in
+                                HStack(alignment: .top, spacing: 12) {
+                                    PackReferenceIconView(iconURL: world.iconURL)
+
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(world.displayName)
+
+                                        Text(worldUsageSecondaryText(for: world))
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if (item.contentType == .behaviorPack || item.contentType == .resourcePack), !backingPackInstances.isEmpty {
+                    detailCard {
+                        VStack(alignment: .leading, spacing: 14) {
+                            Text("Pack Instances")
+                                .font(.headline)
+
+                            ForEach(backingPackInstances) { instance in
+                                HStack(alignment: .top, spacing: 12) {
+                                    PackReferenceIconView(iconURL: instance.iconURL)
+
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(instance.folderName)
+
+                                        Text(packInstanceSecondaryText(for: instance))
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                }
                             }
                         }
                     }
@@ -1052,7 +1170,7 @@ private struct ItemDetailView: View {
                 }
             }
             .padding(28)
-            .frame(maxWidth: 760, alignment: .leading)
+            .frame(maxWidth: 450, alignment: .leading)
         }
     }
 
@@ -1113,7 +1231,11 @@ private struct ItemDetailView: View {
     }
 
     private var sizeText: String {
-        item.sizeBytes.map { ByteCountFormatter.string(fromByteCount: $0, countStyle: .file) } ?? "Unknown"
+        if let sizeBytes = item.sizeBytes {
+            return ByteCountFormatter.string(fromByteCount: sizeBytes, countStyle: .file)
+        }
+
+        return item.metadataLoaded ? "Calculating..." : "Loading..."
     }
 
     private var displayDateText: String {
@@ -1124,6 +1246,19 @@ private struct ItemDetailView: View {
         let components = [pack.version.map { "v\($0)" }, pack.uuid]
             .compactMap { $0 }
         return components.isEmpty ? nil : components.joined(separator: " • ")
+    }
+
+    private func worldUsageSecondaryText(for world: MinecraftContentItem) -> String {
+        let dateText = world.displayDate?.formatted(date: .abbreviated, time: .omitted) ?? "Date unavailable"
+        return "\(world.displayDateLabel) \(dateText)"
+    }
+
+    private func packInstanceSecondaryText(for instance: MinecraftContentItem) -> String {
+        if instance.folderURL.pathComponents.contains(MinecraftContentType.world.collectionFolderName) {
+            return "Embedded in world copy"
+        }
+
+        return "Top-level pack folder"
     }
 }
 

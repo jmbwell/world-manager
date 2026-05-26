@@ -104,8 +104,11 @@ struct MinecraftContentItem: Identifiable, Hashable, Sendable {
     var lastPlayedDate: Date?
     var modifiedDate: Date?
     var sizeBytes: Int64?
+    var packUUID: String?
+    var packVersion: String?
     var packReferences: [ContentPackReference]
     var metadataLoaded: Bool
+    var sizeLoaded: Bool
 
     nonisolated init(
         folderURL: URL,
@@ -117,8 +120,11 @@ struct MinecraftContentItem: Identifiable, Hashable, Sendable {
         lastPlayedDate: Date? = nil,
         modifiedDate: Date? = nil,
         sizeBytes: Int64? = nil,
+        packUUID: String? = nil,
+        packVersion: String? = nil,
         packReferences: [ContentPackReference] = [],
-        metadataLoaded: Bool = false
+        metadataLoaded: Bool = false,
+        sizeLoaded: Bool = false
     ) {
         self.id = folderURL.standardizedFileURL
         self.folderURL = folderURL
@@ -130,8 +136,11 @@ struct MinecraftContentItem: Identifiable, Hashable, Sendable {
         self.lastPlayedDate = lastPlayedDate
         self.modifiedDate = modifiedDate
         self.sizeBytes = sizeBytes
+        self.packUUID = packUUID?.lowercased()
+        self.packVersion = packVersion
         self.packReferences = packReferences
         self.metadataLoaded = metadataLoaded
+        self.sizeLoaded = sizeLoaded
     }
 
     nonisolated var folderID: String {

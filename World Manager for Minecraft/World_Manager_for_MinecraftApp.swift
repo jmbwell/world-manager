@@ -15,6 +15,7 @@ struct World_Manager_for_MinecraftApp: App {
                 .tint(Color("AccentColor"))
                 .background(WindowChromeConfigurator())
         }
+        .defaultSize(width: 1520, height: 980)
         .windowStyle(.hiddenTitleBar)
         .windowToolbarStyle(.unified(showsTitle: false))
     }
