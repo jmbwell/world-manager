@@ -158,6 +158,102 @@ struct World_Manager_for_MinecraftTests {
         #expect(enrichedWorld.packReferences.first?.version == "1.0.0")
     }
 
+    @Test func worldScannerDecodesBedrockLevelMetadata() async throws {
+        let fileManager = FileManager.default
+        let sourceURL = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let worldURL = sourceURL.appendingPathComponent("minecraftWorlds/WorldA", isDirectory: true)
+        defer { try? fileManager.removeItem(at: sourceURL) }
+
+        try fileManager.createDirectory(at: worldURL, withIntermediateDirectories: true)
+        let lastPlayedMilliseconds: Int64 = 1_695_427_200_000
+        let levelDat = makeBedrockLevelDat(
+            root: .compound([
+                "GameType": .int(1),
+                "Difficulty": .int(1),
+                "RandomSeed": .long(664_021_225),
+                "LastPlayed": .long(lastPlayedMilliseconds),
+                "lastOpenedWithVersion": .list(.int, [.int(1), .int(20), .int(13)]),
+                "InventoryVersion": .list(.int, [.int(1), .int(20), .int(13)]),
+                "cheatsEnabled": .byte(1),
+                "commandsEnabled": .byte(1),
+                "educationFeaturesEnabled": .byte(1),
+                "showcoordinates": .byte(1),
+                "keepinventory": .byte(1),
+                "mobgriefing": .byte(0),
+                "dodaylightcycle": .byte(0),
+                "doweathercycle": .byte(1),
+                "SpawnX": .int(0),
+                "SpawnY": .int(32767),
+                "SpawnZ": .int(0),
+                "StorageVersion": .int(10),
+                "NetworkVersion": .int(594)
+            ]),
+            storageVersion: 10
+        )
+        try levelDat.write(to: worldURL.appendingPathComponent("level.dat"))
+
+        let world = MinecraftContentItem(
+            folderURL: worldURL,
+            folderName: "WorldA",
+            contentType: .world,
+            collectionRootURL: sourceURL.appendingPathComponent("minecraftWorlds", isDirectory: true)
+        )
+
+        let enrichedWorld = await WorldScanner.enrich(item: world)
+
+        #expect(enrichedWorld.worldMetadata?.gameMode == "Creative")
+        #expect(enrichedWorld.worldMetadata?.difficulty == "Easy")
+        #expect(enrichedWorld.worldMetadata?.seed == "664021225")
+        #expect(enrichedWorld.lastPlayedDate == Date(timeIntervalSince1970: 1_695_427_200))
+        #expect(enrichedWorld.worldMetadata?.lastOpenedWithVersion == "1.20.13")
+        #expect(enrichedWorld.worldMetadata?.inventoryVersion == "1.20.13")
+        #expect(enrichedWorld.worldMetadata?.cheatsEnabled == true)
+        #expect(enrichedWorld.worldMetadata?.commandsEnabled == true)
+        #expect(enrichedWorld.worldMetadata?.educationFeaturesEnabled == true)
+        #expect(enrichedWorld.worldMetadata?.coordinatesShown == true)
+        #expect(enrichedWorld.worldMetadata?.keepInventory == true)
+        #expect(enrichedWorld.worldMetadata?.mobGriefingEnabled == false)
+        #expect(enrichedWorld.worldMetadata?.daylightCycleEnabled == false)
+        #expect(enrichedWorld.worldMetadata?.weatherCycleEnabled == true)
+        #expect(enrichedWorld.worldMetadata?.spawn == "0, 32767, 0")
+        #expect(enrichedWorld.worldMetadata?.storageVersion == "10")
+        #expect(enrichedWorld.worldMetadata?.networkVersion == "594")
+    }
+
+    @Test func worldScannerReadsPackMinimumEngineVersion() async throws {
+        let fileManager = FileManager.default
+        let sourceURL = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let packURL = sourceURL.appendingPathComponent("behavior_packs/PackA", isDirectory: true)
+        defer { try? fileManager.removeItem(at: sourceURL) }
+
+        try fileManager.createDirectory(at: packURL, withIntermediateDirectories: true)
+        let manifest = """
+        {
+          "header": {
+            "name": "Pack A",
+            "uuid": "056e5d6e-6135-4daf-844f-5b775b019e56",
+            "version": [0, 1, 0],
+            "min_engine_version": [1, 19, 50]
+          }
+        }
+        """
+        try manifest.write(to: packURL.appendingPathComponent("manifest.json"), atomically: true, encoding: .utf8)
+
+        let pack = MinecraftContentItem(
+            folderURL: packURL,
+            folderName: "PackA",
+            contentType: .behaviorPack,
+            collectionRootURL: sourceURL.appendingPathComponent("behavior_packs", isDirectory: true)
+        )
+
+        let enrichedPack = await WorldScanner.enrich(item: pack)
+
+        #expect(enrichedPack.displayName == "Pack A")
+        #expect(enrichedPack.packUUID == "056e5d6e-6135-4daf-844f-5b775b019e56")
+        #expect(enrichedPack.packVersion == "0.1.0")
+        #expect(enrichedPack.packMetadataDetails?.minimumEngineVersion == "1.19.50")
+    }
+
     @Test func sourcePersistenceStoreRoundTripsCachedSource() async throws {
         let fileManager = FileManager.default
         let workingURL = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -218,4 +314,104 @@ struct World_Manager_for_MinecraftTests {
         #expect(restored.first?.lastScanDate == source.lastScanDate)
     }
 
+}
+
+private enum TestNBTTagType: UInt8 {
+    case end = 0
+    case byte = 1
+    case short = 2
+    case int = 3
+    case long = 4
+    case string = 8
+    case list = 9
+    case compound = 10
+}
+
+private enum TestNBTValue {
+    case byte(Int8)
+    case short(Int16)
+    case int(Int32)
+    case long(Int64)
+    case string(String)
+    case list(TestNBTTagType, [TestNBTValue])
+    case compound([String: TestNBTValue])
+
+    var tagType: TestNBTTagType {
+        switch self {
+        case .byte:
+            return .byte
+        case .short:
+            return .short
+        case .int:
+            return .int
+        case .long:
+            return .long
+        case .string:
+            return .string
+        case .list:
+            return .list
+        case .compound:
+            return .compound
+        }
+    }
+}
+
+private func makeBedrockLevelDat(root: TestNBTValue, storageVersion: Int32) -> Data {
+    var payload = Data()
+    payload.append(TestNBTTagType.compound.rawValue)
+    appendLE(UInt16(0), to: &payload)
+    appendTagPayload(root, to: &payload)
+
+    var data = Data()
+    appendLE(storageVersion, to: &data)
+    appendLE(Int32(payload.count), to: &data)
+    data.append(payload)
+    return data
+}
+
+private func appendNamedTag(name: String, value: TestNBTValue, to data: inout Data) {
+    data.append(value.tagType.rawValue)
+    appendString(name, to: &data)
+    appendTagPayload(value, to: &data)
+}
+
+private func appendTagPayload(_ value: TestNBTValue, to data: inout Data) {
+    switch value {
+    case .byte(let value):
+        data.append(UInt8(bitPattern: value))
+    case .short(let value):
+        appendLE(value, to: &data)
+    case .int(let value):
+        appendLE(value, to: &data)
+    case .long(let value):
+        appendLE(value, to: &data)
+    case .string(let string):
+        appendString(string, to: &data)
+    case .list(let itemType, let values):
+        data.append(itemType.rawValue)
+        appendLE(Int32(values.count), to: &data)
+        for value in values {
+            appendTagPayload(value, to: &data)
+        }
+    case .compound(let values):
+        for key in values.keys.sorted() {
+            if let value = values[key] {
+                appendNamedTag(name: key, value: value, to: &data)
+            }
+        }
+        data.append(TestNBTTagType.end.rawValue)
+    }
+}
+
+private func appendString(_ string: String, to data: inout Data) {
+    let utf8 = Data(string.utf8)
+    appendLE(UInt16(utf8.count), to: &data)
+    data.append(utf8)
+}
+
+private func appendLE<T: FixedWidthInteger>(_ value: T, to data: inout Data) {
+    var value = value.littleEndian
+    withUnsafeBytes(of: &value) { bytes in
+        data.append(contentsOf: bytes)
+    }
 }

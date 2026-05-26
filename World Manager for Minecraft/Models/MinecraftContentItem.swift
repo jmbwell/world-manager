@@ -93,6 +93,30 @@ struct ContentPackReference: Identifiable, Hashable, Sendable, Codable {
     }
 }
 
+struct WorldMetadata: Hashable, Sendable, Codable {
+    var gameMode: String?
+    var difficulty: String?
+    var seed: String?
+    var lastPlayedDate: Date?
+    var lastOpenedWithVersion: String?
+    var inventoryVersion: String?
+    var cheatsEnabled: Bool?
+    var commandsEnabled: Bool?
+    var educationFeaturesEnabled: Bool?
+    var coordinatesShown: Bool?
+    var keepInventory: Bool?
+    var mobGriefingEnabled: Bool?
+    var daylightCycleEnabled: Bool?
+    var weatherCycleEnabled: Bool?
+    var spawn: String?
+    var storageVersion: String?
+    var networkVersion: String?
+}
+
+struct PackMetadataDetails: Hashable, Sendable, Codable {
+    var minimumEngineVersion: String?
+}
+
 struct MinecraftContentItem: Identifiable, Hashable, Sendable, Codable {
     let id: URL
     let folderURL: URL
@@ -106,7 +130,9 @@ struct MinecraftContentItem: Identifiable, Hashable, Sendable, Codable {
     var sizeBytes: Int64?
     var packUUID: String?
     var packVersion: String?
+    var packMetadataDetails: PackMetadataDetails?
     var packReferences: [ContentPackReference]
+    var worldMetadata: WorldMetadata?
     var metadataLoaded: Bool
     var sizeLoaded: Bool
 
@@ -122,7 +148,9 @@ struct MinecraftContentItem: Identifiable, Hashable, Sendable, Codable {
         sizeBytes: Int64? = nil,
         packUUID: String? = nil,
         packVersion: String? = nil,
+        packMetadataDetails: PackMetadataDetails? = nil,
         packReferences: [ContentPackReference] = [],
+        worldMetadata: WorldMetadata? = nil,
         metadataLoaded: Bool = false,
         sizeLoaded: Bool = false
     ) {
@@ -138,7 +166,9 @@ struct MinecraftContentItem: Identifiable, Hashable, Sendable, Codable {
         self.sizeBytes = sizeBytes
         self.packUUID = packUUID?.lowercased()
         self.packVersion = packVersion
+        self.packMetadataDetails = packMetadataDetails
         self.packReferences = packReferences
+        self.worldMetadata = worldMetadata
         self.metadataLoaded = metadataLoaded
         self.sizeLoaded = sizeLoaded
     }
@@ -156,14 +186,19 @@ struct MinecraftContentItem: Identifiable, Hashable, Sendable, Codable {
     }
 
     nonisolated var searchText: String {
-        let values = [
+        var values: [String] = [
             displayName,
             folderName,
             folderURL.path,
-            contentType.rawValue,
-            packReferences.map(\.name).joined(separator: " "),
-            packReferences.compactMap(\.uuid).joined(separator: " ")
+            contentType.rawValue
         ]
+        values.append(worldMetadata?.gameMode ?? "")
+        values.append(worldMetadata?.difficulty ?? "")
+        values.append(worldMetadata?.seed ?? "")
+        values.append(worldMetadata?.lastOpenedWithVersion ?? "")
+        values.append(packMetadataDetails?.minimumEngineVersion ?? "")
+        values.append(packReferences.map(\.name).joined(separator: " "))
+        values.append(packReferences.compactMap(\.uuid).joined(separator: " "))
 
         return values
             .filter { !$0.isEmpty }

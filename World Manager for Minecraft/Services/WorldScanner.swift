@@ -93,11 +93,15 @@ enum WorldScanner {
         enrichedItem.displayName = displayName(for: item, fileManager: fileManager)
         let sourceIconURL = iconURL(for: item, fileManager: fileManager)
         enrichedItem.iconURL = await ImageCacheStore.shared.cachedImageURL(for: sourceIconURL)
-        enrichedItem.lastPlayedDate = lastPlayedDate(for: item, fileManager: fileManager)
+        enrichedItem.worldMetadata = worldMetadata(for: item, fileManager: fileManager)
+        enrichedItem.lastPlayedDate = lastPlayedDate(for: item, fileManager: fileManager, worldMetadata: enrichedItem.worldMetadata)
         enrichedItem.modifiedDate = modifiedDate(for: item.folderURL)
         if let manifestMetadata = manifestMetadata(in: item.folderURL, fileManager: fileManager) {
             enrichedItem.packUUID = manifestMetadata.uuid
             enrichedItem.packVersion = manifestMetadata.version
+            enrichedItem.packMetadataDetails = PackMetadataDetails(
+                minimumEngineVersion: manifestMetadata.minimumEngineVersion
+            )
             if !manifestMetadata.name.isEmpty {
                 enrichedItem.displayName = manifestMetadata.name
             }
@@ -259,16 +263,17 @@ enum WorldScanner {
         return nil
     }
 
-    nonisolated private static func lastPlayedDate(for item: MinecraftContentItem, fileManager: FileManager) -> Date? {
+    nonisolated private static func lastPlayedDate(
+        for item: MinecraftContentItem,
+        fileManager: FileManager,
+        worldMetadata: WorldMetadata?
+    ) -> Date? {
         guard item.contentType == .world else {
             return nil
         }
 
-        // Bedrock's level.dat requires format-specific parsing to distinguish a true
-        // last-played timestamp from general save metadata. Until that is implemented
-        // reliably, prefer surfacing the filesystem modified date only.
         _ = fileManager
-        return nil
+        return worldMetadata?.lastPlayedDate
     }
 
     nonisolated private static func modifiedDate(for directoryURL: URL) -> Date? {
@@ -438,6 +443,19 @@ enum WorldScanner {
         )
     }
 
+    nonisolated private static func worldMetadata(for item: MinecraftContentItem, fileManager: FileManager) -> WorldMetadata? {
+        guard item.contentType == .world else {
+            return nil
+        }
+
+        let levelDatURL = item.folderURL.appendingPathComponent("level.dat")
+        guard fileManager.fileExists(atPath: levelDatURL.path) else {
+            return nil
+        }
+
+        return BedrockLevelMetadataDecoder.decode(fromLevelDatAt: levelDatURL)
+    }
+
     nonisolated private static func resolvedPackReference(
         uuid: String,
         type: MinecraftContentType,
@@ -494,7 +512,8 @@ enum WorldScanner {
         return ManifestMetadata(
             name: name,
             uuid: (header["uuid"] as? String)?.lowercased(),
-            version: versionString(from: header["version"])
+            version: versionString(from: header["version"]),
+            minimumEngineVersion: versionString(from: header["min_engine_version"])
         )
     }
 
@@ -526,6 +545,7 @@ private struct ManifestMetadata {
     let name: String
     let uuid: String?
     let version: String?
+    let minimumEngineVersion: String?
 }
 
 private actor PackReferenceIndexStore {

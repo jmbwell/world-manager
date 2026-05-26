@@ -110,6 +110,16 @@ struct ItemDetailView: View {
                         summaryGrid
                     }
 
+                    if !worldSettingsRows.isEmpty {
+                        recordSection(title: "World Settings") {
+                            VStack(alignment: .leading, spacing: 14) {
+                                ForEach(worldSettingsRows, id: \.title) { row in
+                                    detailValueRow(title: row.title, value: row.value)
+                                }
+                            }
+                        }
+                    }
+
                     if let healthMessages, !healthMessages.isEmpty {
                         recordSection(title: "Compatibility") {
                             VStack(alignment: .leading, spacing: 10) {
@@ -230,6 +240,15 @@ struct ItemDetailView: View {
                             detailRow(title: "Folder ID", value: item.folderID)
                             detailRow(title: "Type", value: item.contentType.rawValue)
                             detailRow(title: "Collection Folder", value: item.collectionRootURL.lastPathComponent)
+                            if let spawn = item.worldMetadata?.spawn {
+                                detailValueRow(title: "Spawn", value: spawn)
+                            }
+                            if let storageVersion = item.worldMetadata?.storageVersion {
+                                detailValueRow(title: "Storage Version", value: storageVersion)
+                            }
+                            if let networkVersion = item.worldMetadata?.networkVersion {
+                                detailValueRow(title: "Network Version", value: networkVersion)
+                            }
                         }
                     }
                 }
@@ -279,6 +298,26 @@ struct ItemDetailView: View {
             detailValueRow(title: item.displayDateLabel, value: displayDateText)
             detailValueRow(title: "Created", value: createdDateText)
 
+            if let gameMode = item.worldMetadata?.gameMode {
+                detailValueRow(title: "Game Mode", value: gameMode)
+            }
+
+            if let difficulty = item.worldMetadata?.difficulty {
+                detailValueRow(title: "Difficulty", value: difficulty)
+            }
+
+            if let seed = item.worldMetadata?.seed {
+                detailValueRow(title: "Seed", value: seed)
+            }
+
+            if let lastOpenedWithVersion = item.worldMetadata?.lastOpenedWithVersion {
+                detailValueRow(title: "Last Opened With", value: lastOpenedWithVersion)
+            }
+
+            if let inventoryVersion = item.worldMetadata?.inventoryVersion {
+                detailValueRow(title: "Inventory Version", value: inventoryVersion)
+            }
+
             if item.contentType == .world {
                 detailValueRow(
                     title: "Pack References",
@@ -289,8 +328,28 @@ struct ItemDetailView: View {
             if item.contentType == .behaviorPack || item.contentType == .resourcePack {
                 detailValueRow(title: "UUID", value: item.packUUID ?? "Unavailable")
                 detailValueRow(title: "Version", value: item.packVersion ?? "Unavailable")
+                if let minimumEngineVersion = item.packMetadataDetails?.minimumEngineVersion {
+                    detailValueRow(title: "Minimum Engine", value: minimumEngineVersion)
+                }
             }
         }
+    }
+
+    private var worldSettingsRows: [(title: String, value: String)] {
+        guard let metadata = item.worldMetadata else {
+            return []
+        }
+
+        return [
+            booleanRow("Cheats Enabled", metadata.cheatsEnabled),
+            booleanRow("Commands Enabled", metadata.commandsEnabled),
+            booleanRow("Education Features", metadata.educationFeaturesEnabled),
+            booleanRow("Coordinates Shown", metadata.coordinatesShown),
+            booleanRow("Keep Inventory", metadata.keepInventory),
+            booleanRow("Mob Griefing", metadata.mobGriefingEnabled),
+            booleanRow("Daylight Cycle", metadata.daylightCycleEnabled),
+            booleanRow("Weather Cycle", metadata.weatherCycleEnabled)
+        ].compactMap { $0 }
     }
 
     private var healthMessages: [String]? {
@@ -535,6 +594,14 @@ struct ItemDetailView: View {
                 .multilineTextAlignment(.trailing)
                 .textSelection(.enabled)
         }
+    }
+
+    private func booleanRow(_ title: String, _ value: Bool?) -> (title: String, value: String)? {
+        guard let value else {
+            return nil
+        }
+
+        return (title, value ? "Yes" : "No")
     }
 
     private var sizeText: String {
