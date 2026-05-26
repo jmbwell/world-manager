@@ -81,7 +81,8 @@ struct ItemDetailColumnView: View {
 }
 
 struct ItemDetailView: View {
-    private let contentMaxWidth: CGFloat = 760
+    private let detailContentMaxWidth: CGFloat = 760
+    private let heroContentMaxWidth: CGFloat = 1080
 
     let item: MinecraftContentItem
     let source: MinecraftSource?
@@ -232,7 +233,7 @@ struct ItemDetailView: View {
                         }
                     }
                 }
-                .frame(maxWidth: contentMaxWidth, alignment: .leading)
+                .frame(maxWidth: detailContentMaxWidth, alignment: .leading)
                 .padding(.horizontal, 28)
                 .padding(.top, 28)
                 .padding(.bottom, 24)
@@ -254,7 +255,7 @@ struct ItemDetailView: View {
                 copyToPasteboard(item.displayName)
             },
             actionRow: AnyView(actionRow),
-            contentMaxWidth: contentMaxWidth
+            contentMaxWidth: heroContentMaxWidth
         )
     }
 
@@ -273,7 +274,7 @@ struct ItemDetailView: View {
 
     private var summaryGrid: some View {
         VStack(alignment: .leading, spacing: 14) {
-            detailValueRow(title: "Name", value: item.displayName)
+            detailRow(title: "Name", value: item.displayName)
             detailValueRow(title: "Size", value: sizeText)
             detailValueRow(title: item.displayDateLabel, value: displayDateText)
             detailValueRow(title: "Created", value: createdDateText)
@@ -517,7 +518,7 @@ struct ItemDetailView: View {
                 .foregroundStyle(.secondary)
 
             Text(value)
-                .lineLimit(3)
+                .fixedSize(horizontal: false, vertical: true)
                 .textSelection(.enabled)
         }
     }

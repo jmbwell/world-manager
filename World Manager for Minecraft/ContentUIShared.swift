@@ -175,8 +175,8 @@ struct RecordHeroView: View {
     private let heroHeight: CGFloat = 360
     private let heroTopPadding: CGFloat = 74
     private let heroBottomPadding: CGFloat = 20
-    private let titleLineLimit = 3
-    private let titleMinimumScale: CGFloat = 0.82
+    private let titleLineLimit = 5
+    private let titleMinimumScale: CGFloat = 0.78
     private let detailsColumnSpacing: CGFloat = 18
 
     let item: MinecraftContentItem
@@ -199,7 +199,7 @@ struct RecordHeroView: View {
                     endPoint: .bottom
                 )
 
-                HStack(alignment: .top, spacing: 28) {
+                HStack(alignment: .top, spacing: 18) {
                     HeroThumbnailView(
                         iconURL: item.iconURL,
                         contentType: item.contentType,
@@ -216,6 +216,7 @@ struct RecordHeroView: View {
                                     .minimumScaleFactor(titleMinimumScale)
                                     .truncationMode(.tail)
                                     .fixedSize(horizontal: false, vertical: true)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
                                     .textSelection(.enabled)
 
                                 Button(action: copyAction) {
@@ -291,8 +292,8 @@ struct RecordHeroView: View {
 }
 
 private struct HeroThumbnailView: View {
-    private let thumbnailMaxWidth: CGFloat = 320
-    private let thumbnailMaxHeight: CGFloat = 200
+    private let thumbnailMaxWidth: CGFloat = 280
+    private let thumbnailMaxHeight: CGFloat = 180
     private let thumbnailMinHeight: CGFloat = 120
 
     let iconURL: URL?
