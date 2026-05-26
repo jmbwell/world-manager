@@ -1,58 +1,21 @@
 import AppKit
 import SwiftUI
 
-struct SharingPickerButton: NSViewRepresentable {
-    let title: String?
+struct ToolbarShareButton: View {
     let systemImage: String
     let isEnabled: Bool
-    let action: (NSView) -> Void
+    let action: (NSView?) -> Void
+    @State private var anchorView: NSView?
 
-    func makeCoordinator() -> Coordinator {
-        Coordinator(action: action)
-    }
-
-    func makeNSView(context: Context) -> NSButton {
-        let button = NSButton()
-        button.target = context.coordinator
-        button.action = #selector(Coordinator.didPressButton(_:))
-        button.isBordered = false
-        button.bezelStyle = .regularSquare
-        button.contentTintColor = .white
-        button.font = .systemFont(ofSize: NSFont.systemFontSize, weight: .semibold)
-        update(button)
-        return button
-    }
-
-    func updateNSView(_ nsView: NSButton, context: Context) {
-        context.coordinator.action = action
-        update(nsView)
-    }
-
-    private func update(_ button: NSButton) {
-        button.image = NSImage(
-            systemSymbolName: systemImage,
-            accessibilityDescription: title ?? "Share"
-        )
-        button.imagePosition = title == nil ? .imageOnly : .imageLeading
-        button.isEnabled = isEnabled
-        button.attributedTitle = NSAttributedString(
-            string: title ?? "",
-            attributes: [
-                .foregroundColor: NSColor.white,
-                .font: NSFont.systemFont(ofSize: NSFont.systemFontSize, weight: .semibold)
-            ]
-        )
-    }
-
-    final class Coordinator: NSObject {
-        var action: (NSView) -> Void
-
-        init(action: @escaping (NSView) -> Void) {
-            self.action = action
+    var body: some View {
+        Button {
+            action(anchorView)
+        } label: {
+            Image(systemName: systemImage)
         }
-
-        @objc func didPressButton(_ sender: NSButton) {
-            action(sender)
+        .disabled(!isEnabled)
+        .background {
+            ShareAnchorView(anchorView: $anchorView)
         }
     }
 }

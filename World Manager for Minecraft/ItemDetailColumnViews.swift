@@ -53,21 +53,24 @@ struct ItemDetailColumnView: View {
         }
         .toolbar {
             if item != nil {
-                ToolbarItemGroup {
+                ToolbarItem {
                     Button(action: exportAction) {
                         Image(systemName: "arrow.down.circle")
                     }
                     .disabled(isPerformingItemAction)
                     .help(exportTitle ?? "Export")
+                }
 
+                ToolbarItem {
                     Button(action: revealAction) {
                         Image(systemName: "folder")
                     }
                     .disabled(isPerformingItemAction)
                     .help("Reveal in Finder")
+                }
 
-                    SharingPickerButton(
-                        title: nil,
+                ToolbarItem {
+                    ToolbarShareButton(
                         systemImage: "square.and.arrow.up",
                         isEnabled: !isPerformingItemAction
                     ) { anchorView in

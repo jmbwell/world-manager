@@ -587,6 +587,7 @@ struct ContentView: View {
         guard !isPerformingItemAction else {
             return
         }
+        let source = currentSource
 
         let panel = NSSavePanel()
         panel.canCreateDirectories = true
@@ -605,11 +606,9 @@ struct ContentView: View {
 
         Task {
             do {
-                try await Task.detached(priority: .userInitiated) {
-                    try ContentPackageExporter.exportItem(item, to: destinationURL)
+                let finalURL = try await Task.detached(priority: .userInitiated) {
+                    try ContentPackageExporter.createArchiveFile(for: item, source: source, destinationURL: destinationURL)
                 }.value
-
-                let finalURL = ContentPackageExporter.finalArchiveURL(for: item, destinationURL: destinationURL)
 
                 await MainActor.run {
                     isPerformingItemAction = false
@@ -632,6 +631,7 @@ struct ContentView: View {
         guard !isPerformingItemAction else {
             return
         }
+        let source = currentSource
 
         isPerformingItemAction = true
         library.setItemActionInProgress("Preparing \(item.contentType.archiveExtension) file...")
@@ -639,7 +639,7 @@ struct ContentView: View {
         Task {
             do {
                 let shareURL = try await Task.detached(priority: .userInitiated) {
-                    try ContentPackageExporter.prepareShareFile(for: item)
+                    try ContentPackageExporter.createArchiveFile(for: item, source: source)
                 }.value
 
                 await MainActor.run {

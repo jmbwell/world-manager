@@ -42,9 +42,14 @@ final class SourceLibrary: ObservableObject {
     private var scanTasks: [URL: Task<Void, Never>] = [:]
     private var footerResetTask: Task<Void, Never>?
     private let persistenceStore: SourcePersistenceStore
+    private let scanRootPreparer: SourceScanRootPreparing
 
-    init(persistenceStore: SourcePersistenceStore = .shared) {
+    init(
+        persistenceStore: SourcePersistenceStore = .shared,
+        scanRootPreparer: SourceScanRootPreparing = LocalFolderScanRootPreparer()
+    ) {
         self.persistenceStore = persistenceStore
+        self.scanRootPreparer = scanRootPreparer
 
         Task { [weak self] in
             await self?.restorePersistedSources()
@@ -162,12 +167,27 @@ final class SourceLibrary: ObservableObject {
             return
         }
 
-        let scanRootURL = resolvedSourceURL(for: source) ?? source.folderURL
+        let preparedScanRoot: PreparedScanRoot
+        do {
+            preparedScanRoot = try await scanRootPreparer.prepareScanRoot(for: source)
+        } catch {
+            updateSource(sourceID) { source in
+                source.scanError = error.localizedDescription
+                source.scanStatus = ""
+                source.isScanning = false
+            }
+            refreshSidebarFooterState()
+            return
+        }
+
+        let scanRootURL = preparedScanRoot.rootURL
         let accessedSecurityScope = scanRootURL.startAccessingSecurityScopedResource()
         defer {
             if accessedSecurityScope {
                 scanRootURL.stopAccessingSecurityScopedResource()
             }
+
+            cleanupPreparedScanRoot(preparedScanRoot)
         }
 
         guard FileManager.default.fileExists(atPath: scanRootURL.path) else {
@@ -919,26 +939,17 @@ final class SourceLibrary: ObservableObject {
         )
     }
 
-    private func resolvedSourceURL(for source: MinecraftSource) -> URL? {
-        guard let bookmarkData = source.bookmarkData else {
-            return nil
-        }
-
-        var isStale = false
-        guard let resolvedURL = try? URL(
-            resolvingBookmarkData: bookmarkData,
-            options: [.withSecurityScope],
-            relativeTo: nil,
-            bookmarkDataIsStale: &isStale
-        ) else {
-            return nil
-        }
-
-        return resolvedURL.standardizedFileURL
-    }
-
     private func isLogicalPackType(_ contentType: MinecraftContentType) -> Bool {
         contentType == .behaviorPack || contentType == .resourcePack
+    }
+
+    private func cleanupPreparedScanRoot(_ preparedScanRoot: PreparedScanRoot) {
+        switch preparedScanRoot.cleanupBehavior {
+        case .none:
+            return
+        case .unmount:
+            return
+        }
     }
 
     private func refreshSidebarFooterState() {

@@ -5,53 +5,43 @@
 //  Created by John Burwell on 2026-05-25.
 //
 
+import CryptoKit
 import Foundation
 
 enum ContentPackageExporter {
     enum ExportError: LocalizedError {
         case failedToCreateArchive(String)
+        case failedToPrepareArchiveContents(String)
 
         var errorDescription: String? {
             switch self {
             case .failedToCreateArchive(let output):
                 return output.isEmpty ? "Failed to create the archive file." : output
+            case .failedToPrepareArchiveContents(let message):
+                return message
             }
         }
     }
 
-    nonisolated static func exportItem(_ item: MinecraftContentItem, to destinationURL: URL) throws {
+    nonisolated static func createArchiveFile(
+        for item: MinecraftContentItem,
+        source: MinecraftSource? = nil,
+        destinationURL: URL? = nil
+    ) throws -> URL {
         let fileManager = FileManager.default
-        let archiveURL = finalArchiveURL(for: item, destinationURL: destinationURL)
-        let temporaryArchiveURL = temporaryArchiveURL(for: item, fileManager: fileManager)
+        let archiveURL: URL
 
-        defer {
-            try? fileManager.removeItem(at: temporaryArchiveURL)
+        if let destinationURL {
+            archiveURL = finalArchiveURL(for: item, destinationURL: destinationURL)
+        } else {
+            archiveURL = try shareArchiveURL(for: item, fileManager: fileManager)
         }
-
-        try createArchive(for: item, at: temporaryArchiveURL)
 
         if fileManager.fileExists(atPath: archiveURL.path) {
             try fileManager.removeItem(at: archiveURL)
         }
 
-        try fileManager.moveItem(at: temporaryArchiveURL, to: archiveURL)
-    }
-
-    nonisolated static func prepareShareFile(for item: MinecraftContentItem) throws -> URL {
-        let fileManager = FileManager.default
-        let shareDirectoryURL = fileManager.temporaryDirectory
-            .appendingPathComponent("MinecraftContentShares", isDirectory: true)
-
-        try fileManager.createDirectory(at: shareDirectoryURL, withIntermediateDirectories: true)
-
-        let archiveURL = uniqueArchiveURL(
-            in: shareDirectoryURL,
-            baseName: suggestedBaseFilename(for: item),
-            pathExtension: item.contentType.archiveExtension,
-            fileManager: fileManager
-        )
-
-        try createArchive(for: item, at: archiveURL)
+        try createArchive(for: item, source: source, at: archiveURL)
         return archiveURL
     }
 
@@ -67,10 +57,25 @@ enum ContentPackageExporter {
         normalizedArchiveURL(for: item, destinationURL: destinationURL)
     }
 
-    nonisolated private static func createArchive(for item: MinecraftContentItem, at archiveURL: URL) throws {
+    nonisolated private static func createArchive(
+        for item: MinecraftContentItem,
+        source: MinecraftSource?,
+        at archiveURL: URL
+    ) throws {
+        let fileManager = FileManager.default
+        let stagingDirectoryURL = try stagedArchiveContents(for: item, source: source, fileManager: fileManager)
+
+        defer {
+            try? fileManager.removeItem(at: stagingDirectoryURL)
+        }
+
+        if fileManager.fileExists(atPath: archiveURL.path) {
+            try fileManager.removeItem(at: archiveURL)
+        }
+
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
-        process.currentDirectoryURL = item.folderURL
+        process.currentDirectoryURL = stagingDirectoryURL
         process.arguments = [
             "-c",
             "-k",
@@ -95,6 +100,135 @@ enum ContentPackageExporter {
         }
     }
 
+    nonisolated private static func stagedArchiveContents(
+        for item: MinecraftContentItem,
+        source: MinecraftSource?,
+        fileManager: FileManager
+    ) throws -> URL {
+        let stagingDirectoryURL = fileManager.temporaryDirectory
+            .appendingPathComponent("MinecraftArchiveStaging", isDirectory: true)
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+
+        try fileManager.createDirectory(at: stagingDirectoryURL, withIntermediateDirectories: true)
+
+        let accessURL = try archiveAccessURL(for: item, source: source)
+        let accessedSecurityScope = accessURL.startAccessingSecurityScopedResource()
+        defer {
+            if accessedSecurityScope {
+                accessURL.stopAccessingSecurityScopedResource()
+            }
+        }
+
+        do {
+            let contents = try fileManager.contentsOfDirectory(
+                at: item.folderURL,
+                includingPropertiesForKeys: nil,
+                options: [.skipsPackageDescendants]
+            )
+
+            for entryURL in contents {
+                let destinationURL = stagingDirectoryURL.appendingPathComponent(entryURL.lastPathComponent)
+                try fileManager.copyItem(at: entryURL, to: destinationURL)
+            }
+        } catch {
+            throw ExportError.failedToPrepareArchiveContents(
+                "Could not prepare the item for archiving: \(error.localizedDescription)"
+            )
+        }
+
+        return stagingDirectoryURL
+    }
+
+    nonisolated private static func shareArchiveDirectory(fileManager: FileManager) throws -> URL {
+        let baseDirectoryURL = try fileManager.url(
+            for: .cachesDirectory,
+            in: .userDomainMask,
+            appropriateFor: nil,
+            create: true
+        )
+        let shareDirectoryURL = baseDirectoryURL
+            .appendingPathComponent("MinecraftContentShares", isDirectory: true)
+
+        try fileManager.createDirectory(at: shareDirectoryURL, withIntermediateDirectories: true)
+        return shareDirectoryURL
+    }
+
+    nonisolated private static func shareArchiveURL(
+        for item: MinecraftContentItem,
+        fileManager: FileManager
+    ) throws -> URL {
+        let shareDirectoryURL = try shareArchiveDirectory(fileManager: fileManager)
+        let itemDirectoryURL = shareDirectoryURL
+            .appendingPathComponent(shareCacheKey(for: item), isDirectory: true)
+        let requestDirectoryURL = itemDirectoryURL
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+
+        try fileManager.createDirectory(at: requestDirectoryURL, withIntermediateDirectories: true)
+
+        cleanupShareArchives(in: itemDirectoryURL, keeping: requestDirectoryURL, fileManager: fileManager)
+
+        return requestDirectoryURL
+            .appendingPathComponent(suggestedBaseFilename(for: item))
+            .appendingPathExtension(item.contentType.archiveExtension)
+    }
+
+    nonisolated private static func shareCacheKey(for item: MinecraftContentItem) -> String {
+        let digest = SHA256.hash(data: Data(item.id.path.utf8))
+        return digest.map { String(format: "%02x", $0) }.joined()
+    }
+
+    nonisolated private static func cleanupShareArchives(
+        in itemDirectoryURL: URL,
+        keeping currentDirectoryURL: URL,
+        fileManager: FileManager
+    ) {
+        guard let childDirectoryURLs = try? fileManager.contentsOfDirectory(
+            at: itemDirectoryURL,
+            includingPropertiesForKeys: [.contentModificationDateKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return
+        }
+
+        let staleDirectories = childDirectoryURLs
+            .filter { $0 != currentDirectoryURL }
+            .sorted { lhs, rhs in
+                let lhsDate = (try? lhs.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
+                let rhsDate = (try? rhs.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
+                return lhsDate > rhsDate
+            }
+            .dropFirst(2)
+
+        for directoryURL in staleDirectories {
+            try? fileManager.removeItem(at: directoryURL)
+        }
+    }
+
+    nonisolated private static func archiveAccessURL(
+        for item: MinecraftContentItem,
+        source: MinecraftSource?
+    ) throws -> URL {
+        guard let source else {
+            return item.folderURL
+        }
+
+        guard case .localFolder(let bookmarkData) = source.origin else {
+            return source.folderURL
+        }
+
+        guard let bookmarkData else {
+            return source.folderURL
+        }
+
+        var isStale = false
+        return try URL(
+            resolvingBookmarkData: bookmarkData,
+            options: [.withSecurityScope],
+            relativeTo: nil,
+            bookmarkDataIsStale: &isStale
+        ).standardizedFileURL
+    }
+
     nonisolated private static func normalizedArchiveURL(for item: MinecraftContentItem, destinationURL: URL) -> URL {
         let normalizedDestinationURL = destinationURL.standardizedFileURL
         let requiredExtension = item.contentType.archiveExtension
@@ -104,12 +238,6 @@ enum ContentPackageExporter {
         }
 
         return normalizedDestinationURL.appendingPathExtension(requiredExtension)
-    }
-
-    nonisolated private static func temporaryArchiveURL(for item: MinecraftContentItem, fileManager: FileManager) -> URL {
-        fileManager.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString)
-            .appendingPathExtension(item.contentType.archiveExtension)
     }
 
     nonisolated private static func uniqueArchiveURL(

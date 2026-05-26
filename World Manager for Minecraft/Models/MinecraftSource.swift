@@ -10,6 +10,7 @@ import Foundation
 struct MinecraftSource: Identifiable, Hashable, Sendable {
     let id: URL
     let folderURL: URL
+    var origin: MinecraftSourceOrigin
     var bookmarkData: Data?
     var displayName: String
     var displayItems: [MinecraftContentItem]
@@ -26,10 +27,15 @@ struct MinecraftSource: Identifiable, Hashable, Sendable {
     var indexedDetailCount: Int
     var lastScanDate: Date?
 
-    init(folderURL: URL, bookmarkData: Data? = nil) {
+    init(
+        folderURL: URL,
+        bookmarkData: Data? = nil,
+        origin: MinecraftSourceOrigin? = nil
+    ) {
         let normalizedURL = folderURL.standardizedFileURL
         self.id = normalizedURL
         self.folderURL = normalizedURL
+        self.origin = origin ?? .localFolder(bookmarkData: bookmarkData)
         self.bookmarkData = bookmarkData
         self.displayName = normalizedURL.lastPathComponent
         self.displayItems = []
