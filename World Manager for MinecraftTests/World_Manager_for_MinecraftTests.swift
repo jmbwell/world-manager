@@ -314,6 +314,67 @@ struct World_Manager_for_MinecraftTests {
         #expect(restored.first?.lastScanDate == source.lastScanDate)
     }
 
+    @Test func connectedDeviceSourceFactoryCreatesStableSyntheticIdentifier() async throws {
+        let device = ConnectedDevice(
+            udid: "00008110-001234560E90001E",
+            name: "John's iPhone",
+            productType: "iPhone16,2",
+            osVersion: "18.0",
+            connection: .usb,
+            trustState: .trusted
+        )
+        let container = DeviceAppContainer(
+            deviceUDID: device.udid,
+            appID: "com.mojang.minecraftpe",
+            appName: "Minecraft",
+            accessMode: .documents,
+            minecraftFolderRelativePath: "games/com.mojang"
+        )
+
+        let source = ConnectedDeviceSourceFactory().makeSource(device: device, container: container)
+
+        #expect(source.origin.kind == .connectedDevice)
+        #expect(source.id.scheme == "wmminecraft-device")
+        #expect(source.id.host == device.udid)
+        #expect(source.displayName == "John's iPhone • Minecraft")
+    }
+
+    @Test func ifuseDeviceServicesParsesListAppsOutputAcrossCommonFormats() async throws {
+        let output = """
+        com.mojang.minecraftpe - Minecraft
+        VLC (org.videolan.vlc-ios)
+        Documents\tcom.readdle.ReaddleDocs
+        com.apple.Pages
+        """
+
+        let containers = IFuseDeviceServices.parseAppContainers(
+            from: output,
+            deviceUDID: "device-1"
+        )
+
+        #expect(containers.count == 4)
+        #expect(containers.contains { $0.appID == "com.mojang.minecraftpe" && $0.appName == "Minecraft" })
+        #expect(containers.contains { $0.appID == "org.videolan.vlc-ios" && $0.appName == "VLC" })
+        #expect(containers.contains { $0.appID == "com.readdle.ReaddleDocs" && $0.appName == "Documents" })
+        #expect(containers.contains { $0.appID == "com.apple.Pages" && $0.appName == "com.apple.Pages" })
+    }
+
+    @Test func ifuseDeviceServicesParsesIdeviceInfoKeyValueOutput() async throws {
+        let output = """
+        DeviceName: John's iPad
+        ProductType: iPad14,5
+        ProductVersion: 18.1
+        ConnectionType: USB
+        """
+
+        let values = IFuseDeviceServices.parseKeyValueOutput(output)
+
+        #expect(values["DeviceName"] == "John's iPad")
+        #expect(values["ProductType"] == "iPad14,5")
+        #expect(values["ProductVersion"] == "18.1")
+        #expect(values["ConnectionType"] == "USB")
+    }
+
 }
 
 private enum TestNBTTagType: UInt8 {

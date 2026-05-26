@@ -25,6 +25,7 @@ struct SourcesSidebarView: View {
     @Binding var selection: SidebarSelection?
     let footerState: SidebarFooterState
     let addSourceAction: () -> Void
+    let addDeviceSourceAction: () -> Void
     let rescanSourceAction: (MinecraftSource) -> Void
     let removeSourceAction: (MinecraftSource) -> Void
     let revealFooterURLAction: (URL) -> Void
@@ -76,6 +77,13 @@ struct SourcesSidebarView: View {
                     Image(systemName: "folder.badge.plus")
                 }
                 .help("Add Source Folder")
+            }
+
+            ToolbarItem {
+                Button(action: addDeviceSourceAction) {
+                    Image(systemName: "iphone.gen3")
+                }
+                .help("Add Connected Device Source")
             }
         }
         .animation(.easeInOut(duration: 0.2), value: footerState.style)

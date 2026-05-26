@@ -69,10 +69,12 @@ enum MinecraftSourceKind: String, Hashable, Sendable, Codable {
 struct PreparedScanRoot: Hashable, Sendable {
     let sourceID: URL
     let rootURL: URL
+    let mountPointURL: URL?
     let cleanupBehavior: CleanupBehavior
 
     enum CleanupBehavior: Hashable, Sendable {
         case none
         case unmount
+        case deleteTemporaryDirectory
     }
 }

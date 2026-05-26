@@ -42,14 +42,14 @@ final class SourceLibrary: ObservableObject {
     private var scanTasks: [URL: Task<Void, Never>] = [:]
     private var footerResetTask: Task<Void, Never>?
     private let persistenceStore: SourcePersistenceStore
-    private let scanRootPreparer: SourceScanRootPreparing
+    private let sourceAccessMethod: SourceAccessMethod
 
     init(
         persistenceStore: SourcePersistenceStore = .shared,
-        scanRootPreparer: SourceScanRootPreparing = LocalFolderScanRootPreparer()
+        sourceAccessMethod: SourceAccessMethod = LocalFolderSourceAccess()
     ) {
         self.persistenceStore = persistenceStore
-        self.scanRootPreparer = scanRootPreparer
+        self.sourceAccessMethod = sourceAccessMethod
 
         Task { [weak self] in
             await self?.restorePersistedSources()
@@ -70,11 +70,35 @@ final class SourceLibrary: ObservableObject {
             return normalizedURL
         }
 
-        sources.append(MinecraftSource(folderURL: normalizedURL, bookmarkData: bookmarkData))
-        sources.sort { $0.displayName.localizedStandardCompare($1.displayName) == .orderedAscending }
-        persistSourceIfAvailable(withID: normalizedURL)
-        startScan(for: normalizedURL)
-        return normalizedURL
+        let source = MinecraftSource(folderURL: normalizedURL, bookmarkData: bookmarkData)
+        return addSource(source, shouldPersist: true, shouldScan: true)
+    }
+
+    @discardableResult
+    func addSource(_ source: MinecraftSource, shouldPersist: Bool = false, shouldScan: Bool = true) -> URL {
+        if sources.contains(where: { $0.id == source.id }) {
+            updateSource(source.id) { existingSource in
+                existingSource.origin = source.origin
+                if existingSource.bookmarkData == nil {
+                    existingSource.bookmarkData = source.bookmarkData
+                }
+                if existingSource.displayName.isEmpty {
+                    existingSource.displayName = source.displayName
+                }
+            }
+        } else {
+            sources.append(source)
+            sources.sort { $0.displayName.localizedStandardCompare($1.displayName) == .orderedAscending }
+        }
+
+        if shouldPersist, source.origin.kind == .localFolder {
+            persistSourceIfAvailable(withID: source.id)
+        }
+        if shouldScan {
+            startScan(for: source.id)
+        }
+
+        return source.id
     }
 
     func source(withID sourceID: URL) -> MinecraftSource? {
@@ -169,7 +193,7 @@ final class SourceLibrary: ObservableObject {
 
         let preparedScanRoot: PreparedScanRoot
         do {
-            preparedScanRoot = try await scanRootPreparer.prepareScanRoot(for: source)
+            preparedScanRoot = try await sourceAccessMethod.prepareScanRoot(for: source)
         } catch {
             updateSource(sourceID) { source in
                 source.scanError = error.localizedDescription
@@ -944,11 +968,8 @@ final class SourceLibrary: ObservableObject {
     }
 
     private func cleanupPreparedScanRoot(_ preparedScanRoot: PreparedScanRoot) {
-        switch preparedScanRoot.cleanupBehavior {
-        case .none:
-            return
-        case .unmount:
-            return
+        Task.detached(priority: .utility) { [sourceAccessMethod] in
+            await sourceAccessMethod.releaseScanRoot(preparedScanRoot)
         }
     }
 

@@ -27,17 +27,18 @@ struct MinecraftSource: Identifiable, Hashable, Sendable {
     var indexedDetailCount: Int
     var lastScanDate: Date?
 
-    init(
+    nonisolated init(
+        sourceID: URL? = nil,
         folderURL: URL,
         bookmarkData: Data? = nil,
         origin: MinecraftSourceOrigin? = nil
     ) {
-        let normalizedURL = folderURL.standardizedFileURL
-        self.id = normalizedURL
-        self.folderURL = normalizedURL
+        let normalizedFolderURL = normalizedSourceURL(folderURL)
+        self.id = normalizedSourceURL(sourceID ?? normalizedFolderURL)
+        self.folderURL = normalizedFolderURL
         self.origin = origin ?? .localFolder(bookmarkData: bookmarkData)
         self.bookmarkData = bookmarkData
-        self.displayName = normalizedURL.lastPathComponent
+        self.displayName = normalizedFolderURL.lastPathComponent
         self.displayItems = []
         self.rawItems = []
         self.logicalPacks = []
@@ -115,6 +116,14 @@ struct MinecraftSource: Identifiable, Hashable, Sendable {
             return true
         }
     }
+}
+
+nonisolated private func normalizedSourceURL(_ url: URL) -> URL {
+    if url.isFileURL {
+        return url.standardizedFileURL
+    }
+
+    return url.standardized
 }
 
 private extension Array {

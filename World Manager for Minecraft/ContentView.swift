@@ -10,16 +10,32 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct ContentView: View {
-    @StateObject private var library = SourceLibrary()
+    @StateObject private var library: SourceLibrary
     @State private var selectedItemID: MinecraftContentItem.ID?
     @State private var selectedSidebarSelection: SidebarSelection?
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var searchText = ""
     @State private var isDropTargeted = false
     @State private var isPerformingItemAction = false
+    @State private var isShowingDeviceSourceSheet = false
     @State private var sortMode: ItemSortMode = .name
 
+    private let connectedDeviceAccess: AppleMobileDeviceSourceAccess
+    private let deviceSourceFactory: ConnectedDeviceSourceFactory
     private let directoryPreviewLimit = 12
+
+    init() {
+        let connectedDeviceAccess = AppleMobileDeviceSourceAccess()
+        self.connectedDeviceAccess = connectedDeviceAccess
+        self.deviceSourceFactory = ConnectedDeviceSourceFactory()
+        _library = StateObject(
+            wrappedValue: SourceLibrary(
+                sourceAccessMethod: SourceAccessCoordinator(
+                    connectedDeviceAccess: connectedDeviceAccess
+                )
+            )
+        )
+    }
 
     var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
@@ -28,6 +44,7 @@ struct ContentView: View {
                 selection: $selectedSidebarSelection,
                 footerState: library.sidebarFooterState,
                 addSourceAction: pickFolder,
+                addDeviceSourceAction: { isShowingDeviceSourceSheet = true },
                 rescanSourceAction: { source in
                     selectedSidebarSelection = .allContent(sourceID: source.id)
                     selectedItemID = nil
@@ -103,6 +120,18 @@ struct ContentView: View {
             if library.isRestoringPersistedSources {
                 LaunchRestoreOverlayView()
             }
+        }
+        .sheet(isPresented: $isShowingDeviceSourceSheet) {
+            ConnectedDeviceSourcePickerView(
+                deviceDiscoveryService: connectedDeviceAccess,
+                sourceFactory: deviceSourceFactory,
+                onAddSource: { source in
+                    let sourceID = library.addSource(source, shouldPersist: false, shouldScan: true)
+                    selectedSidebarSelection = .allContent(sourceID: sourceID)
+                    selectedItemID = nil
+                    isShowingDeviceSourceSheet = false
+                }
+            )
         }
         .disabled(library.isRestoringPersistedSources)
         .onChange(of: displayedItems.map(\.id)) { _, filteredIDs in

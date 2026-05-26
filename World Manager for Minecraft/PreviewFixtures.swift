@@ -294,6 +294,7 @@ struct SidebarColumnPreviewContainer: View {
                 selection: $selection,
                 footerState: PreviewFixtures.sidebarFooter,
                 addSourceAction: {},
+                addDeviceSourceAction: {},
                 rescanSourceAction: { _ in },
                 removeSourceAction: { _ in },
                 revealFooterURLAction: { _ in },
