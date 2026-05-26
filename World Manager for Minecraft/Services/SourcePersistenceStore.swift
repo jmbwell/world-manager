@@ -16,7 +16,7 @@ struct PersistedSourceRecord: Sendable {
     let lastScanDate: Date?
 }
 
-private struct PersistedItemSnapshotPayload: Codable {
+private struct PersistedItemSnapshotPayload: Codable, Sendable {
     let idPath: String
     let relativePath: String
     let modifiedDate: Date?
@@ -24,7 +24,7 @@ private struct PersistedItemSnapshotPayload: Codable {
     let packUUID: String?
     let packVersion: String?
 
-    init(_ snapshot: ItemSnapshot) {
+    nonisolated init(_ snapshot: ItemSnapshot) {
         self.idPath = snapshot.id.path
         self.relativePath = snapshot.relativePath
         self.modifiedDate = snapshot.modifiedDate
@@ -33,7 +33,7 @@ private struct PersistedItemSnapshotPayload: Codable {
         self.packVersion = snapshot.packVersion
     }
 
-    var itemSnapshot: ItemSnapshot {
+    nonisolated var itemSnapshot: ItemSnapshot {
         ItemSnapshot(
             id: URL(fileURLWithPath: idPath),
             relativePath: relativePath,
@@ -43,22 +43,51 @@ private struct PersistedItemSnapshotPayload: Codable {
             packVersion: packVersion
         )
     }
+
+    nonisolated init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.idPath = try container.decode(String.self, forKey: .idPath)
+        self.relativePath = try container.decode(String.self, forKey: .relativePath)
+        self.modifiedDate = try container.decodeIfPresent(Date.self, forKey: .modifiedDate)
+        self.sizeBytes = try container.decodeIfPresent(Int64.self, forKey: .sizeBytes)
+        self.packUUID = try container.decodeIfPresent(String.self, forKey: .packUUID)
+        self.packVersion = try container.decodeIfPresent(String.self, forKey: .packVersion)
+    }
+
+    nonisolated func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(idPath, forKey: .idPath)
+        try container.encode(relativePath, forKey: .relativePath)
+        try container.encodeIfPresent(modifiedDate, forKey: .modifiedDate)
+        try container.encodeIfPresent(sizeBytes, forKey: .sizeBytes)
+        try container.encodeIfPresent(packUUID, forKey: .packUUID)
+        try container.encodeIfPresent(packVersion, forKey: .packVersion)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case idPath
+        case relativePath
+        case modifiedDate
+        case sizeBytes
+        case packUUID
+        case packVersion
+    }
 }
 
-private struct PersistedCollectionSnapshotPayload: Codable {
+private struct PersistedCollectionSnapshotPayload: Codable, Sendable {
     let folderName: String
     let modifiedDate: Date?
     let childDirectoryCount: Int
     let fingerprint: String
 
-    init(_ snapshot: CollectionSnapshot) {
+    nonisolated init(_ snapshot: CollectionSnapshot) {
         self.folderName = snapshot.folderName
         self.modifiedDate = snapshot.modifiedDate
         self.childDirectoryCount = snapshot.childDirectoryCount
         self.fingerprint = snapshot.fingerprint
     }
 
-    var collectionSnapshot: CollectionSnapshot {
+    nonisolated var collectionSnapshot: CollectionSnapshot {
         CollectionSnapshot(
             folderName: folderName,
             modifiedDate: modifiedDate,
@@ -66,28 +95,74 @@ private struct PersistedCollectionSnapshotPayload: Codable {
             fingerprint: fingerprint
         )
     }
+
+    nonisolated init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.folderName = try container.decode(String.self, forKey: .folderName)
+        self.modifiedDate = try container.decodeIfPresent(Date.self, forKey: .modifiedDate)
+        self.childDirectoryCount = try container.decode(Int.self, forKey: .childDirectoryCount)
+        self.fingerprint = try container.decode(String.self, forKey: .fingerprint)
+    }
+
+    nonisolated func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(folderName, forKey: .folderName)
+        try container.encodeIfPresent(modifiedDate, forKey: .modifiedDate)
+        try container.encode(childDirectoryCount, forKey: .childDirectoryCount)
+        try container.encode(fingerprint, forKey: .fingerprint)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case folderName
+        case modifiedDate
+        case childDirectoryCount
+        case fingerprint
+    }
 }
 
-private struct PersistedSourceSnapshotPayload: Codable {
+private struct PersistedSourceSnapshotPayload: Codable, Sendable {
     let sourcePath: String
     let rootModifiedDate: Date?
     let collectionSnapshots: [PersistedCollectionSnapshotPayload]
     let itemSnapshots: [PersistedItemSnapshotPayload]
 
-    init(_ snapshot: SourceSnapshot) {
+    nonisolated init(_ snapshot: SourceSnapshot) {
         self.sourcePath = snapshot.sourceID.path
         self.rootModifiedDate = snapshot.rootModifiedDate
         self.collectionSnapshots = snapshot.collectionSnapshots.map(PersistedCollectionSnapshotPayload.init)
         self.itemSnapshots = snapshot.itemSnapshots.map(PersistedItemSnapshotPayload.init)
     }
 
-    var sourceSnapshot: SourceSnapshot {
+    nonisolated var sourceSnapshot: SourceSnapshot {
         SourceSnapshot(
             sourceID: URL(fileURLWithPath: sourcePath),
             rootModifiedDate: rootModifiedDate,
             collectionSnapshots: collectionSnapshots.map(\.collectionSnapshot),
             itemSnapshots: itemSnapshots.map(\.itemSnapshot)
         )
+    }
+
+    nonisolated init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.sourcePath = try container.decode(String.self, forKey: .sourcePath)
+        self.rootModifiedDate = try container.decodeIfPresent(Date.self, forKey: .rootModifiedDate)
+        self.collectionSnapshots = try container.decode([PersistedCollectionSnapshotPayload].self, forKey: .collectionSnapshots)
+        self.itemSnapshots = try container.decode([PersistedItemSnapshotPayload].self, forKey: .itemSnapshots)
+    }
+
+    nonisolated func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(sourcePath, forKey: .sourcePath)
+        try container.encodeIfPresent(rootModifiedDate, forKey: .rootModifiedDate)
+        try container.encode(collectionSnapshots, forKey: .collectionSnapshots)
+        try container.encode(itemSnapshots, forKey: .itemSnapshots)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sourcePath
+        case rootModifiedDate
+        case collectionSnapshots
+        case itemSnapshots
     }
 }
 

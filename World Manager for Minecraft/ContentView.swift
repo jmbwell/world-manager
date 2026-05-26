@@ -91,6 +91,12 @@ struct ContentView: View {
             )
             .frame(minWidth: 450)
         }
+        .overlay {
+            if library.isRestoringPersistedSources {
+                LaunchRestoreOverlayView()
+            }
+        }
+        .disabled(library.isRestoringPersistedSources)
         .onChange(of: displayedItems.map(\.id)) { _, filteredIDs in
             guard let selectedItemID, !filteredIDs.contains(selectedItemID) else {
                 return
@@ -1311,6 +1317,33 @@ private struct SharingPickerButton: NSViewRepresentable {
 
         @objc func didPressButton(_ sender: NSButton) {
             action(sender)
+        }
+    }
+}
+
+private struct LaunchRestoreOverlayView: View {
+    var body: some View {
+        ZStack {
+            Rectangle()
+                .fill(.regularMaterial)
+                .ignoresSafeArea()
+
+            VStack(spacing: 14) {
+                ProgressView()
+                    .controlSize(.large)
+
+                Text("Restoring Saved Library")
+                    .font(.title3.weight(.semibold))
+
+                Text("Loading saved sources, metadata, and cached artwork.")
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 32)
+            .padding(.vertical, 28)
+            .background(
+                RoundedRectangle(cornerRadius: 18)
+                    .fill(.background.opacity(0.92))
+            )
         }
     }
 }

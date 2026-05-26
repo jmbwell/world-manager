@@ -34,6 +34,7 @@ final class SourceLibrary: ObservableObject {
         subtitle: nil,
         revealURL: nil
     )
+    @Published private(set) var isRestoringPersistedSources = true
 
     private var scanTasks: [URL: Task<Void, Never>] = [:]
     private var footerResetTask: Task<Void, Never>?
@@ -168,6 +169,10 @@ final class SourceLibrary: ObservableObject {
             let sizeQueue = EnrichmentWorkQueue()
             workerTasks = (0..<Self.enrichmentWorkerCount).map { _ in
                 Task.detached(priority: .utility) { [weak self] in
+                    guard let library = self else {
+                        return
+                    }
+
                     while let item = await enrichmentQueue.next() {
                         guard !Task.isCancelled else {
                             return
@@ -176,12 +181,8 @@ final class SourceLibrary: ObservableObject {
                         let enrichedItem = await WorldScanner.enrich(item: item)
                         if let snapshot = await index.applyEnrichedItem(enrichedItem) {
                             await MainActor.run {
-                                guard let self else {
-                                    return
-                                }
-
-                                self.applySnapshot(snapshot, to: sourceID)
-                                self.refreshSidebarFooterState()
+                                library.applySnapshot(snapshot, to: sourceID)
+                                library.refreshSidebarFooterState()
                             }
                         }
                         await sizeQueue.enqueue(enrichedItem)
@@ -190,6 +191,10 @@ final class SourceLibrary: ObservableObject {
             }
             sizeWorkerTasks = (0..<Self.sizeWorkerCount).map { _ in
                 Task.detached(priority: .utility) { [weak self] in
+                    guard let library = self else {
+                        return
+                    }
+
                     while let item = await sizeQueue.next() {
                         guard !Task.isCancelled else {
                             return
@@ -198,12 +203,8 @@ final class SourceLibrary: ObservableObject {
                         let sizedItem = WorldScanner.loadSize(for: item)
                         if let snapshot = await index.applySizedItem(sizedItem) {
                             await MainActor.run {
-                                guard let self else {
-                                    return
-                                }
-
-                                self.applySnapshot(snapshot, to: sourceID)
-                                self.refreshSidebarFooterState()
+                                library.applySnapshot(snapshot, to: sourceID)
+                                library.refreshSidebarFooterState()
                             }
                         }
                     }
@@ -663,6 +664,11 @@ final class SourceLibrary: ObservableObject {
     }
 
     private func restorePersistedSources() async {
+        defer {
+            isRestoringPersistedSources = false
+            refreshSidebarFooterState()
+        }
+
         let records: [PersistedSourceRecord]
         do {
             records = try await persistenceStore.loadSources()
@@ -673,9 +679,9 @@ final class SourceLibrary: ObservableObject {
         for record in records {
             var source = MinecraftSource(folderURL: record.folderURL)
             source.displayName = record.displayName
-            source.rawItems = record.rawItems
+            source.rawItems = await restoreCachedImages(in: record.rawItems)
             source.indexedItemCount = record.rawItems.count
-            source.indexedDetailCount = record.rawItems.filter(\.metadataLoaded).count
+            source.indexedDetailCount = source.rawItems.filter(\.metadataLoaded).count
             source.lastScanDate = record.lastScanDate
             source.snapshot = record.snapshot
 
@@ -691,13 +697,46 @@ final class SourceLibrary: ObservableObject {
         }
 
         sources.sort { $0.displayName.localizedStandardCompare($1.displayName) == .orderedAscending }
-        refreshSidebarFooterState()
 
         for record in records {
             if sourceNeedsRescan(record) {
                 startScan(for: record.folderURL)
             }
         }
+    }
+
+    private func restoreCachedImages(in items: [MinecraftContentItem]) async -> [MinecraftContentItem] {
+        var restoredItems: [MinecraftContentItem] = []
+        restoredItems.reserveCapacity(items.count)
+
+        for var item in items {
+            item.iconURL = await ImageCacheStore.shared.cachedImageURL(for: item.iconURL)
+            item.packReferences = await restoreCachedImages(in: item.packReferences)
+            restoredItems.append(item)
+        }
+
+        return restoredItems
+    }
+
+    private func restoreCachedImages(in references: [ContentPackReference]) async -> [ContentPackReference] {
+        var restoredReferences: [ContentPackReference] = []
+        restoredReferences.reserveCapacity(references.count)
+
+        for reference in references {
+            let cachedIconURL = await ImageCacheStore.shared.cachedImageURL(for: reference.iconURL)
+            restoredReferences.append(
+                ContentPackReference(
+                    name: reference.name,
+                    type: reference.type,
+                    iconURL: cachedIconURL,
+                    uuid: reference.uuid,
+                    version: reference.version,
+                    source: reference.source
+                )
+            )
+        }
+
+        return restoredReferences
     }
 
     private func sourceNeedsRescan(_ record: PersistedSourceRecord) -> Bool {
@@ -833,6 +872,17 @@ final class SourceLibrary: ObservableObject {
     }
 
     private func refreshSidebarFooterState() {
+        if isRestoringPersistedSources {
+            cancelFooterReset()
+            sidebarFooterState = SidebarFooterState(
+                style: .inProgress,
+                title: "Restoring library...",
+                subtitle: "Loading saved sources and cached metadata",
+                revealURL: nil
+            )
+            return
+        }
+
         let scanningSources = sources.filter(\.isScanning)
         if let source = scanningSources.first {
             cancelFooterReset()

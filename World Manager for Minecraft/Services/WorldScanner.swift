@@ -91,7 +91,8 @@ enum WorldScanner {
         var enrichedItem = item
 
         enrichedItem.displayName = displayName(for: item, fileManager: fileManager)
-        enrichedItem.iconURL = iconURL(for: item, fileManager: fileManager)
+        let sourceIconURL = iconURL(for: item, fileManager: fileManager)
+        enrichedItem.iconURL = await ImageCacheStore.shared.cachedImageURL(for: sourceIconURL)
         enrichedItem.lastPlayedDate = lastPlayedDate(for: item, fileManager: fileManager)
         enrichedItem.modifiedDate = modifiedDate(for: item.folderURL)
         if let manifestMetadata = manifestMetadata(in: item.folderURL, fileManager: fileManager) {
