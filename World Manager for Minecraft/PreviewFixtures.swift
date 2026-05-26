@@ -231,6 +231,7 @@ enum PreviewFixtures {
         style: .success,
         title: "Export Complete",
         subtitle: "Saved a preview copy of \(featuredWorld.displayName)",
+        detail: nil,
         revealURL: featuredWorld.folderURL
     )
 
@@ -316,13 +317,17 @@ struct ItemListColumnPreviewContainer: View {
                 selectedItemID: $selectedItemID,
                 searchText: $searchText,
                 sortMode: $sortMode,
+                showsHeader: true,
+                sourceName: PreviewFixtures.primarySource.displayName,
+                showsSourceName: false,
                 title: "All Items",
                 subtitle: "5 items in Kid iPad Imports",
+                showsSubtitle: false,
+                isRefreshing: false,
                 items: PreviewFixtures.primarySource.displayItems,
                 searchPrompt: "Search Worlds",
                 chooseFolderAction: {},
                 dropAction: { _ in false },
-                refreshAction: {},
                 itemContextMenu: { item in
                     Button("Reveal \(item.displayName)") {}
                 }

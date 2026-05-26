@@ -10,6 +10,7 @@ import SQLite3
 
 struct PersistedSourceRecord: Sendable {
     let folderURL: URL
+    let bookmarkData: Data?
     let displayName: String
     let rawItems: [MinecraftContentItem]
     let snapshot: SourceSnapshot?
@@ -188,7 +189,7 @@ actor SourcePersistenceStore {
         defer { sqlite3_close(database) }
 
         let sql = """
-        SELECT folder_path, display_name, raw_items_json, snapshot_json, last_scan_date
+        SELECT folder_path, bookmark_data, display_name, raw_items_json, snapshot_json, last_scan_date
         FROM source_cache
         ORDER BY display_name COLLATE NOCASE ASC;
         """
@@ -207,17 +208,19 @@ actor SourcePersistenceStore {
             }
 
             let folderPath = String(cString: folderPathPointer)
-            let displayName = String(cString: sqlite3_column_text(statement, 1))
-            let rawItems = try decodeColumn([MinecraftContentItem].self, statement: statement, columnIndex: 2) ?? []
-            let snapshotPayload = try decodeColumn(PersistedSourceSnapshotPayload.self, statement: statement, columnIndex: 3)
+            let bookmarkData = decodeDataColumn(statement: statement, columnIndex: 1)
+            let displayName = String(cString: sqlite3_column_text(statement, 2))
+            let rawItems = try decodeColumn([MinecraftContentItem].self, statement: statement, columnIndex: 3) ?? []
+            let snapshotPayload = try decodeColumn(PersistedSourceSnapshotPayload.self, statement: statement, columnIndex: 4)
             let snapshot = snapshotPayload?.sourceSnapshot
-            let lastScanDate = sqlite3_column_type(statement, 4) == SQLITE_NULL
+            let lastScanDate = sqlite3_column_type(statement, 5) == SQLITE_NULL
                 ? nil
-                : Date(timeIntervalSince1970: sqlite3_column_double(statement, 4))
+                : Date(timeIntervalSince1970: sqlite3_column_double(statement, 5))
 
             records.append(
                 PersistedSourceRecord(
                     folderURL: URL(fileURLWithPath: folderPath, isDirectory: true).standardizedFileURL,
+                    bookmarkData: bookmarkData,
                     displayName: displayName,
                     rawItems: rawItems,
                     snapshot: snapshot,
@@ -236,12 +239,14 @@ actor SourcePersistenceStore {
         let sql = """
         INSERT INTO source_cache (
             folder_path,
+            bookmark_data,
             display_name,
             raw_items_json,
             snapshot_json,
             last_scan_date
-        ) VALUES (?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?)
         ON CONFLICT(folder_path) DO UPDATE SET
+            bookmark_data = excluded.bookmark_data,
             display_name = excluded.display_name,
             raw_items_json = excluded.raw_items_json,
             snapshot_json = excluded.snapshot_json,
@@ -255,14 +260,15 @@ actor SourcePersistenceStore {
         defer { sqlite3_finalize(statement) }
 
         try bindText(source.folderURL.path, to: statement, at: 1)
-        try bindText(source.displayName, to: statement, at: 2)
-        try bindJSON(source.rawItems, to: statement, at: 3)
-        try bindJSON(source.snapshot.map(PersistedSourceSnapshotPayload.init), to: statement, at: 4)
+        try bindData(source.bookmarkData, to: statement, at: 2)
+        try bindText(source.displayName, to: statement, at: 3)
+        try bindJSON(source.rawItems, to: statement, at: 4)
+        try bindJSON(source.snapshot.map(PersistedSourceSnapshotPayload.init), to: statement, at: 5)
 
         if let lastScanDate = source.lastScanDate {
-            sqlite3_bind_double(statement, 5, lastScanDate.timeIntervalSince1970)
+            sqlite3_bind_double(statement, 6, lastScanDate.timeIntervalSince1970)
         } else {
-            sqlite3_bind_null(statement, 5)
+            sqlite3_bind_null(statement, 6)
         }
 
         guard sqlite3_step(statement) == SQLITE_DONE else {
@@ -304,6 +310,7 @@ actor SourcePersistenceStore {
             """
             CREATE TABLE IF NOT EXISTS source_cache (
                 folder_path TEXT PRIMARY KEY,
+                bookmark_data BLOB,
                 display_name TEXT NOT NULL,
                 raw_items_json BLOB NOT NULL,
                 snapshot_json BLOB,
@@ -312,12 +319,22 @@ actor SourcePersistenceStore {
             """,
             on: database
         )
+        try execute(
+            "ALTER TABLE source_cache ADD COLUMN bookmark_data BLOB;",
+            on: database,
+            ignoringDuplicateColumn: true
+        )
 
         return database
     }
 
-    private func execute(_ sql: String, on database: OpaquePointer?) throws {
+    private func execute(_ sql: String, on database: OpaquePointer?, ignoringDuplicateColumn: Bool = false) throws {
         guard sqlite3_exec(database, sql, nil, nil, nil) == SQLITE_OK else {
+            if ignoringDuplicateColumn,
+               let database,
+               String(cString: sqlite3_errmsg(database)).localizedCaseInsensitiveContains("duplicate column name") {
+                return
+            }
             throw databaseError(database)
         }
     }
@@ -331,14 +348,23 @@ actor SourcePersistenceStore {
 
     private func bindJSON<T: Encodable>(_ value: T, to statement: OpaquePointer?, at index: Int32) throws {
         let data = try JSONEncoder().encode(value)
+        try bindData(data, to: statement, at: index)
+    }
+
+    private func bindData(_ value: Data?, to statement: OpaquePointer?, at index: Int32) throws {
+        guard let value else {
+            sqlite3_bind_null(statement, index)
+            return
+        }
+
         let transientDestructor = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
 
-        let result = data.withUnsafeBytes { rawBuffer in
-            sqlite3_bind_blob(statement, index, rawBuffer.baseAddress, Int32(data.count), transientDestructor)
+        let result = value.withUnsafeBytes { rawBuffer in
+            sqlite3_bind_blob(statement, index, rawBuffer.baseAddress, Int32(value.count), transientDestructor)
         }
 
         guard result == SQLITE_OK else {
-            throw persistenceError("Failed to bind JSON parameter.")
+            throw persistenceError("Failed to bind data parameter.")
         }
     }
 
@@ -357,6 +383,22 @@ actor SourcePersistenceStore {
 
         let data = Data(bytes: bytes, count: byteCount)
         return try JSONDecoder().decode(type, from: data)
+    }
+
+    private func decodeDataColumn(statement: OpaquePointer?, columnIndex: Int32) -> Data? {
+        guard sqlite3_column_type(statement, columnIndex) != SQLITE_NULL else {
+            return nil
+        }
+
+        let byteCount = Int(sqlite3_column_bytes(statement, columnIndex))
+        guard
+            byteCount > 0,
+            let bytes = sqlite3_column_blob(statement, columnIndex)
+        else {
+            return nil
+        }
+
+        return Data(bytes: bytes, count: byteCount)
     }
 
     private func databaseError(_ database: OpaquePointer?) -> Error {

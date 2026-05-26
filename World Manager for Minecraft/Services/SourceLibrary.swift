@@ -19,6 +19,7 @@ struct SidebarFooterState {
     let style: Style
     let title: String
     let subtitle: String?
+    let detail: String?
     let revealURL: URL?
 }
 
@@ -26,12 +27,14 @@ struct SidebarFooterState {
 final class SourceLibrary: ObservableObject {
     private static let enrichmentWorkerCount = 4
     private static let sizeWorkerCount = 2
+    private static let minimumVisibleScanDuration: TimeInterval = 0.8
 
     @Published var sources: [MinecraftSource] = []
     @Published private(set) var sidebarFooterState = SidebarFooterState(
         style: .idle,
         title: "",
         subtitle: nil,
+        detail: nil,
         revealURL: nil
     )
     @Published private(set) var isRestoringPersistedSources = true
@@ -50,13 +53,19 @@ final class SourceLibrary: ObservableObject {
 
     func addSource(at url: URL) -> URL {
         let normalizedURL = url.standardizedFileURL
+        let bookmarkData = securityScopedBookmarkData(for: normalizedURL)
 
         if sources.contains(where: { $0.id == normalizedURL }) {
+            updateSource(normalizedURL) { source in
+                if source.bookmarkData == nil {
+                    source.bookmarkData = bookmarkData
+                }
+            }
             startScan(for: normalizedURL)
             return normalizedURL
         }
 
-        sources.append(MinecraftSource(folderURL: normalizedURL))
+        sources.append(MinecraftSource(folderURL: normalizedURL, bookmarkData: bookmarkData))
         sources.sort { $0.displayName.localizedStandardCompare($1.displayName) == .orderedAscending }
         persistSourceIfAvailable(withID: normalizedURL)
         startScan(for: normalizedURL)
@@ -85,6 +94,7 @@ final class SourceLibrary: ObservableObject {
             style: .inProgress,
             title: description,
             subtitle: nil,
+            detail: nil,
             revealURL: nil
         )
     }
@@ -94,6 +104,7 @@ final class SourceLibrary: ObservableObject {
             style: .failure,
             title: "Action Failed",
             subtitle: message,
+            detail: nil,
             revealURL: nil
         )
         scheduleFooterReset()
@@ -104,6 +115,7 @@ final class SourceLibrary: ObservableObject {
             style: .success,
             title: title,
             subtitle: subtitle,
+            detail: nil,
             revealURL: revealURL
         )
         scheduleFooterReset()
@@ -139,10 +151,33 @@ final class SourceLibrary: ObservableObject {
     private func scanSource(withID sourceID: URL) async {
         var workerTasks: [Task<Void, Never>] = []
         var sizeWorkerTasks: [Task<Void, Never>] = []
+        let scanStartTime = Date()
         defer {
             workerTasks.forEach { $0.cancel() }
             sizeWorkerTasks.forEach { $0.cancel() }
             scanTasks[sourceID] = nil
+        }
+
+        guard let source = source(withID: sourceID) else {
+            return
+        }
+
+        let scanRootURL = resolvedSourceURL(for: source) ?? source.folderURL
+        let accessedSecurityScope = scanRootURL.startAccessingSecurityScopedResource()
+        defer {
+            if accessedSecurityScope {
+                scanRootURL.stopAccessingSecurityScopedResource()
+            }
+        }
+
+        guard FileManager.default.fileExists(atPath: scanRootURL.path) else {
+            updateSource(sourceID) { source in
+                source.scanError = "Source folder is no longer available."
+                source.scanStatus = ""
+                source.isScanning = false
+            }
+            refreshSidebarFooterState()
+            return
         }
 
         await WorldScanner.beginScanSession(for: sourceID)
@@ -164,7 +199,7 @@ final class SourceLibrary: ObservableObject {
         refreshSidebarFooterState()
 
         do {
-            let index = SourceIndexActor(sourceID: sourceID, folderURL: sourceID)
+            let index = SourceIndexActor(sourceID: sourceID, folderURL: scanRootURL)
             let enrichmentQueue = EnrichmentWorkQueue()
             let sizeQueue = EnrichmentWorkQueue()
             workerTasks = (0..<Self.enrichmentWorkerCount).map { _ in
@@ -213,7 +248,7 @@ final class SourceLibrary: ObservableObject {
             let discoveryStream = AsyncThrowingStream<MinecraftContentItem, Error> { continuation in
                 let discoveryTask = Task.detached(priority: .userInitiated) {
                     do {
-                        _ = try WorldScanner.discoverItems(in: sourceID) { item in
+                        _ = try WorldScanner.discoverItems(in: scanRootURL) { item in
                             continuation.yield(item)
                         }
                         continuation.finish()
@@ -261,6 +296,13 @@ final class SourceLibrary: ObservableObject {
 
             for sizeWorkerTask in sizeWorkerTasks {
                 await sizeWorkerTask.value
+            }
+
+            let elapsedScanTime = Date().timeIntervalSince(scanStartTime)
+            if elapsedScanTime < Self.minimumVisibleScanDuration {
+                try? await Task.sleep(
+                    for: .seconds(Self.minimumVisibleScanDuration - elapsedScanTime)
+                )
             }
 
             if let snapshot = await index.finishScan() {
@@ -515,7 +557,9 @@ final class SourceLibrary: ObservableObject {
             return
         }
 
-        mutate(&sources[index])
+        var source = sources[index]
+        mutate(&source)
+        sources[index] = source
     }
 
     private func applySnapshot(_ snapshot: SourceIndexSnapshot, to sourceID: URL) {
@@ -677,7 +721,7 @@ final class SourceLibrary: ObservableObject {
         }
 
         for record in records {
-            var source = MinecraftSource(folderURL: record.folderURL)
+            var source = MinecraftSource(folderURL: record.folderURL, bookmarkData: record.bookmarkData)
             source.displayName = record.displayName
             source.rawItems = await restoreCachedImages(in: record.rawItems)
             source.indexedItemCount = record.rawItems.count
@@ -867,6 +911,32 @@ final class SourceLibrary: ObservableObject {
         }
     }
 
+    private func securityScopedBookmarkData(for url: URL) -> Data? {
+        try? url.bookmarkData(
+            options: [.withSecurityScope],
+            includingResourceValuesForKeys: nil,
+            relativeTo: nil
+        )
+    }
+
+    private func resolvedSourceURL(for source: MinecraftSource) -> URL? {
+        guard let bookmarkData = source.bookmarkData else {
+            return nil
+        }
+
+        var isStale = false
+        guard let resolvedURL = try? URL(
+            resolvingBookmarkData: bookmarkData,
+            options: [.withSecurityScope],
+            relativeTo: nil,
+            bookmarkDataIsStale: &isStale
+        ) else {
+            return nil
+        }
+
+        return resolvedURL.standardizedFileURL
+    }
+
     private func isLogicalPackType(_ contentType: MinecraftContentType) -> Bool {
         contentType == .behaviorPack || contentType == .resourcePack
     }
@@ -878,6 +948,7 @@ final class SourceLibrary: ObservableObject {
                 style: .inProgress,
                 title: "Restoring library...",
                 subtitle: "Loading saved sources and cached metadata",
+                detail: nil,
                 revealURL: nil
             )
             return
@@ -886,17 +957,22 @@ final class SourceLibrary: ObservableObject {
         let scanningSources = sources.filter(\.isScanning)
         if let source = scanningSources.first {
             cancelFooterReset()
+            let title = source.scanStatus.isEmpty ? "Scanning Minecraft library..." : source.scanStatus
             let subtitle: String
+            let detail: String?
             if source.indexedItemCount > 0 {
-                subtitle = "\(source.indexedDetailCount) of \(source.indexedItemCount) indexed"
+                subtitle = source.displayName
+                detail = "\(source.indexedDetailCount) of \(source.indexedItemCount) indexed"
             } else {
                 subtitle = "Searching \(source.displayName)"
+                detail = nil
             }
 
             sidebarFooterState = SidebarFooterState(
                 style: .inProgress,
-                title: "Scanning...",
+                title: title,
                 subtitle: subtitle,
+                detail: detail,
                 revealURL: nil
             )
             return
@@ -907,13 +983,14 @@ final class SourceLibrary: ObservableObject {
                 style: .failure,
                 title: "Scan failed",
                 subtitle: source.scanError,
+                detail: nil,
                 revealURL: nil
             )
             scheduleFooterReset()
             return
         }
         cancelFooterReset()
-        sidebarFooterState = SidebarFooterState(style: .idle, title: "", subtitle: nil, revealURL: nil)
+        sidebarFooterState = SidebarFooterState(style: .idle, title: "", subtitle: nil, detail: nil, revealURL: nil)
     }
 
     private func cancelFooterReset() {

@@ -127,24 +127,32 @@ private struct SidebarFooterView: View {
     let revealAction: (URL) -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
                 if state.style == .inProgress {
                     ProgressView()
                         .controlSize(.small)
+                        .tint(.appAccent)
                 }
 
                 Text(state.title)
                     .font(.footnote.weight(.semibold))
                     .foregroundStyle(primaryColor)
-                    .lineLimit(2)
+                    .lineLimit(3)
             }
 
             if let subtitle = state.subtitle {
                 Text(subtitle)
                     .font(.footnote)
                     .foregroundStyle(.secondary)
-                    .lineLimit(3)
+                    .lineLimit(2)
+            }
+
+            if let detail = state.detail {
+                Text(detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
             }
 
             if let revealURL = state.revealURL {
@@ -157,18 +165,46 @@ private struct SidebarFooterView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 12)
-        .padding(.vertical, 10)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .padding(.vertical, 12)
+        .background(cardBackground, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .strokeBorder(cardStroke)
+        }
     }
 
     private var primaryColor: Color {
         switch state.style {
-        case .idle, .inProgress:
+        case .idle:
             return .primary
+        case .inProgress:
+            return .appAccent
         case .failure:
             return .red
         case .success:
             return .appAccent
+        }
+    }
+
+    private var cardBackground: AnyShapeStyle {
+        switch state.style {
+        case .inProgress:
+            return AnyShapeStyle(Color.appAccent.opacity(0.08))
+        default:
+            return AnyShapeStyle(.regularMaterial)
+        }
+    }
+
+    private var cardStroke: Color {
+        switch state.style {
+        case .inProgress:
+            return Color.appAccent.opacity(0.18)
+        case .failure:
+            return .red.opacity(0.18)
+        case .success:
+            return Color.appAccent.opacity(0.16)
+        case .idle:
+            return .white.opacity(0.08)
         }
     }
 }

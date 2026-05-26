@@ -26,13 +26,17 @@ struct ItemListColumnView<MenuContent: View>: View {
     @Binding var selectedItemID: MinecraftContentItem.ID?
     @Binding var searchText: String
     @Binding var sortMode: ItemSortMode
+    let showsHeader: Bool
+    let sourceName: String
+    let showsSourceName: Bool
     let title: String
     let subtitle: String
+    let showsSubtitle: Bool
+    let isRefreshing: Bool
     let items: [MinecraftContentItem]
     let searchPrompt: String
     let chooseFolderAction: () -> Void
     let dropAction: ([NSItemProvider]) -> Bool
-    let refreshAction: () -> Void
     let itemContextMenu: (MinecraftContentItem) -> MenuContent
 
     var body: some View {
@@ -54,17 +58,24 @@ struct ItemListColumnView<MenuContent: View>: View {
                 .listStyle(.inset)
             }
         }
+        .safeAreaInset(edge: .top, spacing: 0) {
+            if !isEmpty && showsHeader {
+                ItemListHeaderView(
+                    sourceName: sourceName,
+                    showsSourceName: showsSourceName,
+                    title: title,
+                    subtitle: subtitle,
+                    showsSubtitle: showsSubtitle,
+                    isRefreshing: isRefreshing
+                )
+            }
+        }
         .searchable(text: $searchText, prompt: searchPrompt)
         .navigationTitle(isEmpty ? "Library" : title)
         .navigationSubtitle(isEmpty ? "" : subtitle)
         .toolbar {
             if !isEmpty {
                 ToolbarItemGroup {
-                    Button(action: refreshAction) {
-                        Image(systemName: "arrow.clockwise")
-                    }
-                    .help("Rescan Source")
-
                     Menu {
                         Picker("Sort By", selection: $sortMode) {
                             ForEach(ItemSortMode.allCases) { mode in
@@ -77,6 +88,51 @@ struct ItemListColumnView<MenuContent: View>: View {
                     .help("List Options")
                 }
             }
+        }
+    }
+}
+
+private struct ItemListHeaderView: View {
+    let sourceName: String
+    let showsSourceName: Bool
+    let title: String
+    let subtitle: String
+    let showsSubtitle: Bool
+    let isRefreshing: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if showsSourceName {
+                Text(sourceName)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .textCase(.uppercase)
+            }
+
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                Text(title)
+                    .font(.title2.weight(.semibold))
+                    .lineLimit(2)
+
+                if isRefreshing {
+                    ProgressView()
+                        .controlSize(.small)
+                }
+            }
+
+            if showsSubtitle {
+                Text(subtitle)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 16)
+        .padding(.top, 10)
+        .padding(.bottom, 12)
+        .background(.regularMaterial)
+        .overlay(alignment: .bottom) {
+            Divider()
         }
     }
 }

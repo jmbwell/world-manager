@@ -13,6 +13,7 @@ struct ContentView: View {
     @StateObject private var library = SourceLibrary()
     @State private var selectedItemID: MinecraftContentItem.ID?
     @State private var selectedSidebarSelection: SidebarSelection?
+    @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var searchText = ""
     @State private var isDropTargeted = false
     @State private var isPerformingItemAction = false
@@ -21,13 +22,15 @@ struct ContentView: View {
     private let directoryPreviewLimit = 12
 
     var body: some View {
-        NavigationSplitView {
+        NavigationSplitView(columnVisibility: $columnVisibility) {
             SourcesSidebarView(
                 sources: library.sources,
                 selection: $selectedSidebarSelection,
                 footerState: library.sidebarFooterState,
                 addSourceAction: pickFolder,
                 rescanSourceAction: { source in
+                    selectedSidebarSelection = .allContent(sourceID: source.id)
+                    selectedItemID = nil
                     library.rescanSource(withID: source.id)
                 },
                 removeSourceAction: { source in
@@ -44,13 +47,17 @@ struct ContentView: View {
                 selectedItemID: $selectedItemID,
                 searchText: $searchText,
                 sortMode: $sortMode,
+                showsHeader: shouldShowItemListHeader,
+                sourceName: currentSourceDisplayName,
+                showsSourceName: !isSidebarVisible,
                 title: collectionHeaderTitle,
                 subtitle: collectionHeaderSubtitle,
+                showsSubtitle: isSearching,
+                isRefreshing: currentSource?.isScanning == true,
                 items: displayedItems,
                 searchPrompt: searchPrompt,
                 chooseFolderAction: pickFolder,
                 dropAction: handleDroppedProviders(_:),
-                refreshAction: rescanCurrentSource,
                 itemContextMenu: itemContextMenu(for:)
             )
             .navigationSplitViewColumnWidth(min: 340, ideal: 400, max: 460)
@@ -228,6 +235,34 @@ struct ContentView: View {
         return "\(filteredCount.formatted(.number)) of \(totalCount.formatted(.number)) \(noun)"
     }
 
+    private var currentSourceDisplayName: String {
+        currentSource?.displayName ?? "Library"
+    }
+
+    private var currentCollectionStatus: String? {
+        guard let currentSource else {
+            return nil
+        }
+
+        if currentSource.isScanning {
+            return currentSource.scanStatus
+        }
+
+        if let scanError = currentSource.scanError, !scanError.isEmpty {
+            return scanError
+        }
+
+        if !currentSource.scanStatus.isEmpty {
+            return currentSource.scanStatus
+        }
+
+        if let lastScanDate = currentSource.lastScanDate {
+            return "Last scanned \(lastScanDate.formatted(date: .abbreviated, time: .shortened))"
+        }
+
+        return nil
+    }
+
     private var searchScopeTitle: String {
         switch selectedSidebarSelection {
         case .some(.allContent):
@@ -241,6 +276,14 @@ struct ContentView: View {
 
     private var isSearching: Bool {
         !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var isSidebarVisible: Bool {
+        columnVisibility == .all
+    }
+
+    private var shouldShowItemListHeader: Bool {
+        isSearching || !isSidebarVisible
     }
 
     private var collectionCountNoun: String {
@@ -632,14 +675,6 @@ struct ContentView: View {
 
     private func revealInFinder(_ item: MinecraftContentItem) {
         NSWorkspace.shared.activateFileViewerSelecting([item.folderURL])
-    }
-
-    private func rescanCurrentSource() {
-        guard let sourceID = selectedSidebarSelection?.sourceID else {
-            return
-        }
-
-        library.rescanSource(withID: sourceID)
     }
 
     private func revealURLInFinder(_ url: URL) {
