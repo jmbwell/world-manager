@@ -37,6 +37,15 @@ final class SourceLibrary: ObservableObject {
 
     private var scanTasks: [URL: Task<Void, Never>] = [:]
     private var footerResetTask: Task<Void, Never>?
+    private let persistenceStore: SourcePersistenceStore
+
+    init(persistenceStore: SourcePersistenceStore = .shared) {
+        self.persistenceStore = persistenceStore
+
+        Task { [weak self] in
+            await self?.restorePersistedSources()
+        }
+    }
 
     func addSource(at url: URL) -> URL {
         let normalizedURL = url.standardizedFileURL
@@ -48,6 +57,7 @@ final class SourceLibrary: ObservableObject {
 
         sources.append(MinecraftSource(folderURL: normalizedURL))
         sources.sort { $0.displayName.localizedStandardCompare($1.displayName) == .orderedAscending }
+        persistSourceIfAvailable(withID: normalizedURL)
         startScan(for: normalizedURL)
         return normalizedURL
     }
@@ -64,6 +74,7 @@ final class SourceLibrary: ObservableObject {
         scanTasks[sourceID]?.cancel()
         scanTasks[sourceID] = nil
         sources.removeAll { $0.id == sourceID }
+        deletePersistedSource(withID: sourceID)
         refreshSidebarFooterState()
     }
 
@@ -254,6 +265,10 @@ final class SourceLibrary: ObservableObject {
             if let snapshot = await index.finishScan() {
                 applySnapshot(snapshot, to: sourceID)
             }
+            updateSource(sourceID) { source in
+                source.snapshot = buildSnapshot(for: source, packMetadataByItemID: [:])
+            }
+            persistSourceIfAvailable(withID: sourceID)
             refreshSidebarFooterState()
         } catch {
             guard !Task.isCancelled else {
@@ -453,6 +468,11 @@ final class SourceLibrary: ObservableObject {
                 $0.itemID.path.localizedStandardCompare($1.itemID.path) == .orderedAscending
             }
             source.worldPackRelationships = worldRelationships
+            source.displayItems = buildDisplayItems(
+                from: rawItems,
+                logicalPacks: logicalPacks,
+                rawItemsByID: rawItemsByID
+            )
         }
     }
 
@@ -639,6 +659,172 @@ final class SourceLibrary: ObservableObject {
             }
 
             return WorldScanner.sortItems(lhs, rhs)
+        }
+    }
+
+    private func restorePersistedSources() async {
+        let records: [PersistedSourceRecord]
+        do {
+            records = try await persistenceStore.loadSources()
+        } catch {
+            return
+        }
+
+        for record in records {
+            var source = MinecraftSource(folderURL: record.folderURL)
+            source.displayName = record.displayName
+            source.rawItems = record.rawItems
+            source.indexedItemCount = record.rawItems.count
+            source.indexedDetailCount = record.rawItems.filter(\.metadataLoaded).count
+            source.lastScanDate = record.lastScanDate
+            source.snapshot = record.snapshot
+
+            sources.append(source)
+            rebuildNormalizedIndex(for: source.id)
+
+            updateSource(source.id) { source in
+                source.displayItems = source.displayItems.sorted(by: WorldScanner.sortItems)
+                source.scanStatus = source.indexedItemCount == 0
+                    ? "No Minecraft items found."
+                    : "Loaded \(source.indexedDetailCount) items."
+            }
+        }
+
+        sources.sort { $0.displayName.localizedStandardCompare($1.displayName) == .orderedAscending }
+        refreshSidebarFooterState()
+
+        for record in records {
+            if sourceNeedsRescan(record) {
+                startScan(for: record.folderURL)
+            }
+        }
+    }
+
+    private func sourceNeedsRescan(_ record: PersistedSourceRecord) -> Bool {
+        guard let snapshot = record.snapshot else {
+            return true
+        }
+
+        let fileManager = FileManager.default
+        let sourceURL = record.folderURL
+
+        guard fileManager.fileExists(atPath: sourceURL.path) else {
+            return true
+        }
+
+        let currentCollections = Dictionary(uniqueKeysWithValues: currentCollectionSnapshots(for: sourceURL).map { ($0.folderName, $0) })
+        let persistedCollections = Dictionary(uniqueKeysWithValues: snapshot.collectionSnapshots.map { ($0.folderName, $0) })
+
+        if currentCollections.count != persistedCollections.count {
+            return true
+        }
+
+        for (folderName, persistedCollection) in persistedCollections {
+            guard let currentCollection = currentCollections[folderName], currentCollection == persistedCollection else {
+                return true
+            }
+        }
+
+        for itemSnapshot in snapshot.itemSnapshots {
+            let itemURL = sourceURL.appendingPathComponent(itemSnapshot.relativePath, isDirectory: true)
+            guard fileManager.fileExists(atPath: itemURL.path) else {
+                return true
+            }
+
+            let modifiedDate = try? itemURL.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
+            if modifiedDate != itemSnapshot.modifiedDate {
+                return true
+            }
+        }
+
+        return false
+    }
+
+    private func currentCollectionSnapshots(for sourceURL: URL) -> [CollectionSnapshot] {
+        let fileManager = FileManager.default
+
+        return MinecraftContentType.allCases.compactMap { type -> CollectionSnapshot? in
+            let collectionURL = sourceURL.appendingPathComponent(type.collectionFolderName, isDirectory: true)
+            guard fileManager.fileExists(atPath: collectionURL.path) else {
+                return nil
+            }
+
+            let children = (try? fileManager.contentsOfDirectory(
+                at: collectionURL,
+                includingPropertiesForKeys: [.isDirectoryKey],
+                options: [.skipsHiddenFiles]
+            )) ?? []
+            let childDirectoryCount = children.filter {
+                (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
+            }.count
+            let modifiedDate = try? collectionURL.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
+
+            return CollectionSnapshot(
+                folderName: type.collectionFolderName,
+                modifiedDate: modifiedDate,
+                childDirectoryCount: childDirectoryCount,
+                fingerprint: [
+                    type.collectionFolderName,
+                    String(childDirectoryCount),
+                    modifiedDate?.timeIntervalSince1970.formatted() ?? "nil"
+                ].joined(separator: "::")
+            )
+        }
+    }
+
+    private func buildDisplayItems(
+        from rawItems: [MinecraftContentItem],
+        logicalPacks: [LogicalPack],
+        rawItemsByID: [URL: MinecraftContentItem]
+    ) -> [MinecraftContentItem] {
+        var normalizedItemIDs = Set<URL>()
+        var normalizedItems: [MinecraftContentItem] = []
+
+        for item in rawItems where item.contentType == .world {
+            guard normalizedItemIDs.insert(item.id).inserted else {
+                continue
+            }
+
+            normalizedItems.append(item)
+        }
+
+        for logicalPack in logicalPacks {
+            guard
+                let item = rawItemsByID[logicalPack.representativeItemID],
+                normalizedItemIDs.insert(item.id).inserted
+            else {
+                continue
+            }
+
+            normalizedItems.append(item)
+        }
+
+        for item in rawItems where item.contentType == .skinPack || item.contentType == .worldTemplate {
+            guard normalizedItemIDs.insert(item.id).inserted else {
+                continue
+            }
+
+            normalizedItems.append(item)
+        }
+
+        return normalizedItems
+    }
+
+    private func persistSourceIfAvailable(withID sourceID: URL) {
+        guard let source = source(withID: sourceID) else {
+            return
+        }
+
+        let persistedSource = source
+        Task {
+            try? await persistenceStore.save(source: persistedSource)
+        }
+    }
+
+    private func deletePersistedSource(withID sourceID: URL) {
+        let normalizedSourceID = sourceID.standardizedFileURL
+        Task {
+            try? await persistenceStore.deleteSource(withID: normalizedSourceID)
         }
     }
 
@@ -879,6 +1065,11 @@ private actor SourceIndexActor {
 
     private var orderedItemIDs: [URL] = []
     private var itemsByID: [URL: MinecraftContentItem] = [:]
+    private var packMetadataByItemID: [URL: PackMetadata] = [:]
+    private var packIdentityByItemID: [URL: String] = [:]
+    private var packIdentityValueByID: [String: PackIdentity] = [:]
+    private var packItemIDsByIdentityID: [String: Set<URL>] = [:]
+    private var packRepresentativeItemIDByIdentityID: [String: URL] = [:]
     private var indexedItemCount = 0
     private var indexedDetailCount = 0
     private var discoveryFinished = false
@@ -904,6 +1095,11 @@ private actor SourceIndexActor {
         if item.metadataLoaded, previous?.metadataLoaded != true {
             indexedDetailCount += 1
         }
+
+        if isLogicalPackType(item.contentType) {
+            refreshTrackedPackIdentity(for: item, previousItem: previous)
+        }
+
         return snapshotIfNeeded()
     }
 
@@ -949,6 +1145,13 @@ private actor SourceIndexActor {
         lastPublishedAt = now
 
         let rawItems = orderedItemIDs.compactMap { itemsByID[$0] }
+        let rawItemsByID = Dictionary(uniqueKeysWithValues: rawItems.map { ($0.id, $0) })
+        let logicalPacks = buildLogicalPacks(rawItemsByID: rawItemsByID)
+        let dedupedDisplayItems = buildDisplayItems(
+            from: rawItems,
+            logicalPacks: logicalPacks,
+            rawItemsByID: rawItemsByID
+        )
         let scanStatus: String
 
         if !discoveryFinished {
@@ -957,9 +1160,9 @@ private actor SourceIndexActor {
                 : "Found \(indexedItemCount) items. Loading metadata..."
 
             return SourceIndexSnapshot(
-                displayItems: buildRawDisplayItems(from: rawItems),
+                displayItems: dedupedDisplayItems,
                 rawItems: rawItems,
-                logicalPacks: [],
+                logicalPacks: logicalPacks,
                 logicalWorlds: [],
                 packInstances: [],
                 worldPackRelationships: [],
@@ -971,65 +1174,6 @@ private actor SourceIndexActor {
             )
         }
 
-        let rawPacks = rawItems.filter {
-            $0.contentType == .behaviorPack || $0.contentType == .resourcePack
-        }
-        let rawItemsByID = Dictionary(uniqueKeysWithValues: rawItems.map { ($0.id, $0) })
-
-        let packMetadataByItemID = Dictionary(uniqueKeysWithValues: rawPacks.map { item in
-            (item.id, packMetadata(for: item))
-        })
-
-        var chosenRepresentativeByIdentity: [PackIdentity: MinecraftContentItem] = [:]
-        var allPackItemsByIdentity: [PackIdentity: [MinecraftContentItem]] = [:]
-
-        for item in rawPacks {
-            let metadata = packMetadataByItemID[item.id] ?? packMetadata(for: item)
-            let identity = metadata.identity
-            allPackItemsByIdentity[identity, default: []].append(item)
-
-            guard let existing = chosenRepresentativeByIdentity[identity] else {
-                chosenRepresentativeByIdentity[identity] = item
-                continue
-            }
-
-            if shouldPreferPackItem(item, over: existing) {
-                chosenRepresentativeByIdentity[identity] = item
-            }
-        }
-
-        let logicalPacks = allPackItemsByIdentity.keys.sorted {
-            let lhs = chosenRepresentativeByIdentity[$0]?.displayName ?? ""
-            let rhs = chosenRepresentativeByIdentity[$1]?.displayName ?? ""
-            let nameOrder = lhs.localizedStandardCompare(rhs)
-            if nameOrder != .orderedSame {
-                return nameOrder == .orderedAscending
-            }
-
-            return $0.id.localizedStandardCompare($1.id) == .orderedAscending
-        }.compactMap { identity -> LogicalPack? in
-            guard
-                let representativeItem = chosenRepresentativeByIdentity[identity],
-                let instances = allPackItemsByIdentity[identity]
-            else {
-                return nil
-            }
-
-            let metadata = packMetadataByItemID[representativeItem.id]
-
-            return LogicalPack(
-                id: identity,
-                contentType: identity.type,
-                displayName: representativeItem.displayName,
-                uuid: metadata?.uuid,
-                version: metadata?.version,
-                representativeItemID: representativeItem.id,
-                instanceItemIDs: instances.map(\.id).sorted { $0.path.localizedStandardCompare($1.path) == .orderedAscending },
-                isSuspicious: identity.isSuspicious
-            )
-        }
-
-        let dedupedDisplayItems = buildDisplayItems(from: rawItems, logicalPacks: logicalPacks, rawItemsByID: rawItemsByID)
         if !metadataFinished {
             scanStatus = indexedItemCount == 0
                 ? "No Minecraft items found."
@@ -1071,12 +1215,12 @@ private actor SourceIndexActor {
             }
         }
 
-        let logicalPacksByID = Dictionary(uniqueKeysWithValues: logicalPacks.map { ($0.id, $0) })
+        let logicalPacksByID = Dictionary(uniqueKeysWithValues: logicalPacks.map { ($0.id.canonicalKey, $0) })
         var worldRelationships: [WorldPackRelationship] = []
         var logicalWorlds: [LogicalWorld] = []
 
         for world in rawWorlds {
-            var usedPackIDs = Set<PackIdentity>()
+            var usedPackIDsByID: [String: PackIdentity] = [:]
             var unresolvedReferences: [ContentPackReference] = []
 
             for reference in world.packReferences {
@@ -1087,10 +1231,10 @@ private actor SourceIndexActor {
                     fallbackName: reference.name,
                     fallbackLocationHint: world.folderName
                 )
-                let resolvedID = logicalPacksByID[referenceIdentity]?.id
+                let resolvedID = logicalPacksByID[referenceIdentity.canonicalKey]?.id
 
                 if let resolvedID {
-                    usedPackIDs.insert(resolvedID)
+                    usedPackIDsByID[resolvedID.id] = resolvedID
                 } else {
                     unresolvedReferences.append(reference)
                 }
@@ -1108,7 +1252,7 @@ private actor SourceIndexActor {
                 LogicalWorld(
                     id: world.id,
                     itemID: world.id,
-                    usedPackIDs: usedPackIDs.sorted { $0.id.localizedStandardCompare($1.id) == .orderedAscending },
+                    usedPackIDs: usedPackIDsByID.values.sorted { $0.id.localizedStandardCompare($1.id) == .orderedAscending },
                     unresolvedReferences: unresolvedReferences
                 )
             )
@@ -1194,6 +1338,43 @@ private actor SourceIndexActor {
         rawItems.sorted(by: WorldScanner.sortItems)
     }
 
+    private func buildLogicalPacks(rawItemsByID: [URL: MinecraftContentItem]) -> [LogicalPack] {
+        packItemIDsByIdentityID.keys.sorted {
+            let lhs = packRepresentativeItemIDByIdentityID[$0].flatMap { rawItemsByID[$0]?.displayName } ?? ""
+            let rhs = packRepresentativeItemIDByIdentityID[$1].flatMap { rawItemsByID[$0]?.displayName } ?? ""
+            let nameOrder = lhs.localizedStandardCompare(rhs)
+            if nameOrder != .orderedSame {
+                return nameOrder == .orderedAscending
+            }
+
+            return $0.localizedStandardCompare($1) == .orderedAscending
+        }.compactMap { identityID in
+            guard
+                let identity = packIdentityValueByID[identityID],
+                let representativeItemID = packRepresentativeItemIDByIdentityID[identityID],
+                let representativeItem = rawItemsByID[representativeItemID],
+                let instanceItemIDs = packItemIDsByIdentityID[identityID]
+            else {
+                return nil
+            }
+
+            let metadata = packMetadataByItemID[representativeItemID]
+
+            return LogicalPack(
+                id: identity,
+                contentType: identity.type,
+                displayName: representativeItem.displayName,
+                uuid: metadata?.uuid,
+                version: metadata?.version,
+                representativeItemID: representativeItemID,
+                instanceItemIDs: instanceItemIDs.sorted {
+                    $0.path.localizedStandardCompare($1.path) == .orderedAscending
+                },
+                isSuspicious: identity.isSuspicious
+            )
+        }
+    }
+
     private func packMetadata(for item: MinecraftContentItem) -> PackMetadata {
         let uuid = item.packUUID
         let version = item.packVersion
@@ -1242,5 +1423,85 @@ private actor SourceIndexActor {
         rawWorlds.first(where: { world in
             packItem.folderURL.path.hasPrefix(world.folderURL.path + "/")
         })?.id
+    }
+
+    private func refreshTrackedPackIdentity(for item: MinecraftContentItem, previousItem: MinecraftContentItem?) {
+        let previousIdentityID = packIdentityByItemID[item.id]
+        let newMetadata = packMetadata(for: item)
+        let newIdentity = newMetadata.identity
+        let newIdentityID = newIdentity.canonicalKey
+
+        packMetadataByItemID[item.id] = newMetadata
+        packIdentityByItemID[item.id] = newIdentityID
+        packIdentityValueByID[newIdentityID] = newIdentity
+
+        if let previousIdentityID, previousIdentityID != newIdentityID {
+            removePackItem(itemID: item.id, fromIdentityID: previousIdentityID)
+        }
+
+        packItemIDsByIdentityID[newIdentityID, default: []].insert(item.id)
+        refreshRepresentative(forIdentityID: newIdentityID)
+
+        if let previousItem, previousIdentityID == newIdentityID {
+            guard
+                let representativeItemID = packRepresentativeItemIDByIdentityID[newIdentityID],
+                let currentRepresentative = itemsByID[representativeItemID]
+            else {
+                return
+            }
+
+            if shouldPreferPackItem(item, over: currentRepresentative) || representativeItemID == item.id {
+                refreshRepresentative(forIdentityID: newIdentityID)
+            } else if representativeItemID == previousItem.id {
+                refreshRepresentative(forIdentityID: newIdentityID)
+            }
+        }
+    }
+
+    private func removePackItem(itemID: URL, fromIdentityID identityID: String) {
+        guard var itemIDs = packItemIDsByIdentityID[identityID] else {
+            return
+        }
+
+        itemIDs.remove(itemID)
+        if itemIDs.isEmpty {
+            packItemIDsByIdentityID[identityID] = nil
+            packRepresentativeItemIDByIdentityID[identityID] = nil
+            packIdentityValueByID[identityID] = nil
+        } else {
+            packItemIDsByIdentityID[identityID] = itemIDs
+            if packRepresentativeItemIDByIdentityID[identityID] == itemID {
+                refreshRepresentative(forIdentityID: identityID)
+            }
+        }
+    }
+
+    private func refreshRepresentative(forIdentityID identityID: String) {
+        guard let itemIDs = packItemIDsByIdentityID[identityID] else {
+            packRepresentativeItemIDByIdentityID[identityID] = nil
+            return
+        }
+
+        let candidateIDs = itemIDs.sorted {
+            $0.path.localizedStandardCompare($1.path) == .orderedAscending
+        }
+
+        guard
+            let firstID = candidateIDs.first,
+            let firstItem = itemsByID[firstID]
+        else {
+            packRepresentativeItemIDByIdentityID[identityID] = nil
+            return
+        }
+
+        let representative = candidateIDs.dropFirst().compactMap { itemsByID[$0] }.reduce(firstItem) { current, candidate in
+            shouldPreferPackItem(candidate, over: current) ? candidate : current
+        }
+
+        packRepresentativeItemIDByIdentityID[identityID] = representative.id
+    }
+
+    private func isLogicalPackType(_ contentType: MinecraftContentType) -> Bool {
+        contentType == .behaviorPack || contentType == .resourcePack
     }
 }

@@ -158,4 +158,64 @@ struct World_Manager_for_MinecraftTests {
         #expect(enrichedWorld.packReferences.first?.version == "1.0.0")
     }
 
+    @Test func sourcePersistenceStoreRoundTripsCachedSource() async throws {
+        let fileManager = FileManager.default
+        let workingURL = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let databaseURL = workingURL.appendingPathComponent("cache.sqlite", isDirectory: false)
+        let sourceURL = workingURL.appendingPathComponent("Source", isDirectory: true)
+        defer { try? fileManager.removeItem(at: workingURL) }
+
+        let item = MinecraftContentItem(
+            folderURL: sourceURL.appendingPathComponent("minecraftWorlds/WorldA", isDirectory: true),
+            folderName: "WorldA",
+            contentType: .world,
+            collectionRootURL: sourceURL.appendingPathComponent("minecraftWorlds", isDirectory: true),
+            displayName: "World A",
+            modifiedDate: Date(timeIntervalSince1970: 100),
+            sizeBytes: 42,
+            metadataLoaded: true,
+            sizeLoaded: true
+        )
+        let snapshot = SourceSnapshot(
+            sourceID: sourceURL,
+            rootModifiedDate: Date(timeIntervalSince1970: 10),
+            collectionSnapshots: [
+                CollectionSnapshot(
+                    folderName: MinecraftContentType.world.collectionFolderName,
+                    modifiedDate: Date(timeIntervalSince1970: 11),
+                    childDirectoryCount: 1,
+                    fingerprint: "minecraftWorlds::1::11"
+                )
+            ],
+            itemSnapshots: [
+                ItemSnapshot(
+                    id: item.id,
+                    relativePath: "minecraftWorlds/WorldA",
+                    modifiedDate: item.modifiedDate,
+                    sizeBytes: item.sizeBytes,
+                    packUUID: nil,
+                    packVersion: nil
+                )
+            ]
+        )
+
+        var source = MinecraftSource(folderURL: sourceURL)
+        source.displayName = "Source"
+        source.rawItems = [item]
+        source.snapshot = snapshot
+        source.lastScanDate = Date(timeIntervalSince1970: 200)
+
+        let store = SourcePersistenceStore(databaseURL: databaseURL)
+        try await store.save(source: source)
+
+        let restored = try await store.loadSources()
+
+        #expect(restored.count == 1)
+        #expect(restored.first?.folderURL == sourceURL.standardizedFileURL)
+        #expect(restored.first?.displayName == "Source")
+        #expect(restored.first?.rawItems == [item])
+        #expect(restored.first?.snapshot == snapshot)
+        #expect(restored.first?.lastScanDate == source.lastScanDate)
+    }
+
 }

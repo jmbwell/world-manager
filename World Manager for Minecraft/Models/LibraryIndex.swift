@@ -20,7 +20,7 @@ struct PackIdentity: Hashable, Sendable, Identifiable {
     let fallbackLocationHint: String?
     let source: PackIdentitySource
 
-    var id: String {
+    nonisolated var id: String {
         [
             type.rawValue,
             uuid ?? normalizedFallbackName,
@@ -29,11 +29,28 @@ struct PackIdentity: Hashable, Sendable, Identifiable {
         ].joined(separator: "::")
     }
 
-    var isSuspicious: Bool {
+    nonisolated var canonicalKey: String {
+        if let uuid {
+            return [
+                type.rawValue,
+                uuid,
+                version ?? ""
+            ].joined(separator: "::")
+        }
+
+        return [
+            type.rawValue,
+            normalizedFallbackName,
+            version ?? "",
+            fallbackLocationHint ?? ""
+        ].joined(separator: "::")
+    }
+
+    nonisolated var isSuspicious: Bool {
         source == .fallback
     }
 
-    init(
+    nonisolated init(
         type: MinecraftContentType,
         uuid: String?,
         version: String?,
@@ -48,11 +65,11 @@ struct PackIdentity: Hashable, Sendable, Identifiable {
         self.source = self.uuid == nil ? .fallback : .manifestUUID
     }
 
-    private var normalizedFallbackName: String {
+    private nonisolated var normalizedFallbackName: String {
         fallbackName.lowercased()
     }
 
-    static func == (lhs: PackIdentity, rhs: PackIdentity) -> Bool {
+    nonisolated static func == (lhs: PackIdentity, rhs: PackIdentity) -> Bool {
         guard lhs.type == rhs.type else {
             return false
         }
@@ -67,7 +84,7 @@ struct PackIdentity: Hashable, Sendable, Identifiable {
             && lhs.fallbackLocationHint == rhs.fallbackLocationHint
     }
 
-    func hash(into hasher: inout Hasher) {
+    nonisolated func hash(into hasher: inout Hasher) {
         hasher.combine(type)
 
         if let uuid {
@@ -124,7 +141,7 @@ struct WorldPackRelationship: Identifiable, Hashable, Sendable {
     }
 }
 
-struct ItemSnapshot: Identifiable, Hashable, Sendable {
+struct ItemSnapshot: Identifiable, Hashable, Sendable, Codable {
     let id: URL
     let relativePath: String
     let modifiedDate: Date?
@@ -133,7 +150,7 @@ struct ItemSnapshot: Identifiable, Hashable, Sendable {
     let packVersion: String?
 }
 
-struct CollectionSnapshot: Identifiable, Hashable, Sendable {
+struct CollectionSnapshot: Identifiable, Hashable, Sendable, Codable {
     let folderName: String
     let modifiedDate: Date?
     let childDirectoryCount: Int
@@ -142,7 +159,7 @@ struct CollectionSnapshot: Identifiable, Hashable, Sendable {
     var id: String { folderName }
 }
 
-struct SourceSnapshot: Hashable, Sendable {
+struct SourceSnapshot: Hashable, Sendable, Codable {
     let sourceID: URL
     let rootModifiedDate: Date?
     let collectionSnapshots: [CollectionSnapshot]
