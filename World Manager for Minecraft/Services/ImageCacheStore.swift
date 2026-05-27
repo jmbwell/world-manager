@@ -76,6 +76,33 @@ actor ImageCacheStore {
         url.standardizedFileURL.path.hasPrefix(cacheDirectoryPath + "/")
     }
 
+    func cachedImageURL(
+        forRemoteData data: Data,
+        cacheKey: String,
+        pathExtension: String
+    ) -> URL? {
+        let normalizedExtension = pathExtension.isEmpty ? "img" : pathExtension
+        let dataDigest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        let sourceKey = digest(for: cacheKey)
+        let cachedURL = cacheDirectoryURL
+            .appendingPathComponent("\(sourceKey)-\(dataDigest)", isDirectory: false)
+            .appendingPathExtension(normalizedExtension)
+
+        do {
+            try fileManager.createDirectory(at: cacheDirectoryURL, withIntermediateDirectories: true)
+
+            if fileManager.fileExists(atPath: cachedURL.path) {
+                return cachedURL
+            }
+
+            purgeStaleVariants(forSourceKey: sourceKey, keeping: cachedURL)
+            try data.write(to: cachedURL, options: .atomic)
+            return cachedURL
+        } catch {
+            return nil
+        }
+    }
+
     private func purgeStaleVariants(forSourceKey sourceKey: String, keeping cachedURL: URL) {
         guard let cachedFiles = try? fileManager.contentsOfDirectory(
             at: cacheDirectoryURL,

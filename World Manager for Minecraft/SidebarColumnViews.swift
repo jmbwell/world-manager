@@ -21,42 +21,39 @@ struct SidebarFilter: Identifiable, Hashable {
 }
 
 struct SourcesSidebarView: View {
-    let sources: [MinecraftSource]
+    let localSources: [MinecraftSource]
+    let connectedDevices: [ConnectedDeviceSidebarEntry]
     @Binding var selection: SidebarSelection?
     let footerState: SidebarFooterState
     let addSourceAction: () -> Void
     let addDeviceSourceAction: () -> Void
+    let addConnectedDeviceAction: (ConnectedDeviceSidebarEntry) -> Void
     let rescanSourceAction: (MinecraftSource) -> Void
     let removeSourceAction: (MinecraftSource) -> Void
     let revealFooterURLAction: (URL) -> Void
     let filters: (MinecraftSource) -> [SidebarFilter]
+    let matchedSource: (ConnectedDeviceSidebarEntry) -> MinecraftSource?
 
     var body: some View {
         List(selection: $selection) {
-            Section {
-                ForEach(sources) { source in
-                    SourceHeaderRow(title: source.displayName)
-                        .listRowSeparator(.hidden)
-                        .padding(.top, 6)
-                        .contextMenu {
-                            Button("Rescan \"\(source.displayName)\"") {
-                                rescanSourceAction(source)
-                            }
-
-                            Divider()
-
-                            Button("Remove \"\(source.displayName)\"", role: .destructive) {
-                                removeSourceAction(source)
-                            }
-                        }
-
-                    ForEach(filters(source)) { filter in
-                        SidebarFilterRow(filter: filter, isIndented: true)
-                            .tag(filter.selection as SidebarSelection?)
+            if !localSources.isEmpty {
+                Section {
+                    ForEach(localSources) { source in
+                        sourceSectionRows(for: source)
                     }
+                } header: {
+                    SidebarSourcesSectionHeaderView(title: "Libraries")
                 }
-            } header: {
-                SidebarSourcesSectionHeaderView()
+            }
+
+            if !connectedDevices.isEmpty {
+                Section {
+                    ForEach(connectedDevices) { entry in
+                        connectedDeviceSectionRows(for: entry)
+                    }
+                } header: {
+                    SidebarSourcesSectionHeaderView(title: "Connected Devices")
+                }
             }
         }
         .listStyle(.sidebar)
@@ -88,6 +85,45 @@ struct SourcesSidebarView: View {
         }
         .animation(.easeInOut(duration: 0.2), value: footerState.style)
     }
+
+    @ViewBuilder
+    private func sourceSectionRows(for source: MinecraftSource) -> some View {
+        SourceHeaderRow(title: source.displayName)
+            .listRowSeparator(.hidden)
+            .padding(.top, 6)
+            .contextMenu {
+                Button("Rescan \"\(source.displayName)\"") {
+                    rescanSourceAction(source)
+                }
+
+                Divider()
+
+                Button("Remove \"\(source.displayName)\"", role: .destructive) {
+                    removeSourceAction(source)
+                }
+            }
+
+        ForEach(filters(source)) { filter in
+            SidebarFilterRow(filter: filter, isIndented: true)
+                .tag(filter.selection as SidebarSelection?)
+        }
+    }
+
+    @ViewBuilder
+    private func connectedDeviceSectionRows(for entry: ConnectedDeviceSidebarEntry) -> some View {
+        if let source = matchedSource(entry) {
+            sourceSectionRows(for: source)
+        } else {
+            ConnectedDeviceRow(
+                entry: entry,
+                addAction: entry.hasMinecraftContainer ? {
+                    addConnectedDeviceAction(entry)
+                } : nil
+            )
+            .listRowSeparator(.hidden)
+            .padding(.top, 6)
+        }
+    }
 }
 
 private struct SidebarFilterRow: View {
@@ -112,8 +148,10 @@ private struct SidebarFilterRow: View {
 }
 
 private struct SidebarSourcesSectionHeaderView: View {
+    let title: String
+
     var body: some View {
-        Text("Libraries")
+        Text(title)
             .font(.headline)
             .foregroundStyle(.secondary)
             .textCase(nil)
@@ -127,6 +165,84 @@ private struct SourceHeaderRow: View {
         Text(title)
             .font(.subheadline.weight(.semibold))
             .foregroundStyle(.secondary)
+    }
+}
+
+private struct ConnectedDeviceRow: View {
+    let entry: ConnectedDeviceSidebarEntry
+    let addAction: (() -> Void)?
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: iconName)
+                .frame(width: 16)
+                .foregroundStyle(iconColor)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(entry.device.name)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(titleColor)
+
+                Text(statusText)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer(minLength: 12)
+
+            if let addAction {
+                Button("Add") {
+                    addAction()
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+            }
+        }
+        .opacity(addAction == nil ? 0.68 : 1)
+    }
+
+    private var iconName: String {
+        if entry.hasMinecraftContainer {
+            return "iphone.gen3"
+        }
+
+        switch entry.device.trustState {
+        case .trusted:
+            return "iphone.slash"
+        case .locked, .untrusted:
+            return "lock.iphone"
+        case .unavailable:
+            return "iphone.gen3.slash"
+        }
+    }
+
+    private var iconColor: Color {
+        entry.hasMinecraftContainer ? .appAccent : .secondary
+    }
+
+    private var titleColor: Color {
+        addAction == nil ? .secondary : .primary
+    }
+
+    private var statusText: String {
+        if let errorDescription = entry.discoveryErrorDescription, !errorDescription.isEmpty {
+            return errorDescription
+        }
+
+        switch entry.device.trustState {
+        case .trusted:
+            if entry.hasMinecraftContainer, let container = entry.minecraftContainer {
+                return "Minecraft found in \(container.appName)"
+            }
+
+            return "No Minecraft source found"
+        case .locked:
+            return "Unlock this device to inspect apps"
+        case .untrusted:
+            return "Trust this device to inspect apps"
+        case .unavailable:
+            return "Device unavailable"
+        }
     }
 }
 

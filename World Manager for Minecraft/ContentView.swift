@@ -19,6 +19,7 @@ struct ContentView: View {
     @State private var isPerformingItemAction = false
     @State private var isShowingDeviceSourceSheet = false
     @State private var sortMode: ItemSortMode = .name
+    @State private var directoryPreviewContents: [DirectoryPreviewEntry] = []
 
     private let connectedDeviceAccess: AppleMobileDeviceSourceAccess
     private let deviceSourceFactory: ConnectedDeviceSourceFactory
@@ -32,7 +33,8 @@ struct ContentView: View {
             wrappedValue: SourceLibrary(
                 sourceAccessMethod: SourceAccessCoordinator(
                     connectedDeviceAccess: connectedDeviceAccess
-                )
+                ),
+                connectedDeviceAccessMethod: connectedDeviceAccess
             )
         )
     }
@@ -40,11 +42,13 @@ struct ContentView: View {
     var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
             SourcesSidebarView(
-                sources: library.sources,
+                localSources: library.localSources,
+                connectedDevices: library.connectedDevices,
                 selection: $selectedSidebarSelection,
                 footerState: library.sidebarFooterState,
                 addSourceAction: pickFolder,
                 addDeviceSourceAction: { isShowingDeviceSourceSheet = true },
+                addConnectedDeviceAction: addConnectedDeviceSource(from:),
                 rescanSourceAction: { source in
                     selectedSidebarSelection = .allContent(sourceID: source.id)
                     selectedItemID = nil
@@ -54,12 +58,19 @@ struct ContentView: View {
                     removeSource(source.id)
                 },
                 revealFooterURLAction: revealURLInFinder(_:),
-                filters: sidebarFilters(for:)
+                filters: sidebarFilters(for:),
+                matchedSource: { entry in
+                    guard let sourceID = entry.matchedSourceID else {
+                        return nil
+                    }
+
+                    return library.source(withID: sourceID)
+                }
             )
             .navigationSplitViewColumnWidth(min: 280, ideal: 320, max: 380)
         } content: {
             ItemListColumnView(
-                isEmpty: library.sources.isEmpty,
+                isEmpty: library.visibleSources.isEmpty && library.connectedDevices.isEmpty,
                 isDropTargeted: $isDropTargeted,
                 selectedItemID: $selectedItemID,
                 searchText: $searchText,
@@ -87,9 +98,9 @@ struct ContentView: View {
                 worldsUsingPack: currentSelectedItem.map(worldsUsingPack(for:)) ?? [],
                 backingPackInstances: currentSelectedItem.map(backingPackInstances(for:)) ?? [],
                 isSuspiciousPack: currentSelectedItem.map(isSuspiciousPack(_:)) ?? false,
-                contents: currentSelectedItem.map(directoryPreviewEntries(for:)) ?? [],
+                contents: directoryPreviewContents,
                 directoryPreviewLimit: directoryPreviewLimit,
-                isEmpty: library.sources.isEmpty,
+                isEmpty: library.visibleSources.isEmpty && library.connectedDevices.isEmpty,
                 isPerformingItemAction: isPerformingItemAction,
                 exportTitle: currentSelectedItem.map(primaryActionTitle(for:)),
                 exportAction: {
@@ -126,7 +137,7 @@ struct ContentView: View {
                 deviceDiscoveryService: connectedDeviceAccess,
                 sourceFactory: deviceSourceFactory,
                 onAddSource: { source in
-                    let sourceID = library.addSource(source, shouldPersist: false, shouldScan: true)
+                    let sourceID = library.addSource(source, shouldPersist: true, shouldScan: true)
                     selectedSidebarSelection = .allContent(sourceID: sourceID)
                     selectedItemID = nil
                     isShowingDeviceSourceSheet = false
@@ -141,8 +152,14 @@ struct ContentView: View {
 
             self.selectedItemID = nil
         }
-        .onChange(of: library.sources.map(\.id)) { _, sourceIDs in
-            syncSelection(with: sourceIDs)
+        .onChange(of: library.sources.map(\.id)) { _, _ in
+            syncSelection(with: library.visibleSources.map(\.id))
+        }
+        .onChange(of: library.connectedDevices.map { "\($0.id)::\($0.matchedSourceID?.absoluteString ?? "nil")" }) { _, _ in
+            syncSelection(with: library.visibleSources.map(\.id))
+        }
+        .task(id: currentSelectedItem?.id) {
+            await refreshDirectoryPreviewContents()
         }
     }
 
@@ -176,7 +193,7 @@ struct ContentView: View {
 
     private var currentSource: MinecraftSource? {
         guard let sourceID = selectedSidebarSelection?.sourceID else {
-            return library.sources.first
+            return library.visibleSources.first
         }
 
         return library.source(withID: sourceID)
@@ -187,7 +204,7 @@ struct ContentView: View {
             return nil
         }
 
-        return library.sources
+        return library.visibleSources
             .flatMap(\.items)
             .first(where: { $0.id == selectedItemID })
     }
@@ -503,31 +520,22 @@ struct ContentView: View {
         return logicalPack.isSuspicious
     }
 
-    private func directoryPreviewEntries(for item: MinecraftContentItem) -> [DirectoryPreviewEntry] {
-        let fileManager = FileManager.default
-
-        guard let urls = try? fileManager.contentsOfDirectory(
-            at: item.folderURL,
-            includingPropertiesForKeys: [.isDirectoryKey],
-            options: [.skipsHiddenFiles]
-        ) else {
-            return []
+    private func refreshDirectoryPreviewContents() async {
+        guard let item = currentSelectedItem, let source = currentSource else {
+            await MainActor.run {
+                directoryPreviewContents = []
+            }
+            return
         }
 
-        return urls
-            .map { url in
-                let isDirectory = (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
-                return DirectoryPreviewEntry(name: url.lastPathComponent, isDirectory: isDirectory)
-            }
-            .sorted { lhs, rhs in
-                if lhs.isDirectory != rhs.isDirectory {
-                    return lhs.isDirectory && !rhs.isDirectory
-                }
+        let contents = (try? await library.listContents(for: item, in: source)) ?? []
+        guard !Task.isCancelled else {
+            return
+        }
 
-                return lhs.name.localizedStandardCompare(rhs.name) == .orderedAscending
-            }
-            .prefix(directoryPreviewLimit)
-            .map { $0 }
+        await MainActor.run {
+            directoryPreviewContents = Array(contents.prefix(directoryPreviewLimit))
+        }
     }
 
     private func pickFolder() {
@@ -582,7 +590,7 @@ struct ContentView: View {
     }
 
     private func removeSource(_ sourceID: URL) {
-        let fallbackSourceID = library.sources.first(where: { $0.id != sourceID })?.id
+        let fallbackSourceID = library.visibleSources.first(where: { $0.id != sourceID })?.id
         library.removeSource(withID: sourceID)
 
         if selectedSidebarSelection?.sourceID == sourceID {
@@ -594,6 +602,17 @@ struct ContentView: View {
         }
     }
 
+    private func addConnectedDeviceSource(from entry: ConnectedDeviceSidebarEntry) {
+        guard let container = entry.minecraftContainer else {
+            return
+        }
+
+        let source = deviceSourceFactory.makeSource(device: entry.device, container: container)
+        let sourceID = library.addSource(source, shouldPersist: true, shouldScan: true)
+        selectedSidebarSelection = .allContent(sourceID: sourceID)
+        selectedItemID = nil
+    }
+
     private func syncSelection(with sourceIDs: [URL]) {
         if let selectedSidebarSelection, !sourceIDs.contains(selectedSidebarSelection.sourceID) {
             self.selectedSidebarSelection = sourceIDs.first.map { .allContent(sourceID: $0) }
@@ -602,7 +621,7 @@ struct ContentView: View {
         }
 
         if let selectedItemID {
-            let itemStillExists = library.sources
+            let itemStillExists = library.visibleSources
                 .flatMap(\.items)
                 .contains(where: { $0.id == selectedItemID })
 
@@ -636,7 +655,11 @@ struct ContentView: View {
         Task {
             do {
                 let finalURL = try await Task.detached(priority: .userInitiated) {
-                    try ContentPackageExporter.createArchiveFile(for: item, source: source, destinationURL: destinationURL)
+                    try await ContentPackageExporter.createArchiveFile(
+                        for: item,
+                        source: source,
+                        destinationURL: destinationURL
+                    )
                 }.value
 
                 await MainActor.run {
@@ -668,7 +691,10 @@ struct ContentView: View {
         Task {
             do {
                 let shareURL = try await Task.detached(priority: .userInitiated) {
-                    try ContentPackageExporter.createArchiveFile(for: item, source: source)
+                    try await ContentPackageExporter.createArchiveFile(
+                        for: item,
+                        source: source
+                    )
                 }.value
 
                 await MainActor.run {
@@ -703,7 +729,42 @@ struct ContentView: View {
     }
 
     private func revealInFinder(_ item: MinecraftContentItem) {
-        NSWorkspace.shared.activateFileViewerSelecting([item.folderURL])
+        guard let source = currentSource else {
+            return
+        }
+
+        if source.origin.kind == .localFolder {
+            NSWorkspace.shared.activateFileViewerSelecting([item.folderURL])
+            return
+        }
+
+        guard !isPerformingItemAction else {
+            return
+        }
+
+        isPerformingItemAction = true
+        library.setItemActionInProgress("Preparing item for Finder...")
+
+        Task {
+            do {
+                let revealURL = try await library.materializeItem(item, in: source)
+
+                await MainActor.run {
+                    isPerformingItemAction = false
+                    NSWorkspace.shared.activateFileViewerSelecting([revealURL])
+                    library.setItemActionSuccess(
+                        title: "Prepared for Finder",
+                        subtitle: item.displayName,
+                        revealURL: revealURL
+                    )
+                }
+            } catch {
+                await MainActor.run {
+                    isPerformingItemAction = false
+                    library.setItemActionFailure(error.localizedDescription)
+                }
+            }
+        }
     }
 
     private func revealURLInFinder(_ url: URL) {

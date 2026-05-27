@@ -612,6 +612,10 @@ struct ItemDetailView: View {
             return ByteCountFormatter.string(fromByteCount: sizeBytes, countStyle: .file)
         }
 
+        if item.sizeLoaded {
+            return "Unavailable"
+        }
+
         return item.metadataLoaded ? "Calculating..." : "Loading..."
     }
 

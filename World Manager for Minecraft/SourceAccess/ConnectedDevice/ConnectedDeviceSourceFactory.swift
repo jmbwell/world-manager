@@ -15,12 +15,18 @@ struct ConnectedDeviceSourceFactory: Sendable {
         container: DeviceAppContainer
     ) -> MinecraftSource {
         let sourceID = makeSourceIdentifier(device: device, container: container)
-        let placeholderFolderURL = URL(fileURLWithPath: "/Volumes/\(sourceID.lastPathComponent)", isDirectory: true)
+        let cacheRootURL = ConnectedDeviceMirrorCache.rootURL(for: sourceID)
 
         var source = MinecraftSource(
             sourceID: sourceID,
-            folderURL: placeholderFolderURL,
-            origin: .connectedDevice(device: device, container: container)
+            folderURL: cacheRootURL,
+            origin: .connectedDevice(device: device, container: container),
+            accessDescriptor: SourceAccessDescriptor(
+                accessorIdentifier: AppleMobileDeviceSourceAccess().accessorIdentifier,
+                kind: .connectedDevice,
+                capabilities: .connectedDevice,
+                refreshStrategy: .staged
+            )
         )
         source.displayName = displayName(for: device, container: container)
         return source

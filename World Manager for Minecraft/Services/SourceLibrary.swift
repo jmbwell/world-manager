@@ -23,13 +23,33 @@ struct SidebarFooterState {
     let revealURL: URL?
 }
 
+struct ConnectedDeviceSidebarEntry: Identifiable, Hashable {
+    let device: ConnectedDevice
+    let containers: [DeviceAppContainer]
+    let matchedSourceID: URL?
+    let discoveryErrorDescription: String?
+
+    var id: String { device.id }
+
+    var minecraftContainer: DeviceAppContainer? {
+        containers.first(where: { $0.appID == "com.mojang.minecraftpe" })
+            ?? containers.first(where: { $0.minecraftFolderRelativePath != nil })
+    }
+
+    var hasMinecraftContainer: Bool {
+        minecraftContainer != nil
+    }
+}
+
 @MainActor
 final class SourceLibrary: ObservableObject {
     private static let enrichmentWorkerCount = 4
     private static let sizeWorkerCount = 2
     private static let minimumVisibleScanDuration: TimeInterval = 0.8
+    private static let connectedDeviceRefreshInterval: TimeInterval = 0.5
 
     @Published var sources: [MinecraftSource] = []
+    @Published private(set) var connectedDevices: [ConnectedDeviceSidebarEntry] = []
     @Published private(set) var sidebarFooterState = SidebarFooterState(
         style: .idle,
         title: "",
@@ -40,20 +60,47 @@ final class SourceLibrary: ObservableObject {
     @Published private(set) var isRestoringPersistedSources = true
 
     private var scanTasks: [URL: Task<Void, Never>] = [:]
+    private var connectedDeviceRefreshTask: Task<Void, Never>?
     private var footerResetTask: Task<Void, Never>?
     private let persistenceStore: SourcePersistenceStore
     private let sourceAccessMethod: SourceAccessMethod
+    private let connectedDeviceAccessMethod: ConnectedDeviceSourceAccessMethod?
+    private var lastMatchedConnectedSourceIDs: Set<URL> = []
 
     init(
         persistenceStore: SourcePersistenceStore = .shared,
-        sourceAccessMethod: SourceAccessMethod = LocalFolderSourceAccess()
+        sourceAccessMethod: SourceAccessMethod = LocalFolderSourceAccess(),
+        connectedDeviceAccessMethod: ConnectedDeviceSourceAccessMethod? = nil
     ) {
         self.persistenceStore = persistenceStore
         self.sourceAccessMethod = sourceAccessMethod
+        self.connectedDeviceAccessMethod = connectedDeviceAccessMethod
 
         Task { [weak self] in
             await self?.restorePersistedSources()
         }
+
+        if connectedDeviceAccessMethod != nil {
+            connectedDeviceRefreshTask = Task { [weak self] in
+                await self?.runConnectedDeviceRefreshLoop()
+            }
+        }
+    }
+
+    var visibleSources: [MinecraftSource] {
+        let matchedConnectedSourceIDs = Set(connectedDevices.compactMap(\.matchedSourceID))
+        return sources.filter { source in
+            switch source.origin {
+            case .localFolder:
+                return true
+            case .connectedDevice:
+                return matchedConnectedSourceIDs.contains(source.id)
+            }
+        }
+    }
+
+    var localSources: [MinecraftSource] {
+        visibleSources.filter { $0.origin.kind == .localFolder }
     }
 
     func addSource(at url: URL) -> URL {
@@ -65,12 +112,22 @@ final class SourceLibrary: ObservableObject {
                 if source.bookmarkData == nil {
                     source.bookmarkData = bookmarkData
                 }
+                source.accessDescriptor = sourceAccessMethod.accessDescriptor(for: source)
             }
             startScan(for: normalizedURL)
             return normalizedURL
         }
 
-        let source = MinecraftSource(folderURL: normalizedURL, bookmarkData: bookmarkData)
+        let source = MinecraftSource(
+            folderURL: normalizedURL,
+            bookmarkData: bookmarkData,
+            accessDescriptor: SourceAccessDescriptor(
+                accessorIdentifier: LocalFolderSourceAccess().accessorIdentifier,
+                kind: .localFolder,
+                capabilities: .localFolder,
+                refreshStrategy: .eagerFullScan
+            )
+        )
         return addSource(source, shouldPersist: true, shouldScan: true)
     }
 
@@ -79,6 +136,8 @@ final class SourceLibrary: ObservableObject {
         if sources.contains(where: { $0.id == source.id }) {
             updateSource(source.id) { existingSource in
                 existingSource.origin = source.origin
+                existingSource.accessDescriptor = source.accessDescriptor
+                existingSource.availability = source.availability
                 if existingSource.bookmarkData == nil {
                     existingSource.bookmarkData = source.bookmarkData
                 }
@@ -87,11 +146,13 @@ final class SourceLibrary: ObservableObject {
                 }
             }
         } else {
-            sources.append(source)
+            var resolvedSource = source
+            resolvedSource.accessDescriptor = sourceAccessMethod.accessDescriptor(for: resolvedSource)
+            sources.append(resolvedSource)
             sources.sort { $0.displayName.localizedStandardCompare($1.displayName) == .orderedAscending }
         }
 
-        if shouldPersist, source.origin.kind == .localFolder {
+        if shouldPersist {
             persistSourceIfAvailable(withID: source.id)
         }
         if shouldScan {
@@ -109,11 +170,23 @@ final class SourceLibrary: ObservableObject {
         startScan(for: sourceID)
     }
 
+    func listContents(for item: MinecraftContentItem, in source: MinecraftSource) async throws -> [DirectoryPreviewEntry] {
+        try await sourceAccessMethod.listItemContents(for: item, in: source)
+    }
+
+    func materializeItem(_ item: MinecraftContentItem, in source: MinecraftSource) async throws -> URL {
+        try await sourceAccessMethod.materializeItem(for: item, in: source)
+    }
+
     func removeSource(withID sourceID: URL) {
+        let removedSource = source(withID: sourceID)
         scanTasks[sourceID]?.cancel()
         scanTasks[sourceID] = nil
         sources.removeAll { $0.id == sourceID }
         deletePersistedSource(withID: sourceID)
+        if let removedSource {
+            purgeCachedArtifacts(for: removedSource)
+        }
         refreshSidebarFooterState()
     }
 
@@ -191,45 +264,10 @@ final class SourceLibrary: ObservableObject {
             return
         }
 
-        let preparedScanRoot: PreparedScanRoot
-        do {
-            preparedScanRoot = try await sourceAccessMethod.prepareScanRoot(for: source)
-        } catch {
-            updateSource(sourceID) { source in
-                source.scanError = error.localizedDescription
-                source.scanStatus = ""
-                source.isScanning = false
-            }
-            refreshSidebarFooterState()
-            return
-        }
-
-        let scanRootURL = preparedScanRoot.rootURL
-        let accessedSecurityScope = scanRootURL.startAccessingSecurityScopedResource()
-        defer {
-            if accessedSecurityScope {
-                scanRootURL.stopAccessingSecurityScopedResource()
-            }
-
-            cleanupPreparedScanRoot(preparedScanRoot)
-        }
-
-        guard FileManager.default.fileExists(atPath: scanRootURL.path) else {
-            updateSource(sourceID) { source in
-                source.scanError = "Source folder is no longer available."
-                source.scanStatus = ""
-                source.isScanning = false
-            }
-            refreshSidebarFooterState()
-            return
-        }
-
-        await WorldScanner.beginScanSession(for: sourceID)
-
         updateSource(sourceID) { source in
             source.isScanning = true
             source.scanError = nil
-            source.scanStatus = "Scanning Minecraft library..."
+            source.scanStatus = initialScanStatus(for: source)
             source.displayItems = []
             source.rawItems = []
             source.logicalPacks = []
@@ -242,8 +280,30 @@ final class SourceLibrary: ObservableObject {
         }
         refreshSidebarFooterState()
 
+        updateSource(sourceID) { source in
+            source.accessDescriptor = sourceAccessMethod.accessDescriptor(for: source)
+        }
+        let currentAvailability = await sourceAccessMethod.availability(for: source)
+        updateSource(sourceID) { source in
+            source.availability = currentAvailability
+        }
+
+        let scanContextURL = source.folderURL
+        await WorldScanner.beginScanSession(for: scanContextURL)
+        defer {
+            Task.detached(priority: .utility) {
+                await WorldScanner.endScanSession(for: scanContextURL)
+            }
+        }
+
+        updateSource(sourceID) { source in
+            source.availability = .available
+            source.scanStatus = scanningLibraryStatus(for: source)
+        }
+        refreshSidebarFooterState()
+
         do {
-            let index = SourceIndexActor(sourceID: sourceID, folderURL: scanRootURL)
+            let index = SourceIndexActor(sourceID: sourceID, folderURL: scanContextURL)
             let enrichmentQueue = EnrichmentWorkQueue()
             let sizeQueue = EnrichmentWorkQueue()
             workerTasks = (0..<Self.enrichmentWorkerCount).map { _ in
@@ -257,7 +317,7 @@ final class SourceLibrary: ObservableObject {
                             return
                         }
 
-                        let enrichedItem = await WorldScanner.enrich(item: item)
+                        let enrichedItem = await library.sourceAccessMethod.enrich(item, for: source)
                         if let snapshot = await index.applyEnrichedItem(enrichedItem) {
                             await MainActor.run {
                                 library.applySnapshot(snapshot, to: sourceID)
@@ -279,7 +339,7 @@ final class SourceLibrary: ObservableObject {
                             return
                         }
 
-                        let sizedItem = WorldScanner.loadSize(for: item)
+                        let sizedItem = await library.sourceAccessMethod.loadSize(for: item, in: source)
                         if let snapshot = await index.applySizedItem(sizedItem) {
                             await MainActor.run {
                                 library.applySnapshot(snapshot, to: sourceID)
@@ -290,9 +350,10 @@ final class SourceLibrary: ObservableObject {
                 }
             }
             let discoveryStream = AsyncThrowingStream<MinecraftContentItem, Error> { continuation in
+                let accessMethod = sourceAccessMethod
                 let discoveryTask = Task.detached(priority: .userInitiated) {
                     do {
-                        _ = try WorldScanner.discoverItems(in: scanRootURL) { item in
+                        _ = try await accessMethod.discoverItems(for: source) { item in
                             continuation.yield(item)
                         }
                         continuation.finish()
@@ -353,7 +414,11 @@ final class SourceLibrary: ObservableObject {
                 applySnapshot(snapshot, to: sourceID)
             }
             updateSource(sourceID) { source in
-                source.snapshot = buildSnapshot(for: source, packMetadataByItemID: [:])
+                if source.origin.kind == .localFolder {
+                    source.snapshot = buildSnapshot(for: source, scanRootURL: scanContextURL, packMetadataByItemID: [:])
+                } else {
+                    source.snapshot = nil
+                }
             }
             persistSourceIfAvailable(withID: sourceID)
             refreshSidebarFooterState()
@@ -363,10 +428,12 @@ final class SourceLibrary: ObservableObject {
             }
 
             updateSource(sourceID) { source in
+                source.availability = availabilityStatus(for: error, defaultingTo: source.availability)
                 source.scanError = "Failed to scan folder: \(error.localizedDescription)"
                 source.scanStatus = ""
                 source.isScanning = false
             }
+            persistSourceIfAvailable(withID: sourceID)
             refreshSidebarFooterState()
         }
     }
@@ -751,6 +818,214 @@ final class SourceLibrary: ObservableObject {
         }
     }
 
+    private func runConnectedDeviceRefreshLoop() async {
+        while !Task.isCancelled {
+            await refreshConnectedDevices()
+
+            do {
+                try await Task.sleep(for: .seconds(Self.connectedDeviceRefreshInterval))
+            } catch {
+                return
+            }
+        }
+    }
+
+    private func refreshConnectedDevices() async {
+        guard let connectedDeviceAccessMethod else {
+            return
+        }
+
+        let devices: [ConnectedDevice]
+        do {
+            devices = try await connectedDeviceAccessMethod.listConnectedDevices()
+        } catch {
+            markAllConnectedDeviceSourcesDisconnected()
+            connectedDevices = []
+            lastMatchedConnectedSourceIDs = []
+            return
+        }
+
+        var entries: [ConnectedDeviceSidebarEntry] = []
+        var matchedSourceIDs = Set<URL>()
+
+        for device in devices {
+            if let matchedSourceID = knownConnectedDeviceSourceID(for: device) {
+                matchedSourceIDs.insert(matchedSourceID)
+                refreshMatchedConnectedDeviceSource(
+                    sourceID: matchedSourceID,
+                    device: device,
+                    containers: []
+                )
+
+                entries.append(
+                    ConnectedDeviceSidebarEntry(
+                        device: device,
+                        containers: [],
+                        matchedSourceID: matchedSourceID,
+                        discoveryErrorDescription: nil
+                    )
+                )
+                continue
+            }
+
+            let containers: [DeviceAppContainer]
+            let discoveryErrorDescription: String?
+
+            do {
+                containers = try await connectedDeviceAccessMethod.listAccessibleContainers(for: device)
+                discoveryErrorDescription = nil
+            } catch {
+                containers = []
+                discoveryErrorDescription = error.localizedDescription
+            }
+
+            let matchedSourceID = matchingConnectedDeviceSourceID(
+                device: device,
+                containers: containers
+            )
+
+            if let matchedSourceID {
+                matchedSourceIDs.insert(matchedSourceID)
+                refreshMatchedConnectedDeviceSource(
+                    sourceID: matchedSourceID,
+                    device: device,
+                    containers: containers
+                )
+            }
+
+            let shouldDisplayEntry =
+                matchedSourceID != nil
+                || !containers.isEmpty
+                || device.trustState != .trusted
+
+            if shouldDisplayEntry {
+                entries.append(
+                    ConnectedDeviceSidebarEntry(
+                        device: device,
+                        containers: containers,
+                        matchedSourceID: matchedSourceID,
+                        discoveryErrorDescription: discoveryErrorDescription
+                    )
+                )
+            }
+        }
+
+        markDisconnectedConnectedDeviceSources(excluding: matchedSourceIDs)
+
+        connectedDevices = entries.sorted {
+            let lhsKnown = $0.matchedSourceID != nil
+            let rhsKnown = $1.matchedSourceID != nil
+            if lhsKnown != rhsKnown {
+                return lhsKnown && !rhsKnown
+            }
+
+            let lhsMinecraft = $0.hasMinecraftContainer
+            let rhsMinecraft = $1.hasMinecraftContainer
+            if lhsMinecraft != rhsMinecraft {
+                return lhsMinecraft && !rhsMinecraft
+            }
+
+            return $0.device.name.localizedStandardCompare($1.device.name) == .orderedAscending
+        }
+
+        lastMatchedConnectedSourceIDs = matchedSourceIDs
+    }
+
+    private func matchingConnectedDeviceSourceID(
+        device: ConnectedDevice,
+        containers: [DeviceAppContainer]
+    ) -> URL? {
+        for source in sources {
+            guard case .connectedDevice(let expectedDevice, let expectedContainer) = source.origin else {
+                continue
+            }
+
+            guard expectedDevice.udid == device.udid else {
+                continue
+            }
+
+            guard containers.contains(where: { container in
+                container.appID == expectedContainer.appID
+                    && container.accessMode == expectedContainer.accessMode
+            }) else {
+                continue
+            }
+
+            return source.id
+        }
+
+        return nil
+    }
+
+    private func knownConnectedDeviceSourceID(for device: ConnectedDevice) -> URL? {
+        for source in sources {
+            guard case .connectedDevice(let expectedDevice, _) = source.origin else {
+                continue
+            }
+
+            guard expectedDevice.udid == device.udid else {
+                continue
+            }
+
+            return source.id
+        }
+
+        return nil
+    }
+
+    private func refreshMatchedConnectedDeviceSource(
+        sourceID: URL,
+        device: ConnectedDevice,
+        containers: [DeviceAppContainer]
+    ) {
+        updateSource(sourceID) { source in
+            guard case .connectedDevice(_, let previousContainer) = source.origin else {
+                return
+            }
+
+            let resolvedContainer = containers.first(where: {
+                $0.appID == previousContainer.appID && $0.accessMode == previousContainer.accessMode
+            }) ?? previousContainer
+
+            source.origin = .connectedDevice(device: device, container: resolvedContainer)
+            source.displayName = "\(device.name) • \(resolvedContainer.appName)"
+            source.accessDescriptor = sourceAccessMethod.accessDescriptor(for: source)
+            source.availability = availability(for: device, hasMinecraftContainer: true)
+        }
+        persistSourceIfAvailable(withID: sourceID)
+    }
+
+    private func markAllConnectedDeviceSourcesDisconnected() {
+        for source in sources where source.origin.kind == .connectedDevice {
+            updateSource(source.id) { source in
+                source.availability = .disconnected
+            }
+        }
+    }
+
+    private func markDisconnectedConnectedDeviceSources(excluding matchedSourceIDs: Set<URL>) {
+        for source in sources where source.origin.kind == .connectedDevice && !matchedSourceIDs.contains(source.id) {
+            updateSource(source.id) { source in
+                source.availability = .disconnected
+            }
+        }
+    }
+
+    private func availability(for device: ConnectedDevice, hasMinecraftContainer: Bool) -> SourceAvailability {
+        guard hasMinecraftContainer else {
+            return .unavailable
+        }
+
+        switch device.trustState {
+        case .trusted:
+            return .available
+        case .locked, .untrusted:
+            return .limited
+        case .unavailable:
+            return .disconnected
+        }
+    }
+
     private func restorePersistedSources() async {
         defer {
             isRestoringPersistedSources = false
@@ -765,7 +1040,14 @@ final class SourceLibrary: ObservableObject {
         }
 
         for record in records {
-            var source = MinecraftSource(folderURL: record.folderURL, bookmarkData: record.bookmarkData)
+            var source = MinecraftSource(
+                sourceID: record.sourceID,
+                folderURL: record.folderURL,
+                bookmarkData: record.bookmarkData,
+                origin: record.origin,
+                accessDescriptor: record.accessDescriptor,
+                availability: record.availability
+            )
             source.displayName = record.displayName
             source.rawItems = await restoreCachedImages(in: record.rawItems)
             source.indexedItemCount = record.rawItems.count
@@ -788,9 +1070,11 @@ final class SourceLibrary: ObservableObject {
 
         for record in records {
             if sourceNeedsRescan(record) {
-                startScan(for: record.folderURL)
+                startScan(for: record.sourceID)
             }
         }
+
+        await refreshConnectedDevices()
     }
 
     private func restoreCachedImages(in items: [MinecraftContentItem]) async -> [MinecraftContentItem] {
@@ -828,6 +1112,10 @@ final class SourceLibrary: ObservableObject {
     }
 
     private func sourceNeedsRescan(_ record: PersistedSourceRecord) -> Bool {
+        guard record.accessDescriptor.refreshStrategy == .eagerFullScan else {
+            return record.rawItems.isEmpty
+        }
+
         guard let snapshot = record.snapshot else {
             return true
         }
@@ -949,9 +1237,14 @@ final class SourceLibrary: ObservableObject {
     }
 
     private func deletePersistedSource(withID sourceID: URL) {
-        let normalizedSourceID = sourceID.standardizedFileURL
         Task {
-            try? await persistenceStore.deleteSource(withID: normalizedSourceID)
+            try? await persistenceStore.deleteSource(withID: sourceID)
+        }
+    }
+
+    private func purgeCachedArtifacts(for source: MinecraftSource) {
+        Task.detached(priority: .utility) { [sourceAccessMethod] in
+            await sourceAccessMethod.purgeCachedArtifacts(for: source)
         }
     }
 
@@ -965,12 +1258,6 @@ final class SourceLibrary: ObservableObject {
 
     private func isLogicalPackType(_ contentType: MinecraftContentType) -> Bool {
         contentType == .behaviorPack || contentType == .resourcePack
-    }
-
-    private func cleanupPreparedScanRoot(_ preparedScanRoot: PreparedScanRoot) {
-        Task.detached(priority: .utility) { [sourceAccessMethod] in
-            await sourceAccessMethod.releaseScanRoot(preparedScanRoot)
-        }
     }
 
     private func refreshSidebarFooterState() {
@@ -1030,6 +1317,24 @@ final class SourceLibrary: ObservableObject {
         footerResetTask = nil
     }
 
+    private func initialScanStatus(for source: MinecraftSource) -> String {
+        switch source.origin {
+        case .localFolder:
+            return "Preparing folder scan..."
+        case .connectedDevice:
+            return "Connecting to device and discovering Minecraft items..."
+        }
+    }
+
+    private func scanningLibraryStatus(for source: MinecraftSource) -> String {
+        switch source.origin {
+        case .localFolder:
+            return "Scanning Minecraft library..."
+        case .connectedDevice:
+            return "Scanning Minecraft library on device..."
+        }
+    }
+
     private func scheduleFooterReset(after seconds: Double = 5) {
         cancelFooterReset()
         footerResetTask = Task { @MainActor [weak self] in
@@ -1044,10 +1349,11 @@ final class SourceLibrary: ObservableObject {
 
     private func buildSnapshot(
         for source: MinecraftSource,
+        scanRootURL: URL,
         packMetadataByItemID: [URL: PackMetadata]
     ) -> SourceSnapshot {
         let collectionSnapshots = MinecraftContentType.allCases.compactMap { type -> CollectionSnapshot? in
-            let collectionURL = source.folderURL.appendingPathComponent(type.collectionFolderName, isDirectory: true)
+            let collectionURL = scanRootURL.appendingPathComponent(type.collectionFolderName, isDirectory: true)
             guard FileManager.default.fileExists(atPath: collectionURL.path) else {
                 return nil
             }
@@ -1075,7 +1381,7 @@ final class SourceLibrary: ObservableObject {
         }
 
         let itemSnapshots = source.rawItems.map { item in
-            let relativePath = item.folderURL.path.replacingOccurrences(of: source.folderURL.path + "/", with: "")
+            let relativePath = item.folderURL.path.replacingOccurrences(of: scanRootURL.path + "/", with: "")
             let metadata = packMetadataByItemID[item.id]
             return ItemSnapshot(
                 id: item.id,
@@ -1089,7 +1395,7 @@ final class SourceLibrary: ObservableObject {
             lhs.relativePath.localizedStandardCompare(rhs.relativePath) == .orderedAscending
         }
 
-        let rootModifiedDate = try? source.folderURL
+        let rootModifiedDate = try? scanRootURL
             .resourceValues(forKeys: [.contentModificationDateKey])
             .contentModificationDate
 
@@ -1099,6 +1405,21 @@ final class SourceLibrary: ObservableObject {
             collectionSnapshots: collectionSnapshots,
             itemSnapshots: itemSnapshots
         )
+    }
+
+    private func availabilityStatus(for error: Error, defaultingTo currentAvailability: SourceAvailability) -> SourceAvailability {
+        if let accessError = error as? SourceAccessError {
+            switch accessError {
+            case .deviceUnavailable:
+                return .disconnected
+            case .deviceNotTrusted:
+                return .limited
+            case .appNotAccessible, .minecraftFolderMissing, .accessFailed:
+                return .unavailable
+            }
+        }
+
+        return currentAvailability
     }
 
     private func shouldPreferPackItem(_ candidate: MinecraftContentItem, over existing: MinecraftContentItem) -> Bool {

@@ -37,6 +37,27 @@ WMMCopyFirstConnectedDeviceAppPathProbeResults(
     NSError **error
 );
 
+FOUNDATION_EXPORT NSDictionary<NSString *, id> * _Nullable
+WMMCopyFirstConnectedDeviceMinecraftLibrarySnapshot(
+    NSString *bundleIdentifier,
+    NSString *relativePath,
+    NSError **error
+);
+
+FOUNDATION_EXPORT NSData * _Nullable
+WMMCopyFirstConnectedDeviceAppFileData(
+    NSString *bundleIdentifier,
+    NSString *relativePath,
+    NSError **error
+);
+
+FOUNDATION_EXPORT NSDictionary<NSString *, id> * _Nullable
+WMMCopyFirstConnectedDeviceAppPathMetrics(
+    NSString *bundleIdentifier,
+    NSString *relativePath,
+    NSError **error
+);
+
 FOUNDATION_EXPORT BOOL
 WMMCopyFirstConnectedDeviceAppSubtreeToLocalDirectory(
     NSString *bundleIdentifier,

@@ -27,7 +27,7 @@ enum ContentPackageExporter {
         for item: MinecraftContentItem,
         source: MinecraftSource? = nil,
         destinationURL: URL? = nil
-    ) throws -> URL {
+    ) async throws -> URL {
         let fileManager = FileManager.default
         let archiveURL: URL
 
@@ -41,7 +41,7 @@ enum ContentPackageExporter {
             try fileManager.removeItem(at: archiveURL)
         }
 
-        try createArchive(for: item, source: source, at: archiveURL)
+        try await createArchive(for: item, source: source, at: archiveURL)
         return archiveURL
     }
 
@@ -61,9 +61,9 @@ enum ContentPackageExporter {
         for item: MinecraftContentItem,
         source: MinecraftSource?,
         at archiveURL: URL
-    ) throws {
+    ) async throws {
         let fileManager = FileManager.default
-        let stagingDirectoryURL = try stagedArchiveContents(for: item, source: source, fileManager: fileManager)
+        let stagingDirectoryURL = try await stagedArchiveContents(for: item, source: source, fileManager: fileManager)
 
         defer {
             try? fileManager.removeItem(at: stagingDirectoryURL)
@@ -104,31 +104,40 @@ enum ContentPackageExporter {
         for item: MinecraftContentItem,
         source: MinecraftSource?,
         fileManager: FileManager
-    ) throws -> URL {
+    ) async throws -> URL {
         let stagingDirectoryURL = fileManager.temporaryDirectory
             .appendingPathComponent("MinecraftArchiveStaging", isDirectory: true)
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
 
         try fileManager.createDirectory(at: stagingDirectoryURL, withIntermediateDirectories: true)
 
-        let accessURL = try archiveAccessURL(for: item, source: source)
-        let accessedSecurityScope = accessURL.startAccessingSecurityScopedResource()
-        defer {
-            if accessedSecurityScope {
-                accessURL.stopAccessingSecurityScopedResource()
-            }
-        }
-
         do {
-            let contents = try fileManager.contentsOfDirectory(
-                at: item.folderURL,
-                includingPropertiesForKeys: nil,
-                options: [.skipsPackageDescendants]
-            )
+            if let source, case .connectedDevice(_, let container) = source.origin {
+                try await materializeConnectedDeviceItem(
+                    item,
+                    source: source,
+                    container: container,
+                    into: stagingDirectoryURL
+                )
+            } else {
+                let accessURL = try archiveAccessURL(for: item, source: source)
+                let accessedSecurityScope = accessURL.startAccessingSecurityScopedResource()
+                defer {
+                    if accessedSecurityScope {
+                        accessURL.stopAccessingSecurityScopedResource()
+                    }
+                }
 
-            for entryURL in contents {
-                let destinationURL = stagingDirectoryURL.appendingPathComponent(entryURL.lastPathComponent)
-                try fileManager.copyItem(at: entryURL, to: destinationURL)
+                let contents = try fileManager.contentsOfDirectory(
+                    at: item.folderURL,
+                    includingPropertiesForKeys: nil,
+                    options: [.skipsPackageDescendants]
+                )
+
+                for entryURL in contents {
+                    let destinationURL = stagingDirectoryURL.appendingPathComponent(entryURL.lastPathComponent)
+                    try fileManager.copyItem(at: entryURL, to: destinationURL)
+                }
             }
         } catch {
             throw ExportError.failedToPrepareArchiveContents(
@@ -137,6 +146,40 @@ enum ContentPackageExporter {
         }
 
         return stagingDirectoryURL
+    }
+
+    nonisolated private static func materializeConnectedDeviceItem(
+        _ item: MinecraftContentItem,
+        source: MinecraftSource,
+        container: DeviceAppContainer,
+        into destinationURL: URL
+    ) async throws {
+        let rootPath = container.minecraftFolderRelativePath?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !rootPath.isEmpty else {
+            throw ExportError.failedToPrepareArchiveContents("The connected-device source is missing its Minecraft path.")
+        }
+
+        let sourceRootPath = source.folderURL.path
+        let itemPath = item.folderURL.path
+        let relativeItemPath: String
+        if itemPath.hasPrefix(sourceRootPath + "/") {
+            relativeItemPath = String(itemPath.dropFirst(sourceRootPath.count + 1))
+        } else {
+            relativeItemPath = item.folderName
+        }
+
+        let remoteItemPath = relativeItemPath
+            .split(separator: "/")
+            .map(String.init)
+            .reduce(rootPath) { partial, component in
+                NSString(string: partial).appendingPathComponent(component)
+            }
+
+        try await AppleMobileDeviceAccess.mirrorSubtree(
+            bundleIdentifier: container.appID,
+            relativePath: remoteItemPath,
+            destinationDirectoryURL: destinationURL
+        )
     }
 
     nonisolated private static func shareArchiveDirectory(fileManager: FileManager) throws -> URL {

@@ -11,6 +11,8 @@ struct MinecraftSource: Identifiable, Hashable, Sendable {
     let id: URL
     let folderURL: URL
     var origin: MinecraftSourceOrigin
+    var accessDescriptor: SourceAccessDescriptor
+    var availability: SourceAvailability
     var bookmarkData: Data?
     var displayName: String
     var displayItems: [MinecraftContentItem]
@@ -31,12 +33,22 @@ struct MinecraftSource: Identifiable, Hashable, Sendable {
         sourceID: URL? = nil,
         folderURL: URL,
         bookmarkData: Data? = nil,
-        origin: MinecraftSourceOrigin? = nil
+        origin: MinecraftSourceOrigin? = nil,
+        accessDescriptor: SourceAccessDescriptor? = nil,
+        availability: SourceAvailability = .unknown
     ) {
         let normalizedFolderURL = normalizedSourceURL(folderURL)
+        let resolvedOrigin = origin ?? .localFolder(bookmarkData: bookmarkData)
         self.id = normalizedSourceURL(sourceID ?? normalizedFolderURL)
         self.folderURL = normalizedFolderURL
-        self.origin = origin ?? .localFolder(bookmarkData: bookmarkData)
+        self.origin = resolvedOrigin
+        self.accessDescriptor = accessDescriptor ?? SourceAccessDescriptor(
+            accessorIdentifier: resolvedOrigin.defaultAccessorIdentifier,
+            kind: resolvedOrigin.kind,
+            capabilities: resolvedOrigin.defaultCapabilities,
+            refreshStrategy: resolvedOrigin.defaultRefreshStrategy
+        )
+        self.availability = availability
         self.bookmarkData = bookmarkData
         self.displayName = normalizedFolderURL.lastPathComponent
         self.displayItems = []
@@ -106,6 +118,18 @@ struct MinecraftSource: Identifiable, Hashable, Sendable {
                 return relationship.reference
             }
             .uniqued(by: \.id)
+    }
+
+    var sourceRecord: SourceRecord {
+        SourceRecord(
+            id: id,
+            displayName: displayName,
+            rootURL: folderURL,
+            origin: origin,
+            accessDescriptor: accessDescriptor,
+            availability: availability,
+            lastRefreshDate: lastScanDate
+        )
     }
 
     private func shouldIncludeAsStandalone(_ item: MinecraftContentItem) -> Bool {

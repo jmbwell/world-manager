@@ -169,6 +169,8 @@ private struct ContentRowView: View {
         let sizeText: String
         if let sizeBytes = item.sizeBytes {
             sizeText = ByteCountFormatter.string(fromByteCount: sizeBytes, countStyle: .file)
+        } else if item.sizeLoaded {
+            sizeText = "Size unavailable"
         } else if item.metadataLoaded {
             sizeText = "Calculating size..."
         } else {

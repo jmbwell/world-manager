@@ -51,7 +51,16 @@ enum MinecraftSourceOrigin: Hashable, Sendable, Codable {
     case localFolder(bookmarkData: Data?)
     case connectedDevice(device: ConnectedDevice, container: DeviceAppContainer)
 
-    var kind: MinecraftSourceKind {
+    nonisolated var defaultAccessorIdentifier: SourceAccessorIdentifier {
+        switch self {
+        case .localFolder:
+            return LocalFolderSourceAccess().accessorIdentifier
+        case .connectedDevice:
+            return AppleMobileDeviceSourceAccess().accessorIdentifier
+        }
+    }
+
+    nonisolated var kind: MinecraftSourceKind {
         switch self {
         case .localFolder:
             return .localFolder
@@ -59,22 +68,27 @@ enum MinecraftSourceOrigin: Hashable, Sendable, Codable {
             return .connectedDevice
         }
     }
+
+    nonisolated var defaultCapabilities: SourceCapabilities {
+        switch self {
+        case .localFolder:
+            return .localFolder
+        case .connectedDevice:
+            return .connectedDevice
+        }
+    }
+
+    nonisolated var defaultRefreshStrategy: SourceRefreshStrategy {
+        switch self {
+        case .localFolder:
+            return .eagerFullScan
+        case .connectedDevice:
+            return .staged
+        }
+    }
 }
 
 enum MinecraftSourceKind: String, Hashable, Sendable, Codable {
     case localFolder
     case connectedDevice
-}
-
-struct PreparedScanRoot: Hashable, Sendable {
-    let sourceID: URL
-    let rootURL: URL
-    let mountPointURL: URL?
-    let cleanupBehavior: CleanupBehavior
-
-    enum CleanupBehavior: Hashable, Sendable {
-        case none
-        case unmount
-        case deleteTemporaryDirectory
-    }
 }

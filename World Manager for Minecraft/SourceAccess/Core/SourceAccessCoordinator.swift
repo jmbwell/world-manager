@@ -8,13 +8,71 @@
 import Foundation
 
 protocol SourceAccessMethod: Sendable {
-    nonisolated func prepareScanRoot(for source: MinecraftSource) async throws -> PreparedScanRoot
-    nonisolated func releaseScanRoot(_ preparedScanRoot: PreparedScanRoot) async
+    nonisolated var accessorIdentifier: SourceAccessorIdentifier { get }
+    nonisolated func accessDescriptor(for source: MinecraftSource) -> SourceAccessDescriptor
+    nonisolated func availability(for source: MinecraftSource) async -> SourceAvailability
+    nonisolated func discoverItems(
+        for source: MinecraftSource,
+        onDiscovered: @escaping @Sendable (MinecraftContentItem) -> Void
+    ) async throws -> [MinecraftContentItem]
+    nonisolated func enrich(_ item: MinecraftContentItem, for source: MinecraftSource) async -> MinecraftContentItem
+    nonisolated func loadSize(for item: MinecraftContentItem, in source: MinecraftSource) async -> MinecraftContentItem
+    nonisolated func listItemContents(for item: MinecraftContentItem, in source: MinecraftSource) async throws -> [DirectoryPreviewEntry]
+    nonisolated func materializeItem(for item: MinecraftContentItem, in source: MinecraftSource) async throws -> URL
+    nonisolated func purgeCachedArtifacts(for source: MinecraftSource) async
 }
 
 extension SourceAccessMethod {
-    nonisolated func releaseScanRoot(_ preparedScanRoot: PreparedScanRoot) async {
-        _ = preparedScanRoot
+    nonisolated var accessorIdentifier: SourceAccessorIdentifier {
+        String(reflecting: Self.self)
+    }
+
+    nonisolated func accessDescriptor(for source: MinecraftSource) -> SourceAccessDescriptor {
+        SourceAccessDescriptor(
+            accessorIdentifier: accessorIdentifier,
+            kind: source.origin.kind,
+            capabilities: source.origin.defaultCapabilities,
+            refreshStrategy: source.origin.defaultRefreshStrategy
+        )
+    }
+
+    nonisolated func availability(for source: MinecraftSource) async -> SourceAvailability {
+        _ = source
+        return .unknown
+    }
+
+    nonisolated func discoverItems(
+        for source: MinecraftSource,
+        onDiscovered: @escaping @Sendable (MinecraftContentItem) -> Void
+    ) async throws -> [MinecraftContentItem] {
+        _ = source
+        _ = onDiscovered
+        return []
+    }
+
+    nonisolated func enrich(_ item: MinecraftContentItem, for source: MinecraftSource) async -> MinecraftContentItem {
+        _ = source
+        return item
+    }
+
+    nonisolated func loadSize(for item: MinecraftContentItem, in source: MinecraftSource) async -> MinecraftContentItem {
+        _ = source
+        return item
+    }
+
+    nonisolated func listItemContents(for item: MinecraftContentItem, in source: MinecraftSource) async throws -> [DirectoryPreviewEntry] {
+        _ = source
+        _ = item
+        return []
+    }
+
+    nonisolated func materializeItem(for item: MinecraftContentItem, in source: MinecraftSource) async throws -> URL {
+        _ = source
+        return item.folderURL
+    }
+
+    nonisolated func purgeCachedArtifacts(for source: MinecraftSource) async {
+        _ = source
     }
 }
 
@@ -24,29 +82,72 @@ protocol ConnectedDeviceSourceAccessMethod: SourceAccessMethod {
 }
 
 struct SourceAccessCoordinator: SourceAccessMethod {
-    private let localFolderAccess: SourceAccessMethod
-    private let connectedDeviceAccess: ConnectedDeviceSourceAccessMethod
+    private let accessMethodsByIdentifier: [SourceAccessorIdentifier: any SourceAccessMethod]
 
     nonisolated init(
         localFolderAccess: SourceAccessMethod = LocalFolderSourceAccess(),
         connectedDeviceAccess: ConnectedDeviceSourceAccessMethod
     ) {
-        self.localFolderAccess = localFolderAccess
-        self.connectedDeviceAccess = connectedDeviceAccess
+        self.init(accessMethods: [localFolderAccess, connectedDeviceAccess])
     }
 
-    nonisolated func prepareScanRoot(for source: MinecraftSource) async throws -> PreparedScanRoot {
-        switch source.origin {
-        case .localFolder:
-            return try await localFolderAccess.prepareScanRoot(for: source)
-        case .connectedDevice:
-            return try await connectedDeviceAccess.prepareScanRoot(for: source)
+    nonisolated init(accessMethods: [any SourceAccessMethod]) {
+        var accessMethodsByIdentifier: [SourceAccessorIdentifier: any SourceAccessMethod] = [:]
+        for accessMethod in accessMethods {
+            accessMethodsByIdentifier[accessMethod.accessorIdentifier] = accessMethod
         }
+        self.accessMethodsByIdentifier = accessMethodsByIdentifier
     }
 
-    nonisolated func releaseScanRoot(_ preparedScanRoot: PreparedScanRoot) async {
-        await localFolderAccess.releaseScanRoot(preparedScanRoot)
-        await connectedDeviceAccess.releaseScanRoot(preparedScanRoot)
+    nonisolated private func accessMethod(for source: MinecraftSource) -> (any SourceAccessMethod) {
+        if let accessMethod = accessMethodsByIdentifier[source.accessDescriptor.accessorIdentifier] {
+            return accessMethod
+        }
+
+        if let accessMethod = accessMethodsByIdentifier[source.origin.defaultAccessorIdentifier] {
+            return accessMethod
+        }
+
+        if let accessMethod = accessMethodsByIdentifier[LocalFolderSourceAccess().accessorIdentifier] {
+            return accessMethod
+        }
+
+        fatalError("No source access method is registered for \(source.accessDescriptor.accessorIdentifier).")
+    }
+
+    nonisolated func discoverItems(
+        for source: MinecraftSource,
+        onDiscovered: @escaping @Sendable (MinecraftContentItem) -> Void
+    ) async throws -> [MinecraftContentItem] {
+        return try await accessMethod(for: source).discoverItems(for: source, onDiscovered: onDiscovered)
+    }
+
+    nonisolated func accessDescriptor(for source: MinecraftSource) -> SourceAccessDescriptor {
+        accessMethod(for: source).accessDescriptor(for: source)
+    }
+
+    nonisolated func availability(for source: MinecraftSource) async -> SourceAvailability {
+        return await accessMethod(for: source).availability(for: source)
+    }
+
+    nonisolated func enrich(_ item: MinecraftContentItem, for source: MinecraftSource) async -> MinecraftContentItem {
+        return await accessMethod(for: source).enrich(item, for: source)
+    }
+
+    nonisolated func loadSize(for item: MinecraftContentItem, in source: MinecraftSource) async -> MinecraftContentItem {
+        return await accessMethod(for: source).loadSize(for: item, in: source)
+    }
+
+    nonisolated func listItemContents(for item: MinecraftContentItem, in source: MinecraftSource) async throws -> [DirectoryPreviewEntry] {
+        return try await accessMethod(for: source).listItemContents(for: item, in: source)
+    }
+
+    nonisolated func materializeItem(for item: MinecraftContentItem, in source: MinecraftSource) async throws -> URL {
+        return try await accessMethod(for: source).materializeItem(for: item, in: source)
+    }
+
+    nonisolated func purgeCachedArtifacts(for source: MinecraftSource) async {
+        await accessMethod(for: source).purgeCachedArtifacts(for: source)
     }
 }
 

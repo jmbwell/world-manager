@@ -9,6 +9,7 @@
 
 #import <CoreFoundation/CoreFoundation.h>
 #import <dlfcn.h>
+#import <limits.h>
 
 NSErrorDomain const WMMMobileDeviceErrorDomain = @"WMMMobileDeviceErrorDomain";
 
@@ -103,6 +104,9 @@ typedef int (*AFCConnectionCloseFn)(AFCConnectionRef connection);
 typedef int (*AFCDirectoryOpenFn)(AFCConnectionRef connection, const char *path, AFCDirectoryRef *directory);
 typedef int (*AFCDirectoryReadFn)(AFCConnectionRef connection, AFCDirectoryRef directory, char **directoryEntry);
 typedef int (*AFCDirectoryCloseFn)(AFCConnectionRef connection, AFCDirectoryRef directory);
+typedef int (*AFCFileInfoOpenFn)(AFCConnectionRef connection, const char *path, AFCIteratorRef *iterator);
+typedef int (*AFCKeyValueReadFn)(AFCIteratorRef iterator, char **key, char **value);
+typedef int (*AFCKeyValueCloseFn)(AFCIteratorRef iterator);
 typedef int (*AFCFileRefOpenFn)(AFCConnectionRef connection, const char *path, uint64_t mode, AFCFileDescriptorRef *fileDescriptor);
 typedef int (*AFCFileRefReadFn)(AFCConnectionRef connection, AFCFileDescriptorRef fileDescriptor, void *buffer, size_t *length);
 typedef int (*AFCFileRefCloseFn)(AFCConnectionRef connection, AFCFileDescriptorRef fileDescriptor);
@@ -137,6 +141,9 @@ typedef struct {
     AFCDirectoryOpenFn AFCDirectoryOpen;
     AFCDirectoryReadFn AFCDirectoryRead;
     AFCDirectoryCloseFn AFCDirectoryClose;
+    AFCFileInfoOpenFn AFCFileInfoOpen;
+    AFCKeyValueReadFn AFCKeyValueRead;
+    AFCKeyValueCloseFn AFCKeyValueClose;
     AFCFileRefOpenFn AFCFileRefOpen;
     AFCFileRefReadFn AFCFileRefRead;
     AFCFileRefCloseFn AFCFileRefClose;
@@ -209,6 +216,9 @@ static BOOL WMMLoadFunctions(WMMMobileDeviceFunctions *functions, NSError **erro
     functions->AFCDirectoryOpen = (AFCDirectoryOpenFn)WMMLoadSymbol(frameworkHandle, "AFCDirectoryOpen");
     functions->AFCDirectoryRead = (AFCDirectoryReadFn)WMMLoadSymbol(frameworkHandle, "AFCDirectoryRead");
     functions->AFCDirectoryClose = (AFCDirectoryCloseFn)WMMLoadSymbol(frameworkHandle, "AFCDirectoryClose");
+    functions->AFCFileInfoOpen = (AFCFileInfoOpenFn)WMMLoadSymbol(frameworkHandle, "AFCFileInfoOpen");
+    functions->AFCKeyValueRead = (AFCKeyValueReadFn)WMMLoadSymbol(frameworkHandle, "AFCKeyValueRead");
+    functions->AFCKeyValueClose = (AFCKeyValueCloseFn)WMMLoadSymbol(frameworkHandle, "AFCKeyValueClose");
     functions->AFCFileRefOpen = (AFCFileRefOpenFn)WMMLoadSymbol(frameworkHandle, "AFCFileRefOpen");
     functions->AFCFileRefRead = (AFCFileRefReadFn)WMMLoadSymbol(frameworkHandle, "AFCFileRefRead");
     functions->AFCFileRefClose = (AFCFileRefCloseFn)WMMLoadSymbol(frameworkHandle, "AFCFileRefClose");
@@ -241,6 +251,9 @@ static BOOL WMMLoadFunctions(WMMMobileDeviceFunctions *functions, NSError **erro
         functions->AFCDirectoryOpen == NULL ||
         functions->AFCDirectoryRead == NULL ||
         functions->AFCDirectoryClose == NULL ||
+        functions->AFCFileInfoOpen == NULL ||
+        functions->AFCKeyValueRead == NULL ||
+        functions->AFCKeyValueClose == NULL ||
         functions->AFCFileRefOpen == NULL ||
         functions->AFCFileRefRead == NULL ||
         functions->AFCFileRefClose == NULL) {
@@ -291,7 +304,7 @@ static AMDeviceRef WMMCopyFirstConnectedDevice(WMMMobileDeviceFunctions *functio
         return NULL;
     }
 
-    CFRunLoopRunInMode(kCFRunLoopDefaultMode, 2.0, false);
+    CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.2, false);
     functions->AMDeviceNotificationUnsubscribe(subscription);
 
     if (context.device == NULL && error != NULL) {
@@ -570,6 +583,166 @@ static int WMMReadAFCDirectory(
     return result;
 }
 
+static NSDictionary<NSString *, NSString *> * _Nullable WMMCopyAFCFileInfo(
+    WMMMobileDeviceFunctions *functions,
+    AFCConnectionRef afcConnection,
+    NSString *path,
+    NSError **error
+) {
+    AFCIteratorRef iterator = NULL;
+    const int openStatus = functions->AFCFileInfoOpen(
+        afcConnection,
+        path.fileSystemRepresentation,
+        &iterator
+    );
+    if (openStatus != 0 || iterator == NULL) {
+        if (error != NULL) {
+            *error = WMMMakeError(openStatus, [NSString stringWithFormat:@"AFCFileInfoOpen failed for %@ (%d).", path, openStatus]);
+        }
+        return nil;
+    }
+
+    NSMutableDictionary<NSString *, NSString *> *info = [NSMutableDictionary dictionary];
+    while (true) {
+        char *key = NULL;
+        char *value = NULL;
+        const int readStatus = functions->AFCKeyValueRead(iterator, &key, &value);
+        if (readStatus != 0) {
+            functions->AFCKeyValueClose(iterator);
+            if (error != NULL) {
+                *error = WMMMakeError(readStatus, [NSString stringWithFormat:@"AFCKeyValueRead failed for %@ (%d).", path, readStatus]);
+            }
+            return nil;
+        }
+
+        if (key == NULL || value == NULL) {
+            break;
+        }
+
+        NSString *keyString = [NSString stringWithUTF8String:key];
+        NSString *valueString = [NSString stringWithUTF8String:value];
+        if (keyString.length > 0 && valueString.length > 0) {
+            info[keyString] = valueString;
+        }
+    }
+
+    functions->AFCKeyValueClose(iterator);
+    return info;
+}
+
+static unsigned long long WMMParseUnsignedLongLong(NSString *value) {
+    if (value.length == 0) {
+        return 0;
+    }
+
+    NSScanner *hexScanner = [NSScanner scannerWithString:value];
+    unsigned long long hexValue = 0;
+    if (([value hasPrefix:@"0x"] || [value hasPrefix:@"0X"])
+        && [hexScanner scanString:@"0x" intoString:nil]
+        && [hexScanner scanHexLongLong:&hexValue]) {
+        return hexValue;
+    }
+
+    return strtoull(value.UTF8String, NULL, 10);
+}
+
+static NSDate * _Nullable WMMDateFromAFCTimestampString(NSString *value) {
+    unsigned long long rawValue = WMMParseUnsignedLongLong(value);
+    if (rawValue == 0) {
+        return nil;
+    }
+
+    NSTimeInterval seconds;
+    if (rawValue > 10000000000000000ULL) {
+        seconds = (NSTimeInterval)rawValue / 1000000000.0;
+    } else if (rawValue > 10000000000000ULL) {
+        seconds = (NSTimeInterval)rawValue / 1000000.0;
+    } else if (rawValue > 10000000000ULL) {
+        seconds = (NSTimeInterval)rawValue / 1000.0;
+    } else {
+        seconds = (NSTimeInterval)rawValue;
+    }
+
+    return [NSDate dateWithTimeIntervalSince1970:seconds];
+}
+
+static NSDate * _Nullable WMMModificationDateFromAFCInfo(NSDictionary<NSString *, NSString *> *info) {
+    NSString *candidate = info[@"st_mtime"] ?: info[@"st_birthtime"];
+    if (candidate.length == 0) {
+        return nil;
+    }
+
+    return WMMDateFromAFCTimestampString(candidate);
+}
+
+static long long WMMFileSizeFromAFCInfo(NSDictionary<NSString *, NSString *> *info) {
+    NSString *candidate = info[@"st_size"];
+    if (candidate.length == 0) {
+        return 0;
+    }
+
+    unsigned long long parsed = WMMParseUnsignedLongLong(candidate);
+    if (parsed > LLONG_MAX) {
+        return LLONG_MAX;
+    }
+
+    return (long long)parsed;
+}
+
+static NSDictionary<NSString *, id> * _Nullable WMMCopyAFCTreeMetrics(
+    WMMMobileDeviceFunctions *functions,
+    AFCConnectionRef afcConnection,
+    NSString *remotePath,
+    NSError **error
+) {
+    NSDictionary<NSString *, NSString *> *info = WMMCopyAFCFileInfo(functions, afcConnection, remotePath, error);
+    if (info == nil) {
+        return nil;
+    }
+
+    NSDate *latestModificationDate = WMMModificationDateFromAFCInfo(info);
+    NSMutableArray<NSString *> *entries = nil;
+    const int directoryStatus = WMMReadAFCDirectory(functions, afcConnection, remotePath, &entries);
+    if (directoryStatus != 0) {
+        return @{
+            @"sizeBytes": @(WMMFileSizeFromAFCInfo(info)),
+            @"modifiedDate": latestModificationDate ?: [NSNull null]
+        };
+    }
+
+    long long totalSize = 0;
+    for (NSString *entry in entries) {
+        if ([entry isEqualToString:@"."] || [entry isEqualToString:@".."]) {
+            continue;
+        }
+
+        NSString *childRemotePath = [remotePath hasSuffix:@"/"]
+            ? [remotePath stringByAppendingString:entry]
+            : [remotePath stringByAppendingPathComponent:entry];
+        NSDictionary<NSString *, id> *childMetrics = WMMCopyAFCTreeMetrics(
+            functions,
+            afcConnection,
+            childRemotePath,
+            error
+        );
+        if (childMetrics == nil) {
+            return nil;
+        }
+
+        totalSize += [childMetrics[@"sizeBytes"] longLongValue];
+        NSDate *childModifiedDate = childMetrics[@"modifiedDate"];
+        if ([childModifiedDate isKindOfClass:[NSDate class]]
+            && (latestModificationDate == nil || [childModifiedDate compare:latestModificationDate] == NSOrderedDescending)) {
+            latestModificationDate = childModifiedDate;
+        }
+    }
+
+    return @{
+        @"sizeBytes": @(totalSize),
+        @"modifiedDate": latestModificationDate ?: [NSNull null]
+    };
+}
+
 static BOOL WMMCopyAFCFileToLocalURL(
     WMMMobileDeviceFunctions *functions,
     AFCConnectionRef afcConnection,
@@ -596,6 +769,14 @@ static BOOL WMMCopyAFCFileToLocalURL(
 
     NSFileHandle *handle = [NSFileHandle fileHandleForWritingToURL:localFileURL error:error];
     if (handle == nil) {
+        if (error != NULL && *error != nil) {
+            *error = [NSError errorWithDomain:(*error).domain code:(*error).code userInfo:@{
+                NSLocalizedDescriptionKey: [NSString stringWithFormat:@"Failed to open local file %@ for remote AFC path %@: %@",
+                    localFileURL.path,
+                    remotePath,
+                    (*error).localizedDescription]
+            }];
+        }
         functions->AFCFileRefClose(afcConnection, fileDescriptor);
         return NO;
     }
@@ -624,6 +805,14 @@ static BOOL WMMCopyAFCFileToLocalURL(
 
         NSData *chunk = [NSData dataWithBytes:buffer.bytes length:bytesToRead];
         if (![handle writeData:chunk error:error]) {
+            if (error != NULL && *error != nil) {
+                *error = [NSError errorWithDomain:(*error).domain code:(*error).code userInfo:@{
+                    NSLocalizedDescriptionKey: [NSString stringWithFormat:@"Failed writing local file %@ for remote AFC path %@: %@",
+                        localFileURL.path,
+                        remotePath,
+                        (*error).localizedDescription]
+                }];
+            }
             success = NO;
             break;
         }
@@ -646,6 +835,14 @@ static BOOL WMMCopyAFCTreeToLocalURL(
     if (directoryStatus == 0) {
         NSFileManager *fileManager = [NSFileManager defaultManager];
         if (![fileManager createDirectoryAtURL:localURL withIntermediateDirectories:YES attributes:nil error:error]) {
+            if (error != NULL && *error != nil) {
+                *error = [NSError errorWithDomain:(*error).domain code:(*error).code userInfo:@{
+                    NSLocalizedDescriptionKey: [NSString stringWithFormat:@"Failed to create local directory %@ for remote AFC path %@: %@",
+                        localURL.path,
+                        remotePath,
+                        (*error).localizedDescription]
+                }];
+            }
             return NO;
         }
 
@@ -660,8 +857,16 @@ static BOOL WMMCopyAFCTreeToLocalURL(
             } else {
                 childRemotePath = [childRemotePath stringByAppendingPathComponent:entry];
             }
-            NSURL *childLocalURL = [localURL URLByAppendingPathComponent:entry isDirectory:YES];
+            NSURL *childLocalURL = [localURL URLByAppendingPathComponent:entry];
             if (!WMMCopyAFCTreeToLocalURL(functions, afcConnection, childRemotePath, childLocalURL, error)) {
+                if (error != NULL && *error != nil) {
+                    *error = [NSError errorWithDomain:(*error).domain code:(*error).code userInfo:@{
+                        NSLocalizedDescriptionKey: [NSString stringWithFormat:@"Failed copying remote AFC path %@ into %@: %@",
+                            childRemotePath,
+                            childLocalURL.path,
+                            (*error).localizedDescription]
+                    }];
+                }
                 return NO;
             }
         }
@@ -670,6 +875,296 @@ static BOOL WMMCopyAFCTreeToLocalURL(
     }
 
     return WMMCopyAFCFileToLocalURL(functions, afcConnection, remotePath, localURL, error);
+}
+
+static NSString *WMMNormalizedAFCPath(NSString *path) {
+    NSString *normalizedPath = path.length == 0 ? @"/" : path;
+    if (![normalizedPath hasPrefix:@"/"]) {
+        normalizedPath = [@"/" stringByAppendingString:normalizedPath];
+    }
+    return normalizedPath;
+}
+
+static NSData * _Nullable WMMCopyAFCFileData(
+    WMMMobileDeviceFunctions *functions,
+    AFCConnectionRef afcConnection,
+    NSString *remotePath,
+    NSError **error
+) {
+    AFCFileDescriptorRef fileDescriptor = NULL;
+    const int openStatus = functions->AFCFileRefOpen(
+        afcConnection,
+        remotePath.fileSystemRepresentation,
+        1,
+        &fileDescriptor
+    );
+    if (openStatus != 0 || fileDescriptor == NULL) {
+        if (error != NULL) {
+            *error = WMMMakeError(openStatus, [NSString stringWithFormat:@"AFCFileRefOpen failed for %@ (%d).", remotePath, openStatus]);
+        }
+        return nil;
+    }
+
+    NSMutableData *data = [NSMutableData data];
+    NSMutableData *buffer = [NSMutableData dataWithLength:64 * 1024];
+    while (true) {
+        size_t bytesToRead = buffer.length;
+        const int readStatus = functions->AFCFileRefRead(
+            afcConnection,
+            fileDescriptor,
+            buffer.mutableBytes,
+            &bytesToRead
+        );
+        if (readStatus != 0) {
+            if (error != NULL) {
+                *error = WMMMakeError(readStatus, [NSString stringWithFormat:@"AFCFileRefRead failed for %@ (%d).", remotePath, readStatus]);
+            }
+            functions->AFCFileRefClose(afcConnection, fileDescriptor);
+            return nil;
+        }
+
+        if (bytesToRead == 0) {
+            break;
+        }
+
+        [data appendBytes:buffer.bytes length:bytesToRead];
+    }
+
+    functions->AFCFileRefClose(afcConnection, fileDescriptor);
+    return data;
+}
+
+static BOOL WMMEntryArrayContainsName(NSArray<NSString *> *entries, NSString *candidate) {
+    for (NSString *entry in entries) {
+        if ([entry isEqualToString:candidate]) {
+            return YES;
+        }
+    }
+    return NO;
+}
+
+static NSString * _Nullable WMMReadUTF8TextFile(
+    WMMMobileDeviceFunctions *functions,
+    AFCConnectionRef afcConnection,
+    NSString *remotePath
+) {
+    NSData *data = WMMCopyAFCFileData(functions, afcConnection, remotePath, NULL);
+    if (data == nil) {
+        return nil;
+    }
+
+    NSString *string = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+    return [string stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+}
+
+static NSDictionary<NSString *, id> * _Nullable WMMReadManifestHeader(
+    WMMMobileDeviceFunctions *functions,
+    AFCConnectionRef afcConnection,
+    NSString *remotePath
+) {
+    NSData *data = WMMCopyAFCFileData(functions, afcConnection, remotePath, NULL);
+    if (data == nil) {
+        return nil;
+    }
+
+    NSDictionary *jsonObject = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+    if (![jsonObject isKindOfClass:[NSDictionary class]]) {
+        return nil;
+    }
+
+    NSDictionary *header = jsonObject[@"header"];
+    if (![header isKindOfClass:[NSDictionary class]]) {
+        return nil;
+    }
+
+    return header;
+}
+
+static NSString * _Nullable WMMVersionStringFromValue(id value) {
+    if ([value isKindOfClass:[NSString class]]) {
+        NSString *stringValue = [(NSString *)value stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        return stringValue.length > 0 ? stringValue : nil;
+    }
+
+    if ([value isKindOfClass:[NSArray class]]) {
+        NSMutableArray<NSString *> *components = [NSMutableArray array];
+        for (id component in (NSArray *)value) {
+            if ([component isKindOfClass:[NSNumber class]]) {
+                [components addObject:[(NSNumber *)component stringValue]];
+            } else if ([component isKindOfClass:[NSString class]]) {
+                [components addObject:(NSString *)component];
+            }
+        }
+        return components.count > 0 ? [components componentsJoinedByString:@"."] : nil;
+    }
+
+    return nil;
+}
+
+static BOOL WMMIsCandidateItem(NSString *contentType, NSArray<NSString *> *entries) {
+    if ([contentType isEqualToString:@"World"]) {
+        return WMMEntryArrayContainsName(entries, @"level.dat")
+            || WMMEntryArrayContainsName(entries, @"db")
+            || WMMEntryArrayContainsName(entries, @"levelname.txt");
+    }
+
+    return WMMEntryArrayContainsName(entries, @"manifest.json")
+        || WMMEntryArrayContainsName(entries, @"pack_icon.png")
+        || WMMEntryArrayContainsName(entries, @"pack_icon.jpeg")
+        || WMMEntryArrayContainsName(entries, @"pack_icon.jpg");
+}
+
+static NSDictionary<NSString *, id> *WMMBuildMinecraftItemSummary(
+    WMMMobileDeviceFunctions *functions,
+    AFCConnectionRef afcConnection,
+    NSString *contentType,
+    NSString *collectionFolderName,
+    NSString *itemRemotePath,
+    NSString *itemRelativePath,
+    NSString *folderName,
+    NSArray<NSString *> *entries
+) {
+    NSMutableDictionary<NSString *, id> *summary = [@{
+        @"contentType": contentType,
+        @"collectionFolderName": collectionFolderName,
+        @"relativePath": itemRelativePath,
+        @"folderName": folderName
+    } mutableCopy];
+
+    NSString *displayName = folderName;
+    if ([contentType isEqualToString:@"World"]) {
+        NSString *levelName = WMMReadUTF8TextFile(
+            functions,
+            afcConnection,
+            [itemRemotePath stringByAppendingPathComponent:@"levelname.txt"]
+        );
+        if (levelName.length > 0) {
+            displayName = levelName;
+        }
+    } else {
+        NSDictionary<NSString *, id> *header = WMMReadManifestHeader(
+            functions,
+            afcConnection,
+            [itemRemotePath stringByAppendingPathComponent:@"manifest.json"]
+        );
+        NSString *manifestName = [header[@"name"] isKindOfClass:[NSString class]] ? header[@"name"] : nil;
+        if (manifestName.length > 0) {
+            displayName = manifestName;
+        }
+
+        if ([header[@"uuid"] isKindOfClass:[NSString class]]) {
+            summary[@"packUUID"] = [header[@"uuid"] lowercaseString];
+        }
+        NSString *version = WMMVersionStringFromValue(header[@"version"]);
+        if (version.length > 0) {
+            summary[@"packVersion"] = version;
+        }
+        NSString *minimumEngineVersion = WMMVersionStringFromValue(header[@"min_engine_version"]);
+        if (minimumEngineVersion.length > 0) {
+            summary[@"minimumEngineVersion"] = minimumEngineVersion;
+        }
+    }
+
+    summary[@"displayName"] = displayName;
+    summary[@"hasIcon"] = @(
+        WMMEntryArrayContainsName(entries, @"world_icon.png")
+            || WMMEntryArrayContainsName(entries, @"world_icon.jpeg")
+            || WMMEntryArrayContainsName(entries, @"world_icon.jpg")
+            || WMMEntryArrayContainsName(entries, @"pack_icon.png")
+            || WMMEntryArrayContainsName(entries, @"pack_icon.jpeg")
+            || WMMEntryArrayContainsName(entries, @"pack_icon.jpg")
+    );
+    return summary;
+}
+
+static void WMMAppendCollectionSummaries(
+    WMMMobileDeviceFunctions *functions,
+    AFCConnectionRef afcConnection,
+    NSString *rootRemotePath,
+    NSString *collectionFolderName,
+    NSString *contentType,
+    NSMutableArray<NSDictionary<NSString *, id> *> *results
+) {
+    NSString *collectionRemotePath = [rootRemotePath stringByAppendingPathComponent:collectionFolderName];
+    NSMutableArray<NSString *> *itemFolderNames = nil;
+    if (WMMReadAFCDirectory(functions, afcConnection, collectionRemotePath, &itemFolderNames) != 0 || itemFolderNames == nil) {
+        return;
+    }
+
+    for (NSString *itemFolderName in itemFolderNames) {
+        if ([itemFolderName isEqualToString:@"."] || [itemFolderName isEqualToString:@".."]) {
+            continue;
+        }
+
+        NSString *itemRemotePath = [collectionRemotePath stringByAppendingPathComponent:itemFolderName];
+        NSMutableArray<NSString *> *itemEntries = nil;
+        if (WMMReadAFCDirectory(functions, afcConnection, itemRemotePath, &itemEntries) != 0 || itemEntries == nil) {
+            continue;
+        }
+
+        if (!WMMIsCandidateItem(contentType, itemEntries)) {
+            continue;
+        }
+
+        NSString *itemRelativePath = [collectionFolderName stringByAppendingPathComponent:itemFolderName];
+        [results addObject:WMMBuildMinecraftItemSummary(
+            functions,
+            afcConnection,
+            contentType,
+            collectionFolderName,
+            itemRemotePath,
+            itemRelativePath,
+            itemFolderName,
+            itemEntries
+        )];
+
+        if (![contentType isEqualToString:@"World"]) {
+            continue;
+        }
+
+        NSArray<NSDictionary<NSString *, NSString *> *> *embeddedCollections = @[
+            @{ @"folder": @"behavior_packs", @"type": @"Behavior Pack" },
+            @{ @"folder": @"resource_packs", @"type": @"Resource Pack" }
+        ];
+
+        for (NSDictionary<NSString *, NSString *> *embeddedCollection in embeddedCollections) {
+            NSString *embeddedFolder = embeddedCollection[@"folder"];
+            NSString *embeddedType = embeddedCollection[@"type"];
+            NSString *embeddedCollectionPath = [itemRemotePath stringByAppendingPathComponent:embeddedFolder];
+            NSMutableArray<NSString *> *embeddedFolderNames = nil;
+            if (WMMReadAFCDirectory(functions, afcConnection, embeddedCollectionPath, &embeddedFolderNames) != 0 || embeddedFolderNames == nil) {
+                continue;
+            }
+
+            for (NSString *embeddedFolderName in embeddedFolderNames) {
+                if ([embeddedFolderName isEqualToString:@"."] || [embeddedFolderName isEqualToString:@".."]) {
+                    continue;
+                }
+
+                NSString *embeddedItemPath = [embeddedCollectionPath stringByAppendingPathComponent:embeddedFolderName];
+                NSMutableArray<NSString *> *embeddedEntries = nil;
+                if (WMMReadAFCDirectory(functions, afcConnection, embeddedItemPath, &embeddedEntries) != 0 || embeddedEntries == nil) {
+                    continue;
+                }
+
+                if (!WMMIsCandidateItem(embeddedType, embeddedEntries)) {
+                    continue;
+                }
+
+                NSString *embeddedRelativePath = [itemRelativePath stringByAppendingPathComponent:[embeddedFolder stringByAppendingPathComponent:embeddedFolderName]];
+                [results addObject:WMMBuildMinecraftItemSummary(
+                    functions,
+                    afcConnection,
+                    embeddedType,
+                    embeddedFolder,
+                    embeddedItemPath,
+                    embeddedRelativePath,
+                    embeddedFolderName,
+                    embeddedEntries
+                )];
+            }
+        }
+    }
 }
 
 NSDictionary<NSString *, id> * _Nullable
@@ -993,6 +1488,207 @@ WMMCopyFirstConnectedDeviceApplicationList(NSError **error) {
         @"productType": productType,
         @"productVersion": productVersion,
         @"applications": applications
+    };
+}
+
+NSDictionary<NSString *, id> * _Nullable
+WMMCopyFirstConnectedDeviceMinecraftLibrarySnapshot(
+    NSString *bundleIdentifier,
+    NSString *relativePath,
+    NSError **error
+) {
+    if (bundleIdentifier.length == 0) {
+        if (error != NULL) {
+            *error = WMMMakeError(16, @"A bundle identifier is required.");
+        }
+        return nil;
+    }
+
+    WMMMobileDeviceFunctions functions;
+    if (!WMMLoadFunctions(&functions, error)) {
+        return nil;
+    }
+
+    AMDeviceRef device = WMMCopyFirstConnectedDevice(&functions, error);
+    if (device == NULL) {
+        return nil;
+    }
+
+    if (!WMMConnectAndValidateDevice(&functions, device, YES, error)) {
+        functions.AMDeviceRelease(device);
+        return nil;
+    }
+
+    AMDServiceConnectionRef backingServiceConnection = NULL;
+    AFCConnectionRef afcConnection = WMMCreateVendAFCConnection(
+        &functions,
+        device,
+        bundleIdentifier,
+        &backingServiceConnection,
+        error
+    );
+    if (afcConnection == NULL) {
+        WMMDisconnectDevice(&functions, device, YES);
+        functions.AMDeviceRelease(device);
+        return nil;
+    }
+
+    NSString *normalizedRootPath = WMMNormalizedAFCPath(relativePath);
+    NSMutableArray<NSDictionary<NSString *, id> *> *items = [NSMutableArray array];
+    NSArray<NSDictionary<NSString *, NSString *> *> *collections = @[
+        @{ @"folder": @"minecraftWorlds", @"type": @"World" },
+        @{ @"folder": @"behavior_packs", @"type": @"Behavior Pack" },
+        @{ @"folder": @"resource_packs", @"type": @"Resource Pack" },
+        @{ @"folder": @"skin_packs", @"type": @"Skin Pack" },
+        @{ @"folder": @"world_templates", @"type": @"World Template" }
+    ];
+
+    for (NSDictionary<NSString *, NSString *> *collection in collections) {
+        WMMAppendCollectionSummaries(
+            &functions,
+            afcConnection,
+            normalizedRootPath,
+            collection[@"folder"],
+            collection[@"type"],
+            items
+        );
+    }
+
+    functions.AFCConnectionClose(afcConnection);
+    if (backingServiceConnection != NULL) {
+        functions.AMDServiceConnectionInvalidate(backingServiceConnection);
+    }
+    WMMDisconnectDevice(&functions, device, YES);
+    functions.AMDeviceRelease(device);
+
+    return @{
+        @"bundleIdentifier": bundleIdentifier,
+        @"path": normalizedRootPath,
+        @"items": items
+    };
+}
+
+NSData * _Nullable
+WMMCopyFirstConnectedDeviceAppFileData(
+    NSString *bundleIdentifier,
+    NSString *relativePath,
+    NSError **error
+) {
+    if (bundleIdentifier.length == 0) {
+        if (error != NULL) {
+            *error = WMMMakeError(17, @"A bundle identifier is required.");
+        }
+        return nil;
+    }
+
+    WMMMobileDeviceFunctions functions;
+    if (!WMMLoadFunctions(&functions, error)) {
+        return nil;
+    }
+
+    AMDeviceRef device = WMMCopyFirstConnectedDevice(&functions, error);
+    if (device == NULL) {
+        return nil;
+    }
+
+    if (!WMMConnectAndValidateDevice(&functions, device, YES, error)) {
+        functions.AMDeviceRelease(device);
+        return nil;
+    }
+
+    AMDServiceConnectionRef backingServiceConnection = NULL;
+    AFCConnectionRef afcConnection = WMMCreateVendAFCConnection(
+        &functions,
+        device,
+        bundleIdentifier,
+        &backingServiceConnection,
+        error
+    );
+    if (afcConnection == NULL) {
+        WMMDisconnectDevice(&functions, device, YES);
+        functions.AMDeviceRelease(device);
+        return nil;
+    }
+
+    NSString *normalizedPath = WMMNormalizedAFCPath(relativePath);
+    NSData *data = WMMCopyAFCFileData(&functions, afcConnection, normalizedPath, error);
+
+    functions.AFCConnectionClose(afcConnection);
+    if (backingServiceConnection != NULL) {
+        functions.AMDServiceConnectionInvalidate(backingServiceConnection);
+    }
+    WMMDisconnectDevice(&functions, device, YES);
+    functions.AMDeviceRelease(device);
+
+    return data;
+}
+
+NSDictionary<NSString *, id> * _Nullable
+WMMCopyFirstConnectedDeviceAppPathMetrics(
+    NSString *bundleIdentifier,
+    NSString *relativePath,
+    NSError **error
+) {
+    if (bundleIdentifier.length == 0) {
+        if (error != NULL) {
+            *error = WMMMakeError(18, @"A bundle identifier is required.");
+        }
+        return nil;
+    }
+
+    WMMMobileDeviceFunctions functions;
+    if (!WMMLoadFunctions(&functions, error)) {
+        return nil;
+    }
+
+    AMDeviceRef device = WMMCopyFirstConnectedDevice(&functions, error);
+    if (device == NULL) {
+        return nil;
+    }
+
+    if (!WMMConnectAndValidateDevice(&functions, device, YES, error)) {
+        functions.AMDeviceRelease(device);
+        return nil;
+    }
+
+    AMDServiceConnectionRef backingServiceConnection = NULL;
+    AFCConnectionRef afcConnection = WMMCreateVendAFCConnection(
+        &functions,
+        device,
+        bundleIdentifier,
+        &backingServiceConnection,
+        error
+    );
+    if (afcConnection == NULL) {
+        WMMDisconnectDevice(&functions, device, YES);
+        functions.AMDeviceRelease(device);
+        return nil;
+    }
+
+    NSString *normalizedPath = WMMNormalizedAFCPath(relativePath);
+    NSDictionary<NSString *, id> *metrics = WMMCopyAFCTreeMetrics(
+        &functions,
+        afcConnection,
+        normalizedPath,
+        error
+    );
+
+    functions.AFCConnectionClose(afcConnection);
+    if (backingServiceConnection != NULL) {
+        functions.AMDServiceConnectionInvalidate(backingServiceConnection);
+    }
+    WMMDisconnectDevice(&functions, device, YES);
+    functions.AMDeviceRelease(device);
+
+    if (metrics == nil) {
+        return nil;
+    }
+
+    return @{
+        @"bundleIdentifier": bundleIdentifier,
+        @"path": normalizedPath,
+        @"sizeBytes": metrics[@"sizeBytes"] ?: @0,
+        @"modifiedDate": metrics[@"modifiedDate"] ?: [NSNull null]
     };
 }
 
