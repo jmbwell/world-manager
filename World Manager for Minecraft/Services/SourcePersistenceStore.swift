@@ -535,7 +535,6 @@ actor SourcePersistenceStore {
             SourceAccessDescriptor(
                 accessorIdentifier: origin.defaultAccessorIdentifier,
                 kind: origin.kind,
-                capabilities: origin.defaultCapabilities,
                 refreshStrategy: origin.defaultRefreshStrategy
             ),
             true

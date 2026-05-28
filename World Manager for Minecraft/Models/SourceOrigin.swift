@@ -69,15 +69,6 @@ enum MinecraftSourceOrigin: Hashable, Sendable, Codable {
         }
     }
 
-    nonisolated var defaultCapabilities: SourceCapabilities {
-        switch self {
-        case .localFolder:
-            return .localFolder
-        case .connectedDevice:
-            return .connectedDevice
-        }
-    }
-
     nonisolated var defaultRefreshStrategy: SourceRefreshStrategy {
         switch self {
         case .localFolder:

@@ -62,7 +62,6 @@ struct MinecraftSource: Identifiable, Hashable, Sendable {
         self.accessDescriptor = accessDescriptor ?? SourceAccessDescriptor(
             accessorIdentifier: resolvedOrigin.defaultAccessorIdentifier,
             kind: resolvedOrigin.kind,
-            capabilities: resolvedOrigin.defaultCapabilities,
             refreshStrategy: resolvedOrigin.defaultRefreshStrategy
         )
         self.availability = availability

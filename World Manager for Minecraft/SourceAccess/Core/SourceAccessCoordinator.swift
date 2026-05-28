@@ -40,7 +40,6 @@ extension SourceAccessMethod {
         SourceAccessDescriptor(
             accessorIdentifier: accessorIdentifier,
             kind: source.origin.kind,
-            capabilities: source.origin.defaultCapabilities,
             refreshStrategy: source.origin.defaultRefreshStrategy
         )
     }

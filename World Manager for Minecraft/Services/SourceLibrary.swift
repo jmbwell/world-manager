@@ -163,7 +163,6 @@ final class SourceLibrary: ObservableObject {
             accessDescriptor: SourceAccessDescriptor(
                 accessorIdentifier: LocalFolderSourceAccess().accessorIdentifier,
                 kind: .localFolder,
-                capabilities: .localFolder,
                 refreshStrategy: .eagerFullScan
             )
         )

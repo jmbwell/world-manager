@@ -17,7 +17,6 @@ struct AppleMobileDeviceSourceAccess: ConnectedDeviceSourceAccessMethod {
         return SourceAccessDescriptor(
             accessorIdentifier: accessorIdentifier,
             kind: .connectedDevice,
-            capabilities: .connectedDevice,
             refreshStrategy: .staged
         )
     }

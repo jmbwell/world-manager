@@ -24,7 +24,6 @@ struct ConnectedDeviceSourceFactory: Sendable {
             accessDescriptor: SourceAccessDescriptor(
                 accessorIdentifier: AppleMobileDeviceSourceAccess().accessorIdentifier,
                 kind: .connectedDevice,
-                capabilities: .connectedDevice,
                 refreshStrategy: .staged
             )
         )

@@ -22,31 +22,9 @@ enum SourceRefreshStrategy: String, Hashable, Sendable, Codable {
     case staged
 }
 
-struct SourceCapabilities: Hashable, Sendable, Codable {
-    var supportsDirectFileAccess: Bool
-    var supportsStagedRefresh: Bool
-    var supportsPersistentCaching: Bool
-    var supportsLazyMaterialization: Bool
-
-    nonisolated static let localFolder = SourceCapabilities(
-        supportsDirectFileAccess: true,
-        supportsStagedRefresh: false,
-        supportsPersistentCaching: false,
-        supportsLazyMaterialization: false
-    )
-
-    nonisolated static let connectedDevice = SourceCapabilities(
-        supportsDirectFileAccess: false,
-        supportsStagedRefresh: true,
-        supportsPersistentCaching: true,
-        supportsLazyMaterialization: true
-    )
-}
-
 struct SourceAccessDescriptor: Hashable, Sendable, Codable {
     var accessorIdentifier: SourceAccessorIdentifier
     var kind: MinecraftSourceKind
-    var capabilities: SourceCapabilities
     var refreshStrategy: SourceRefreshStrategy
 }
 

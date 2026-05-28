@@ -17,7 +17,6 @@ struct LocalFolderSourceAccess: SourceAccessMethod {
         return SourceAccessDescriptor(
             accessorIdentifier: accessorIdentifier,
             kind: .localFolder,
-            capabilities: .localFolder,
             refreshStrategy: .eagerFullScan
         )
     }
