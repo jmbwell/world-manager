@@ -25,13 +25,11 @@ struct SourcesSidebarView: View {
     let sources: [MinecraftSource]
     let connectedDevices: [ConnectedDeviceSidebarEntry]
     @Binding var selection: SidebarSelection?
-    let footerState: SidebarFooterState
     let addSourceAction: () -> Void
     let addDeviceSourceAction: () -> Void
     let addConnectedDeviceAction: (ConnectedDeviceSidebarEntry) -> Void
     let rescanSourceAction: (MinecraftSource) -> Void
     let removeSourceAction: (MinecraftSource) -> Void
-    let revealFooterURLAction: (URL) -> Void
     let filters: (MinecraftSource) -> [SidebarFilter]
 
     var body: some View {
@@ -462,93 +460,6 @@ private struct ConnectedDeviceTransportIcon: View {
             return "Connected by USB"
         case .network:
             return "Connected by Network"
-        }
-    }
-}
-
-private struct SidebarFooterView: View {
-    let state: SidebarFooterState
-    let revealAction: (URL) -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
-                if state.style == .inProgress {
-                    ProgressView()
-                        .controlSize(.small)
-                        .tint(.appAccent)
-                }
-
-                Text(state.title)
-                    .font(.footnote.weight(.semibold))
-                    .foregroundStyle(primaryColor)
-                    .lineLimit(3)
-            }
-
-            if let subtitle = state.subtitle {
-                Text(subtitle)
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-            }
-
-            if let detail = state.detail {
-                Text(detail)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
-
-            if let revealURL = state.revealURL {
-                Button("Reveal in Finder") {
-                    revealAction(revealURL)
-                }
-                .buttonStyle(.link)
-                .font(.footnote)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 12)
-        .background(cardBackground, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .strokeBorder(cardStroke)
-        }
-    }
-
-    private var primaryColor: Color {
-        switch state.style {
-        case .idle:
-            return .primary
-        case .inProgress:
-            return .appAccent
-        case .failure:
-            return .red
-        case .success:
-            return .appAccent
-        }
-    }
-
-    private var cardBackground: AnyShapeStyle {
-        switch state.style {
-        case .inProgress:
-            return AnyShapeStyle(Color.appAccent.opacity(0.08))
-        default:
-            return AnyShapeStyle(.regularMaterial)
-        }
-    }
-
-    private var cardStroke: Color {
-        switch state.style {
-        case .inProgress:
-            return Color.appAccent.opacity(0.18)
-        case .failure:
-            return .red.opacity(0.18)
-        case .success:
-            return Color.appAccent.opacity(0.16)
-        case .idle:
-            return .white.opacity(0.08)
         }
     }
 }

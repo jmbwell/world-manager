@@ -45,7 +45,6 @@ struct ContentView: View {
                 sources: library.sidebarSources,
                 connectedDevices: library.connectedDevices,
                 selection: $selectedSidebarSelection,
-                footerState: library.sidebarFooterState,
                 addSourceAction: pickFolder,
                 addDeviceSourceAction: { isShowingDeviceSourceSheet = true },
                 addConnectedDeviceAction: addConnectedDeviceSource(from:),
@@ -57,7 +56,6 @@ struct ContentView: View {
                 removeSourceAction: { source in
                     removeSource(source.id)
                 },
-                revealFooterURLAction: revealURLInFinder(_:),
                 filters: sidebarFilters(for:)
             )
             .navigationSplitViewColumnWidth(min: 280, ideal: 320, max: 380)
@@ -681,7 +679,6 @@ struct ContentView: View {
         }
 
         isPerformingItemAction = true
-        library.setItemActionInProgress("Creating \(item.contentType.archiveExtension) file...")
 
         Task {
             do {
@@ -695,16 +692,11 @@ struct ContentView: View {
 
                 await MainActor.run {
                     isPerformingItemAction = false
-                    library.setItemActionSuccess(
-                        title: "Created \(finalURL.lastPathComponent)",
-                        subtitle: "Ready to move to another device",
-                        revealURL: finalURL
-                    )
+                    _ = finalURL
                 }
             } catch {
                 await MainActor.run {
                     isPerformingItemAction = false
-                    library.setItemActionFailure(error.localizedDescription)
                 }
             }
         }
@@ -717,7 +709,6 @@ struct ContentView: View {
         let source = currentSource
 
         isPerformingItemAction = true
-        library.setItemActionInProgress("Preparing \(item.contentType.archiveExtension) file...")
 
         Task {
             do {
@@ -733,15 +724,8 @@ struct ContentView: View {
 
                     let presentationView = anchorView ?? NSApp.keyWindow?.contentView
                     guard let presentationView else {
-                        library.setItemActionFailure("Could not present the share menu.")
                         return
                     }
-
-                    library.setItemActionSuccess(
-                        title: "Share ready",
-                        subtitle: shareURL.lastPathComponent,
-                        revealURL: shareURL
-                    )
 
                     let picker = NSSharingServicePicker(items: [shareURL])
                     let targetRect = anchorView?.bounds ?? presentationView.bounds.insetBy(
@@ -753,7 +737,6 @@ struct ContentView: View {
             } catch {
                 await MainActor.run {
                     isPerformingItemAction = false
-                    library.setItemActionFailure(error.localizedDescription)
                 }
             }
         }
@@ -774,7 +757,6 @@ struct ContentView: View {
         }
 
         isPerformingItemAction = true
-        library.setItemActionInProgress("Preparing item for Finder...")
 
         Task {
             do {
@@ -783,23 +765,13 @@ struct ContentView: View {
                 await MainActor.run {
                     isPerformingItemAction = false
                     NSWorkspace.shared.activateFileViewerSelecting([revealURL])
-                    library.setItemActionSuccess(
-                        title: "Prepared for Finder",
-                        subtitle: item.displayName,
-                        revealURL: revealURL
-                    )
                 }
             } catch {
                 await MainActor.run {
                     isPerformingItemAction = false
-                    library.setItemActionFailure(error.localizedDescription)
                 }
             }
         }
-    }
-
-    private func revealURLInFinder(_ url: URL) {
-        NSWorkspace.shared.activateFileViewerSelecting([url])
     }
 
     private func archiveType(for item: MinecraftContentItem) -> UTType {

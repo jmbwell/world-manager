@@ -227,14 +227,6 @@ enum PreviewFixtures {
 
     static let allSources = [primarySource, secondarySource]
 
-    static let sidebarFooter = SidebarFooterState(
-        style: .success,
-        title: "Export Complete",
-        subtitle: "Saved a preview copy of \(featuredWorld.displayName)",
-        detail: nil,
-        revealURL: featuredWorld.folderURL
-    )
-
     static let directoryEntries = [
         DirectoryPreviewEntry(name: "db", isDirectory: true),
         DirectoryPreviewEntry(name: "level.dat", isDirectory: false),
@@ -242,48 +234,9 @@ enum PreviewFixtures {
         DirectoryPreviewEntry(name: "world_icon.jpeg", isDirectory: false),
         DirectoryPreviewEntry(name: "resource_packs", isDirectory: true)
     ]
-
-    nonisolated static func sidebarFilters(for source: MinecraftSource) -> [SidebarFilter] {
-        let allFilter = SidebarFilter(
-            title: "All Content",
-            iconName: "square.stack.3d.up",
-            count: source.items.count,
-            selection: .allContent(sourceID: source.id)
-        )
-
-        let groupedFilters = MinecraftContentType.allCases.compactMap { contentType -> SidebarFilter? in
-            let count = source.items.filter { $0.contentType == contentType }.count
-            guard count > 0 else {
-                return nil
-            }
-
-            return SidebarFilter(
-                title: contentType.rawValue,
-                iconName: iconName(for: contentType),
-                count: count,
-                selection: .contentType(sourceID: source.id, contentType: contentType)
-            )
-        }
-
-        return [allFilter] + groupedFilters
-    }
-
-    nonisolated static func iconName(for contentType: MinecraftContentType) -> String {
-        switch contentType {
-        case .world:
-            return "globe.europe.africa"
-        case .behaviorPack:
-            return "shippingbox"
-        case .resourcePack:
-            return "paintpalette"
-        case .skinPack:
-            return "person.crop.square"
-        case .worldTemplate:
-            return "doc.on.doc"
-        }
-    }
 }
 
+@MainActor
 struct SidebarColumnPreviewContainer: View {
     @State private var selection: SidebarSelection? = .allContent(sourceID: PreviewFixtures.primarySource.id)
 
@@ -293,14 +246,49 @@ struct SidebarColumnPreviewContainer: View {
                 sources: PreviewFixtures.allSources,
                 connectedDevices: [],
                 selection: $selection,
-                footerState: PreviewFixtures.sidebarFooter,
                 addSourceAction: {},
                 addDeviceSourceAction: {},
                 addConnectedDeviceAction: { _ in },
                 rescanSourceAction: { _ in },
                 removeSourceAction: { _ in },
-                revealFooterURLAction: { _ in },
-                filters: PreviewFixtures.sidebarFilters(for:)
+                filters: { source in
+                    let allFilter = SidebarFilter(
+                        title: "All Content",
+                        iconName: "square.stack.3d.up",
+                        count: source.displayItems.count,
+                        selection: .allContent(sourceID: source.id)
+                    )
+
+                    let groupedFilters = MinecraftContentType.allCases.compactMap { contentType -> SidebarFilter? in
+                        let count = source.displayItems.filter { $0.contentType == contentType }.count
+                        guard count > 0 else {
+                            return nil
+                        }
+
+                        let iconName: String
+                        switch contentType {
+                        case .world:
+                            iconName = "globe.europe.africa"
+                        case .behaviorPack:
+                            iconName = "shippingbox"
+                        case .resourcePack:
+                            iconName = "paintpalette"
+                        case .skinPack:
+                            iconName = "person.crop.square"
+                        case .worldTemplate:
+                            iconName = "doc.on.doc"
+                        }
+
+                        return SidebarFilter(
+                            title: contentType.rawValue,
+                            iconName: iconName,
+                            count: count,
+                            selection: .contentType(sourceID: source.id, contentType: contentType)
+                        )
+                    }
+
+                    return [allFilter] + groupedFilters
+                }
             )
         }
     }

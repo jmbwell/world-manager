@@ -9,21 +9,6 @@ import Combine
 import Foundation
 import OSLog
 
-struct SidebarFooterState {
-    enum Style {
-        case idle
-        case inProgress
-        case failure
-        case success
-    }
-
-    let style: Style
-    let title: String
-    let subtitle: String?
-    let detail: String?
-    let revealURL: URL?
-}
-
 struct ConnectedDeviceSidebarEntry: Identifiable, Hashable {
     let device: ConnectedDevice
     let containers: [DeviceAppContainer]
@@ -58,7 +43,6 @@ final class SourceLibrary: ObservableObject {
     private static let localSourceRefreshInterval: TimeInterval = 4.0
     private static let connectedDeviceRefreshInterval: TimeInterval = 2.0
     private static let connectedDeviceRefreshIntervalWhileScanning: TimeInterval = 5.0
-    private static let footerRefreshDebounce: TimeInterval = 0.15
     private static let usbConnectedDeviceAutoRefreshInterval: TimeInterval = 45.0
     private static let networkConnectedDeviceAutoRefreshInterval: TimeInterval = 120.0
     private static let usbConnectedDeviceDiscoveryCacheTTL: TimeInterval = 60.0
@@ -70,21 +54,12 @@ final class SourceLibrary: ObservableObject {
 
     @Published var sources: [MinecraftSource] = []
     @Published private(set) var connectedDevices: [ConnectedDeviceSidebarEntry] = []
-    @Published private(set) var sidebarFooterState = SidebarFooterState(
-        style: .idle,
-        title: "",
-        subtitle: nil,
-        detail: nil,
-        revealURL: nil
-    )
     @Published private(set) var isRestoringPersistedSources = true
 
     private var scanTasks: [URL: Task<Void, Never>] = [:]
     private var automaticSyncTasks: [URL: Task<Void, Never>] = [:]
     private var connectedDeviceRefreshTask: Task<Void, Never>?
     private var localSourceRefreshTask: Task<Void, Never>?
-    private var footerResetTask: Task<Void, Never>?
-    private var footerRefreshTask: Task<Void, Never>?
     private let persistenceStore: SourcePersistenceStore
     private let sourceAccessMethod: SourceAccessMethod
     private let connectedDeviceAccessMethod: ConnectedDeviceSourceAccessMethod?
@@ -123,8 +98,6 @@ final class SourceLibrary: ObservableObject {
     deinit {
         connectedDeviceRefreshTask?.cancel()
         localSourceRefreshTask?.cancel()
-        footerResetTask?.cancel()
-        footerRefreshTask?.cancel()
         automaticSyncTasks.values.forEach { $0.cancel() }
         scanTasks.values.forEach { $0.cancel() }
     }
@@ -147,10 +120,6 @@ final class SourceLibrary: ObservableObject {
         connectedDeviceRefreshTask = nil
         localSourceRefreshTask?.cancel()
         localSourceRefreshTask = nil
-        footerResetTask?.cancel()
-        footerResetTask = nil
-        footerRefreshTask?.cancel()
-        footerRefreshTask = nil
 
         for task in automaticSyncTasks.values {
             task.cancel()
@@ -257,53 +226,6 @@ final class SourceLibrary: ObservableObject {
         if let removedSource {
             purgeCachedArtifacts(for: removedSource)
         }
-        refreshSidebarFooterState()
-    }
-
-    func setItemActionInProgress(_ description: String) {
-        cancelFooterReset()
-        sidebarFooterState = SidebarFooterState(
-            style: .inProgress,
-            title: description,
-            subtitle: nil,
-            detail: nil,
-            revealURL: nil
-        )
-    }
-
-    func setItemActionFailure(_ message: String) {
-        sidebarFooterState = SidebarFooterState(
-            style: .failure,
-            title: "Action Failed",
-            subtitle: message,
-            detail: nil,
-            revealURL: nil
-        )
-        scheduleFooterReset()
-    }
-
-    func setItemActionSuccess(title: String, subtitle: String, revealURL: URL?) {
-        sidebarFooterState = SidebarFooterState(
-            style: .success,
-            title: title,
-            subtitle: subtitle,
-            detail: nil,
-            revealURL: revealURL
-        )
-        scheduleFooterReset()
-    }
-
-    var activeScanSummary: String? {
-        let scanningSources = sources.filter(\.isScanning)
-        guard !scanningSources.isEmpty else {
-            return nil
-        }
-
-        if scanningSources.count == 1, let source = scanningSources.first {
-            return "\(source.displayName): \(source.scanStatus)"
-        }
-
-        return "Scanning \(scanningSources.count) sources..."
     }
 
     private func startScan(for sourceID: URL, mode: SourceDiscoveryMode) {
@@ -361,7 +283,6 @@ final class SourceLibrary: ObservableObject {
             source.previewLoadedCount = 0
             source.sizeLoadedCount = 0
         }
-        refreshSidebarFooterState()
 
         updateSource(sourceID) { source in
             source.accessDescriptor = sourceAccessMethod.accessDescriptor(for: source)
@@ -383,7 +304,6 @@ final class SourceLibrary: ObservableObject {
             source.availability = .available
             source.scanStatus = scanningLibraryStatus(for: source, mode: mode)
         }
-        refreshSidebarFooterState()
 
         do {
             let index = SourceIndexActor(sourceID: sourceID, folderURL: scanContextURL)
@@ -405,7 +325,6 @@ final class SourceLibrary: ObservableObject {
                         if let snapshot = await index.applyEnrichedItem(enrichedItem) {
                             await MainActor.run {
                                 library.applySnapshot(snapshot, to: sourceID)
-                                library.scheduleSidebarFooterRefresh()
                             }
                         }
                     }
@@ -466,8 +385,6 @@ final class SourceLibrary: ObservableObject {
                 ) {
                     applySnapshot(snapshot, to: sourceID)
                 }
-                scheduleSidebarFooterRefresh()
-
                 if itemForIndex.id == item.id, itemForIndex.metadataLoaded == false {
                     await enrichmentQueue.enqueue(item)
                 }
@@ -509,8 +426,6 @@ final class SourceLibrary: ObservableObject {
             if let snapshot = await index.markDiscoveryFinished() {
                 applySnapshot(snapshot, to: sourceID)
             }
-            refreshSidebarFooterState()
-
             await enrichmentQueue.finish()
             let enrichmentStartTime = Date()
 
@@ -529,7 +444,6 @@ final class SourceLibrary: ObservableObject {
                 applySnapshot(snapshot, to: sourceID)
             }
             persistSourceIfAvailable(withID: sourceID)
-            refreshSidebarFooterState()
 
             let previewStageStartTime = Date()
             let previewSeedItems = await index.currentItems()
@@ -540,7 +454,6 @@ final class SourceLibrary: ObservableObject {
             for previewItem in previewItems {
                 if let snapshot = await index.applyPreviewItem(previewItem) {
                     applySnapshot(snapshot, to: sourceID)
-                    scheduleSidebarFooterRefresh()
                 }
             }
 
@@ -555,7 +468,6 @@ final class SourceLibrary: ObservableObject {
                 applySnapshot(snapshot, to: sourceID)
             }
             persistSourceIfAvailable(withID: sourceID)
-            refreshSidebarFooterState()
 
             if source.origin.kind == .connectedDevice {
                 let sizeStageStartTime = Date()
@@ -567,7 +479,6 @@ final class SourceLibrary: ObservableObject {
                 for sizedItem in sizedItems {
                     if let snapshot = await index.applySizedItem(sizedItem) {
                         applySnapshot(snapshot, to: sourceID)
-                        scheduleSidebarFooterRefresh()
                     }
                 }
 
@@ -596,7 +507,6 @@ final class SourceLibrary: ObservableObject {
                     }
                 }
                 persistSourceIfAvailable(withID: sourceID)
-                refreshSidebarFooterState()
                 logScanStage(
                     "Total",
                     elapsed: Date().timeIntervalSince(scanStartTime),
@@ -629,7 +539,6 @@ final class SourceLibrary: ObservableObject {
                         if let snapshot = await index.applySizedItem(sizedItem) {
                             await MainActor.run {
                                 library.applySnapshot(snapshot, to: sourceID)
-                                library.scheduleSidebarFooterRefresh()
                             }
                         }
                     }
@@ -670,7 +579,6 @@ final class SourceLibrary: ObservableObject {
                 }
             }
             persistSourceIfAvailable(withID: sourceID)
-            refreshSidebarFooterState()
             logScanStage(
                 "Total",
                 elapsed: Date().timeIntervalSince(scanStartTime),
@@ -719,7 +627,6 @@ final class SourceLibrary: ObservableObject {
                 source.isScanning = false
             }
             persistSourceIfAvailable(withID: sourceID)
-            refreshSidebarFooterState()
         }
     }
 
@@ -746,7 +653,6 @@ final class SourceLibrary: ObservableObject {
                 sourceID: sourceID
             )
         }
-        refreshSidebarFooterState()
     }
 
     private func handleSizedItem(_ sizedItem: MinecraftContentItem, for sourceID: URL) {
@@ -762,7 +668,6 @@ final class SourceLibrary: ObservableObject {
                 source.scanStatus = "Calculating sizes for \(source.rawItems.filter(\.sizeLoaded).count) of \(source.indexedItemCount) items..."
             }
         }
-        refreshSidebarFooterState()
     }
 
     private func rebuildNormalizedIndex(for sourceID: URL) {
@@ -1647,7 +1552,6 @@ final class SourceLibrary: ObservableObject {
     private func restorePersistedSources() async {
         defer {
             isRestoringPersistedSources = false
-            refreshSidebarFooterState()
         }
 
         let records: [PersistedSourceRecord]
@@ -1708,7 +1612,6 @@ final class SourceLibrary: ObservableObject {
         }
 
         sources.sort { $0.displayName.localizedStandardCompare($1.displayName) == .orderedAscending }
-        refreshSidebarFooterState()
         await Task.yield()
 
         for record in records {
@@ -1993,91 +1896,6 @@ final class SourceLibrary: ObservableObject {
         contentType == .behaviorPack || contentType == .resourcePack
     }
 
-    private func refreshSidebarFooterState() {
-        footerRefreshTask?.cancel()
-        footerRefreshTask = nil
-
-        if isRestoringPersistedSources {
-            cancelFooterReset()
-            sidebarFooterState = SidebarFooterState(
-                style: .inProgress,
-                title: "Restoring library...",
-                subtitle: "Loading saved sources and cached metadata",
-                detail: nil,
-                revealURL: nil
-            )
-            return
-        }
-
-        let scanningSources = sources.filter(\.isScanning)
-        if let source = scanningSources.first {
-            cancelFooterReset()
-            let title = source.liveScanStatusTitle.isEmpty
-                ? "Scanning Minecraft library..."
-                : source.liveScanStatusTitle
-            let subtitle: String
-            let detail: String?
-            if source.indexedItemCount > 0 {
-                subtitle = source.displayName
-                switch source.scanPhase {
-                case .discovering:
-                    detail = "\(source.indexedItemCount) items found"
-                case .metadata:
-                    detail = "\(source.indexedDetailCount) of \(source.indexedItemCount) indexed"
-                case .previews:
-                    detail = "\(source.previewLoadedCount) of \(source.indexedItemCount) previews loaded"
-                case .sizing:
-                    detail = "\(source.sizeLoadedCount) of \(source.indexedItemCount) sizes calculated"
-                case .completed, .idle:
-                    detail = "\(source.indexedDetailCount) of \(source.indexedItemCount) indexed"
-                }
-            } else {
-                subtitle = "Searching \(source.displayName)"
-                detail = nil
-            }
-
-            sidebarFooterState = SidebarFooterState(
-                style: .inProgress,
-                title: title,
-                subtitle: subtitle,
-                detail: detail,
-                revealURL: nil
-            )
-            return
-        }
-
-        if let source = sources.first(where: { $0.scanError != nil }) {
-            sidebarFooterState = SidebarFooterState(
-                style: .failure,
-                title: "Scan failed",
-                subtitle: source.scanError,
-                detail: nil,
-                revealURL: nil
-            )
-            scheduleFooterReset()
-            return
-        }
-        cancelFooterReset()
-        sidebarFooterState = SidebarFooterState(style: .idle, title: "", subtitle: nil, detail: nil, revealURL: nil)
-    }
-
-    private func scheduleSidebarFooterRefresh() {
-        guard !isRestoringPersistedSources else {
-            refreshSidebarFooterState()
-            return
-        }
-
-        footerRefreshTask?.cancel()
-        footerRefreshTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .seconds(Self.footerRefreshDebounce))
-            guard let self, !Task.isCancelled else {
-                return
-            }
-
-            self.refreshSidebarFooterState()
-        }
-    }
-
     @discardableResult
     private func updateAvailability(for sourceID: URL, to newAvailability: SourceAvailability) -> (previous: SourceAvailability, becameAvailable: Bool) {
         let previousAvailability = source(withID: sourceID)?.availability ?? .unknown
@@ -2165,11 +1983,6 @@ final class SourceLibrary: ObservableObject {
         return source.previewLoadedCount < itemCount || source.sizeLoadedCount < itemCount
     }
 
-    private func cancelFooterReset() {
-        footerResetTask?.cancel()
-        footerResetTask = nil
-    }
-
     private func initialScanStatus(for source: MinecraftSource, mode: SourceDiscoveryMode) -> String {
         switch (source.origin, mode) {
         case (.localFolder, .fullScan):
@@ -2228,18 +2041,6 @@ final class SourceLibrary: ObservableObject {
                 && cachedItem.packVersion == discoveredItem.packVersion
                 && cachedItem.packMetadataDetails == discoveredItem.packMetadataDetails
                 && cachedItem.packReferences == discoveredItem.packReferences
-        }
-    }
-
-    private func scheduleFooterReset(after seconds: Double = 5) {
-        cancelFooterReset()
-        footerResetTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .seconds(seconds))
-            guard let self, !Task.isCancelled else {
-                return
-            }
-
-            self.refreshSidebarFooterState()
         }
     }
 
