@@ -87,6 +87,21 @@ struct ItemDetailColumnView: View {
 }
 
 private struct SourceDetailView: View {
+    private enum StageStatus {
+        case pending
+        case inProgress
+        case completed
+    }
+
+    private struct StageRow: Identifiable {
+        let id: String
+        let title: String
+        let detail: String
+        let status: StageStatus
+        let progress: Double?
+        let showsIndeterminateProgress: Bool
+    }
+
     let source: MinecraftSource
 
     var body: some View {
@@ -99,6 +114,10 @@ private struct SourceDetailView: View {
                     Text(sourceSummary)
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
+                }
+
+                if showsStatusSection {
+                    sourceStatusSection
                 }
 
                 sourceSection(title: "Overview", rows: overviewRows)
@@ -120,6 +139,136 @@ private struct SourceDetailView: View {
             return "Local filesystem source"
         case .connectedDevice(let device, let container):
             return "\(device.name) • \(container.appName)"
+        }
+    }
+
+    private var showsStatusSection: Bool {
+        if source.isScanning || source.scanError != nil || source.availability != .available {
+            return true
+        }
+
+        guard !source.scanStatus.isEmpty else {
+            return false
+        }
+
+        if source.scanStatus == "No Minecraft items found." {
+            return false
+        }
+
+        if source.scanStatus.hasPrefix("Loaded ") {
+            return false
+        }
+
+        return true
+    }
+
+    private var statusTitle: String {
+        if !source.isScanning, source.availability != .available {
+            return source.availabilityDisplayText
+        }
+
+        if let scanError = source.scanError, !scanError.isEmpty {
+            return "Scan Failed"
+        }
+
+        if source.isScanning {
+            return source.liveScanStatusTitle
+        }
+
+        if !source.scanStatus.isEmpty {
+            return source.scanStatus
+        }
+
+        return "Scanning Minecraft library..."
+    }
+
+    private var statusDetail: String? {
+        if !source.isScanning, source.availability != .available {
+            if let scanDiagnostic = source.scanDiagnostic, !scanDiagnostic.isEmpty {
+                return scanDiagnostic
+            }
+
+            if let cachedAvailabilityDetailText = source.cachedAvailabilityDetailText {
+                return cachedAvailabilityDetailText
+            }
+
+            if let lastScanDate = source.lastScanDate {
+                return "Cached from \(lastScanDate.formatted(date: .abbreviated, time: .shortened))"
+            }
+
+            return nil
+        }
+
+        if let scanError = source.scanError, !scanError.isEmpty {
+            return scanError
+        }
+
+        if let diagnostic = source.scanDiagnostic, !diagnostic.isEmpty {
+            return diagnostic
+        }
+
+        if source.isScanning {
+            return nil
+        }
+
+        return "\(source.indexedDetailCount) of \(source.indexedItemCount) indexed"
+    }
+
+    @ViewBuilder
+    private var sourceStatusSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Status")
+                .font(.headline)
+
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(alignment: .center, spacing: 10) {
+                    if source.showsIndeterminateScanActivityIndicator {
+                        ProgressView()
+                            .controlSize(.small)
+                    } else if !source.isScanning {
+                        sourceStatusIcon
+                    }
+
+                    Text(statusTitle)
+                        .font(.subheadline.weight(.semibold))
+                }
+
+                if let statusDetail, !statusDetail.isEmpty {
+                    Text(statusDetail)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+
+                if source.isScanning {
+                    Divider()
+                        .padding(.vertical, 2)
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        ForEach(stageRows) { stage in
+                            sourceStageRow(stage)
+                        }
+                    }
+                }
+            }
+            .padding(18)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        }
+    }
+
+    @ViewBuilder
+    private var sourceStatusIcon: some View {
+        if source.availability == .limited {
+            Image(systemName: "lock.circle.fill")
+                .foregroundStyle(Color.appAccent)
+        } else if source.availability != .available {
+            Image(systemName: source.isOfflineCached ? "externaldrive.badge.exclamationmark" : "slash.circle")
+                .foregroundStyle(.secondary)
+        } else if source.scanError != nil {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+        } else {
+            Image(systemName: "info.circle")
+                .foregroundStyle(.secondary)
         }
     }
 
@@ -213,6 +362,224 @@ private struct SourceDetailView: View {
         case .unavailable:
             return "Unavailable"
         }
+    }
+
+    private var stageRows: [StageRow] {
+        [
+            previewStageRow,
+            sizeStageRow
+        ]
+    }
+
+    private var previewStageRow: StageRow {
+        let total = source.indexedItemCount
+        let progress = total > 0 ? min(Double(source.previewLoadedCount) / Double(total), 1) : 0
+        let hasPreviewWorkStarted = source.previewLoadedCount > 0 || source.scanStatus.contains("Loading previews")
+        let previewsAreFullyLoaded = total > 0 && source.previewLoadedCount >= total
+        let shouldShowIndeterminatePreviewProgress = hasPreviewWorkStarted
+            && source.isScanning
+            && (source.scanProgress ?? 0) < 0.65
+
+        let status: StageStatus
+        if previewsAreFullyLoaded || source.scanPhase == .sizing || source.scanPhase == .completed {
+            status = .completed
+        } else if hasPreviewWorkStarted {
+            status = .inProgress
+        } else {
+            status = .pending
+        }
+
+        let detail: String
+        switch status {
+        case .completed:
+            detail = finishedStageDetail(duration: source.previewStageDuration ?? source.previewStageElapsed)
+        case .inProgress:
+            detail = stageProgressDetail(
+                completed: source.previewLoadedCount,
+                total: total,
+                unit: "previews loaded",
+                elapsed: source.previewStageElapsed
+            )
+        case .pending:
+            detail = "Waiting for discovery to finish"
+        }
+
+        return StageRow(
+            id: "previews",
+            title: "Previews",
+            detail: detail,
+            status: status,
+            progress: status == .completed ? 1 : progress,
+            showsIndeterminateProgress: shouldShowIndeterminatePreviewProgress
+        )
+    }
+
+    private var sizeStageRow: StageRow {
+        let total = source.indexedItemCount
+        let progress = total > 0 ? min(Double(source.sizeLoadedCount) / Double(total), 1) : 0
+        let previewsAreFullyLoaded = total > 0 && source.previewLoadedCount >= total
+
+        let status: StageStatus
+        switch source.scanPhase {
+        case .sizing:
+            status = .inProgress
+        case .completed:
+            status = .completed
+        case .discovering, .metadata, .previews, .idle:
+            status = .pending
+        }
+
+        let detail: String
+        switch status {
+        case .completed:
+            detail = finishedStageDetail(duration: source.sizeStageDuration)
+        case .inProgress:
+            detail = stageProgressDetail(
+                completed: source.sizeLoadedCount,
+                total: total,
+                unit: "sizes calculated",
+                elapsed: source.sizeStageElapsed
+            )
+        case .pending:
+            detail = previewsAreFullyLoaded
+                ? "Preparing size calculations..."
+                : "Waiting for previews to finish loading"
+        }
+
+        return StageRow(
+            id: "sizes",
+            title: "Sizes",
+            detail: detail,
+            status: status,
+            progress: status == .completed ? 1 : progress,
+            showsIndeterminateProgress: false
+        )
+    }
+
+    @ViewBuilder
+    private func sourceStageRow(_ stage: StageRow) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                Image(systemName: stageIconName(for: stage.status))
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(stageIconColor(for: stage.status))
+                    .frame(width: 14)
+
+                Text(stage.title)
+                    .font(.subheadline.weight(.semibold))
+
+                Spacer()
+
+                Text(stage.detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            if stage.status == .completed {
+                EmptyView()
+            } else if stage.showsIndeterminateProgress {
+                ProgressView()
+                    .progressViewStyle(.linear)
+                    .controlSize(.small)
+                    .tint(Color.appAccent)
+            } else if let progress = stage.progress {
+                ProgressView(value: progress, total: 1)
+                    .tint(stage.status == .pending ? .secondary.opacity(0.35) : Color.appAccent)
+                    .opacity(stage.status == .pending ? 0.55 : 1)
+            }
+        }
+    }
+
+    private func stageIconName(for status: StageStatus) -> String {
+        switch status {
+        case .pending:
+            return "circle"
+        case .inProgress:
+            return "clock"
+        case .completed:
+            return "checkmark.circle.fill"
+        }
+    }
+
+    private func stageIconColor(for status: StageStatus) -> Color {
+        switch status {
+        case .pending:
+            return .secondary.opacity(0.7)
+        case .inProgress:
+            return Color.appAccent
+        case .completed:
+            return .green
+        }
+    }
+
+    private func stageProgressDetail(
+        completed: Int,
+        total: Int,
+        unit: String,
+        elapsed: TimeInterval?
+    ) -> String {
+        guard total > 0 else {
+            return "Starting..."
+        }
+
+        var detail = "\(completed) of \(total) \(unit)"
+
+        if let remainingEstimate = estimateRemainingTime(
+            completed: completed,
+            total: total,
+            elapsed: elapsed
+        ) {
+            detail += " • about \(friendlyDuration(remainingEstimate)) left"
+        }
+
+        return detail
+    }
+
+    private func finishedStageDetail(duration: TimeInterval?) -> String {
+        guard let duration else {
+            return "Finished"
+        }
+
+        return "Finished in \(friendlyDuration(duration))"
+    }
+
+    private func estimateRemainingTime(
+        completed: Int,
+        total: Int,
+        elapsed: TimeInterval?
+    ) -> TimeInterval? {
+        guard
+            let elapsed,
+            elapsed >= 10,
+            completed >= 10,
+            total > 0,
+            completed < total
+        else {
+            return nil
+        }
+
+        let completionFraction = Double(completed) / Double(total)
+        guard completionFraction >= 0.05 else {
+            return nil
+        }
+
+        let secondsPerItem = elapsed / Double(completed)
+        let remaining = max(Double(total - completed) * secondsPerItem, 1)
+        guard remaining >= 60 else {
+            return nil
+        }
+
+        return remaining
+    }
+
+    private func friendlyDuration(_ duration: TimeInterval) -> String {
+        let formatter = DateComponentsFormatter()
+        formatter.unitsStyle = .full
+        formatter.maximumUnitCount = duration >= 3600 ? 2 : 1
+        formatter.allowedUnits = duration >= 3600 ? [.hour, .minute] : duration >= 60 ? [.minute] : [.second]
+        formatter.includesApproximationPhrase = false
+        formatter.includesTimeRemainingPhrase = false
+        return formatter.string(from: duration) ?? "a moment"
     }
 
     private func itemCount(for type: MinecraftContentType) -> Int {

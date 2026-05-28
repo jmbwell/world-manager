@@ -178,6 +178,70 @@ struct AppleMobileDeviceSourceAccess: ConnectedDeviceSourceAccessMethod {
         return previewItem
     }
 
+    nonisolated func loadPreviewAssets(for items: [MinecraftContentItem], in source: MinecraftSource) async -> [MinecraftContentItem] {
+        guard case .connectedDevice(_, let container) = source.origin else {
+            var previewItems: [MinecraftContentItem] = []
+            previewItems.reserveCapacity(items.count)
+            for item in items {
+                previewItems.append(await loadPreviewAssets(for: item, in: source))
+            }
+            return previewItems
+        }
+
+        let summaries = items.compactMap { item -> AppleMobileMinecraftLibraryItemSummary? in
+            guard item.hasKnownIcon, let relativePath = relativeItemPath(for: item, in: source) else {
+                return nil
+            }
+
+            return AppleMobileMinecraftLibraryItemSummary(
+                contentType: item.contentType.rawValue,
+                collectionFolderName: item.collectionRootURL.lastPathComponent,
+                relativePath: relativePath,
+                folderName: item.folderName,
+                displayName: item.displayName,
+                hasIcon: true
+            )
+        }
+
+        let iconsByRelativePath: [String: URL]
+        if summaries.isEmpty {
+            iconsByRelativePath = [:]
+        } else if let iconSummaries = try? await AppleMobileDeviceAccess.minecraftIconBatch(
+            deviceIdentifier: container.deviceUDID,
+            bundleIdentifier: container.appID,
+            relativePath: container.minecraftFolderRelativePath?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "",
+            items: summaries
+        ) {
+            var resolvedIcons: [String: URL] = [:]
+            resolvedIcons.reserveCapacity(iconSummaries.count)
+
+            for iconSummary in iconSummaries {
+                let pathExtension = NSString(string: iconSummary.iconFileName).pathExtension
+                let cachedURL = await ImageCacheStore.shared.cachedImageURL(
+                    forRemoteData: iconSummary.data,
+                    cacheKey: "\(container.deviceUDID)::\(container.appID)::\(iconSummary.relativePath)::\(iconSummary.iconFileName)",
+                    pathExtension: pathExtension
+                )
+                if let cachedURL {
+                    resolvedIcons[iconSummary.relativePath] = cachedURL
+                }
+            }
+            iconsByRelativePath = resolvedIcons
+        } else {
+            iconsByRelativePath = [:]
+        }
+
+        return items.map { item in
+            var previewItem = item
+            if let relativePath = relativeItemPath(for: item, in: source),
+               let cachedURL = iconsByRelativePath[relativePath] {
+                previewItem.iconURL = cachedURL
+            }
+            previewItem.previewLoaded = true
+            return previewItem
+        }
+    }
+
     nonisolated func loadSize(for item: MinecraftContentItem, in source: MinecraftSource) async -> MinecraftContentItem {
         var sizedItem = item
         guard case .connectedDevice(_, let container) = source.origin else {
@@ -199,6 +263,49 @@ struct AppleMobileDeviceSourceAccess: ConnectedDeviceSourceAccessMethod {
 
         sizedItem.sizeLoaded = true
         return sizedItem
+    }
+
+    nonisolated func loadSizeAssets(for items: [MinecraftContentItem], in source: MinecraftSource) async -> [MinecraftContentItem] {
+        guard case .connectedDevice(_, let container) = source.origin else {
+            var sizedItems: [MinecraftContentItem] = []
+            sizedItems.reserveCapacity(items.count)
+            for item in items {
+                sizedItems.append(await loadSize(for: item, in: source))
+            }
+            return sizedItems
+        }
+
+        let relativePathsByItemID = Dictionary(uniqueKeysWithValues: items.compactMap { item in
+            remoteItemPath(for: item, in: source).map { (item.id, $0) }
+        })
+
+        let metricsByRelativePath: [String: AppleMobileDevicePathMetrics]
+        if relativePathsByItemID.isEmpty {
+            metricsByRelativePath = [:]
+        } else if let metricSummaries = try? await AppleMobileDeviceAccess.pathMetricsBatch(
+            deviceIdentifier: container.deviceUDID,
+            bundleIdentifier: container.appID,
+            relativePaths: Array(relativePathsByItemID.values)
+        ) {
+            metricsByRelativePath = Dictionary(
+                uniqueKeysWithValues: metricSummaries.map { ($0.relativePath, $0.metrics) }
+            )
+        } else {
+            metricsByRelativePath = [:]
+        }
+
+        return items.map { item in
+            var sizedItem = item
+            if let relativePath = relativePathsByItemID[item.id],
+               let metrics = metricsByRelativePath[relativePath] {
+                sizedItem.sizeBytes = metrics.sizeBytes
+                if sizedItem.modifiedDate == nil {
+                    sizedItem.modifiedDate = metrics.modifiedDate
+                }
+            }
+            sizedItem.sizeLoaded = true
+            return sizedItem
+        }
     }
 
     nonisolated func listItemContents(for item: MinecraftContentItem, in source: MinecraftSource) async throws -> [DirectoryPreviewEntry] {
@@ -389,7 +496,7 @@ struct AppleMobileDeviceSourceAccess: ConnectedDeviceSourceAccessMethod {
             return nil
         }
 
-        let relativeItemPath = item.folderURL.path.replacingOccurrences(of: source.folderURL.path + "/", with: "")
+        let relativeItemPath = relativeItemPath(for: item, in: source) ?? ""
         guard !relativeItemPath.isEmpty else {
             return nil
         }
@@ -404,6 +511,11 @@ struct AppleMobileDeviceSourceAccess: ConnectedDeviceSourceAccessMethod {
         }
 
         return basePath
+    }
+
+    nonisolated private func relativeItemPath(for item: MinecraftContentItem, in source: MinecraftSource) -> String? {
+        let relativeItemPath = item.folderURL.path.replacingOccurrences(of: source.folderURL.path + "/", with: "")
+        return relativeItemPath.isEmpty ? nil : relativeItemPath
     }
 
     nonisolated private func loadRemoteIcon(

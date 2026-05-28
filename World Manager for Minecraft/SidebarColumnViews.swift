@@ -52,7 +52,7 @@ struct SourcesSidebarView: View {
                         connectedDeviceSectionRows(for: entry)
                     }
                 } header: {
-                    SidebarSourcesSectionHeaderView(title: "Connected Devices")
+                    SidebarSourcesSectionHeaderView(title: "Available Devices")
                 }
             }
         }
@@ -153,7 +153,6 @@ private struct SourceHeaderRow: View {
     let source: MinecraftSource
     let isSelected: Bool
     let onSelect: () -> Void
-    @State private var isPresentingStatusPopover = false
     @State private var isHovering = false
 
     var body: some View {
@@ -172,19 +171,13 @@ private struct SourceHeaderRow: View {
                 SourceConnectionBadge(connection: connection)
             }
 
-            if showsStatusButton {
-                Button {
-                    isPresentingStatusPopover = true
-                } label: {
-                    statusIndicator
-                        .frame(width: 24, height: 24)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .help(scanStatusHelpText)
-                .popover(isPresented: $isPresentingStatusPopover, arrowEdge: .top) {
-                    SourceStatusPopover(source: source)
-                }
+            if let availabilityBadgeText {
+                SourceAvailabilityBadge(text: availabilityBadgeText, emphasis: availabilityBadgeEmphasis)
+            }
+
+            if showsStatusIndicator {
+                statusIndicator
+                    .frame(width: 24, height: 24)
             }
         }
         .padding(.horizontal, 10)
@@ -203,18 +196,6 @@ private struct SourceHeaderRow: View {
         return device.connection
     }
 
-    private var scanStatusHelpText: String {
-        if let scanError = source.scanError, !scanError.isEmpty {
-            return scanError
-        }
-
-        if !source.scanStatus.isEmpty {
-            return source.scanStatus
-        }
-
-        return "Scanning library…"
-    }
-
     private var headerSymbolName: String {
         switch source.origin {
         case .localFolder:
@@ -225,7 +206,30 @@ private struct SourceHeaderRow: View {
     }
 
     private var titleColor: Color {
-        isSelected ? .primary : .secondary
+        if source.availability != .available && !isSelected {
+            return .secondary
+        }
+
+        return isSelected ? Color.primary : .secondary
+    }
+
+    private var availabilityBadgeText: String? {
+        if source.isOfflineCached {
+            return "Cached"
+        }
+
+        switch source.availability {
+        case .limited:
+            return "Limited"
+        case .unavailable, .disconnected:
+            return "Offline"
+        case .available, .unknown:
+            return nil
+        }
+    }
+
+    private var availabilityBadgeEmphasis: Bool {
+        source.availability == .limited
     }
 
     private var backgroundStyle: AnyShapeStyle {
@@ -249,6 +253,12 @@ private struct SourceHeaderRow: View {
                 ProgressView()
                     .controlSize(.small)
             }
+        } else if source.availability == .limited {
+            Image(systemName: "lock.circle")
+                .foregroundStyle(.secondary)
+        } else if source.availability != .available {
+            Image(systemName: source.isOfflineCached ? "externaldrive.badge.exclamationmark" : "slash.circle")
+                .foregroundStyle(.secondary)
         } else if source.scanError != nil {
             Image(systemName: "exclamationmark.circle")
                 .foregroundStyle(.secondary)
@@ -258,8 +268,8 @@ private struct SourceHeaderRow: View {
         }
     }
 
-    private var showsStatusButton: Bool {
-        source.isScanning || source.scanError != nil
+    private var showsStatusIndicator: Bool {
+        source.isScanning || source.scanError != nil || source.availability != .available
     }
 }
 
@@ -296,92 +306,21 @@ private struct SourceConnectionBadge: View {
     }
 }
 
-private struct SourceStatusPopover: View {
-    let source: MinecraftSource
+private struct SourceAvailabilityBadge: View {
+    let text: String
+    let emphasis: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .center, spacing: 8) {
-                if !source.isScanning, source.scanError != nil {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .foregroundStyle(.orange)
-                } else if !source.isScanning {
-                    Image(systemName: "info.circle")
-                        .foregroundStyle(.secondary)
-                }
-
-                Text(titleText)
-                    .font(.headline)
-            }
-
-            if source.isScanning, let scanProgress = source.scanProgress {
-                ProgressView(value: scanProgress, total: 1)
-            }
-
-            if let subtitleText {
-                Text(subtitleText)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-            }
-
-            if let detailText {
-                Text(detailText)
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .frame(width: 280, alignment: .leading)
-        .padding(14)
+        Text(text)
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(emphasis ? Color.appAccent : .secondary)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 4)
+            .background(backgroundColor, in: Capsule())
     }
 
-    private var titleText: String {
-        if let scanError = source.scanError, !scanError.isEmpty {
-            return "Scan Failed"
-        }
-
-        if !source.scanStatus.isEmpty {
-            return source.scanStatus
-        }
-
-        return "Scanning Minecraft library..."
-    }
-
-    private var subtitleText: String? {
-        if let scanError = source.scanError, !scanError.isEmpty {
-            return scanError
-        }
-
-        if source.indexedItemCount > 0 {
-            return source.displayName
-        }
-
-        return "Searching \(source.displayName)"
-    }
-
-    private var detailText: String? {
-        if let diagnostic = source.scanDiagnostic, !diagnostic.isEmpty {
-            return diagnostic
-        }
-
-        guard source.scanError == nil, source.indexedItemCount > 0 else {
-            return nil
-        }
-
-        if source.isScanning, let scanProgress = source.scanProgress {
-            let percentage = Int((scanProgress * 100).rounded())
-            let previewLoadedCount = source.rawItems.filter(\.previewLoaded).count
-            let sizeLoadedCount = source.rawItems.filter(\.sizeLoaded).count
-            if sizeLoadedCount > 0 || source.scanStatus.contains("Calculating sizes") {
-                return "\(sizeLoadedCount) of \(source.indexedItemCount) sizes calculated • \(percentage)%"
-            }
-            if previewLoadedCount > 0 || source.scanStatus.contains("Loading previews") {
-                return "\(previewLoadedCount) of \(source.indexedItemCount) previews loaded • \(percentage)%"
-            }
-
-            return "\(source.indexedDetailCount) of \(source.indexedItemCount) indexed • \(percentage)%"
-        }
-
-        return "\(source.indexedDetailCount) of \(source.indexedItemCount) indexed"
+    private var backgroundColor: Color {
+        emphasis ? Color.appAccent.opacity(0.14) : .secondary.opacity(0.12)
     }
 }
 
@@ -473,8 +412,8 @@ private struct ConnectedDeviceRow: View {
 
         switch entry.device.trustState {
         case .trusted:
-            if entry.hasMinecraftContainer, let container = entry.minecraftContainer {
-                return "Minecraft found in \(container.appName)"
+            if entry.hasMinecraftContainer {
+                return "Ready to add Minecraft library"
             }
 
             return "No Minecraft source found"

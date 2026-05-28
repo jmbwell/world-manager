@@ -7,6 +7,15 @@
 
 import Foundation
 
+enum SourceScanPhase {
+    case discovering
+    case metadata
+    case previews
+    case sizing
+    case completed
+    case idle
+}
+
 struct MinecraftSource: Identifiable, Hashable, Sendable {
     let id: URL
     let folderURL: URL
@@ -29,6 +38,12 @@ struct MinecraftSource: Identifiable, Hashable, Sendable {
     var scanProgress: Double?
     var indexedItemCount: Int
     var indexedDetailCount: Int
+    var previewLoadedCount: Int
+    var sizeLoadedCount: Int
+    var previewStageElapsed: TimeInterval?
+    var previewStageDuration: TimeInterval?
+    var sizeStageElapsed: TimeInterval?
+    var sizeStageDuration: TimeInterval?
     var lastScanDate: Date?
 
     nonisolated init(
@@ -67,6 +82,12 @@ struct MinecraftSource: Identifiable, Hashable, Sendable {
         self.scanProgress = nil
         self.indexedItemCount = 0
         self.indexedDetailCount = 0
+        self.previewLoadedCount = 0
+        self.sizeLoadedCount = 0
+        self.previewStageElapsed = nil
+        self.previewStageDuration = nil
+        self.sizeStageElapsed = nil
+        self.sizeStageDuration = nil
         self.lastScanDate = nil
     }
 
@@ -74,8 +95,145 @@ struct MinecraftSource: Identifiable, Hashable, Sendable {
         displayItems.count
     }
 
+    var hasCachedContent: Bool {
+        !displayItems.isEmpty || !rawItems.isEmpty || snapshot != nil
+    }
+
+    var isOfflineCached: Bool {
+        availability != .available && hasCachedContent
+    }
+
+    var availabilityDisplayText: String {
+        switch availability {
+        case .available:
+            return "Available"
+        case .unknown:
+            return "Checking availability"
+        case .disconnected:
+            return origin.kind == .connectedDevice ? "Device offline" : "Folder offline"
+        case .limited:
+            return origin.kind == .connectedDevice ? "Device access limited" : "Limited access"
+        case .unavailable:
+            return origin.kind == .connectedDevice ? "Device unavailable" : "Folder unavailable"
+        }
+    }
+
+    var cachedAvailabilityDetailText: String? {
+        guard isOfflineCached else {
+            return nil
+        }
+
+        switch availability {
+        case .disconnected:
+            return origin.kind == .connectedDevice
+                ? "Showing cached results until this device reconnects."
+                : "Showing cached results until this folder becomes reachable again."
+        case .limited:
+            return origin.kind == .connectedDevice
+                ? "Showing cached results until the device is unlocked and trusted."
+                : "Showing cached results until full access is restored."
+        case .unavailable, .unknown:
+            return "Showing cached results while the source is unavailable."
+        case .available:
+            return nil
+        }
+    }
+
     var items: [MinecraftContentItem] {
         displayItems
+    }
+
+    var scanPhase: SourceScanPhase {
+        guard isScanning else {
+            if scanStatus.hasPrefix("Loaded ") || scanStatus == "No Minecraft items found." {
+                return .completed
+            }
+            return .idle
+        }
+
+        if sizeLoadedCount > 0 {
+            return .sizing
+        }
+
+        if previewLoadedCount > 0 {
+            return .previews
+        }
+
+        if let scanProgress {
+            if scanProgress >= 0.75 {
+                return .sizing
+            }
+            if scanProgress >= 0.65 {
+                return .previews
+            }
+            if scanProgress >= 0.1 {
+                return .metadata
+            }
+        }
+
+        if scanStatus.contains("Calculating sizes") {
+            return .sizing
+        }
+        if scanStatus.contains("Loading previews") {
+            return .previews
+        }
+        if scanStatus.contains("metadata") {
+            return .metadata
+        }
+
+        return .discovering
+    }
+
+    var liveScanStatusTitle: String {
+        guard isScanning else {
+            return scanStatus
+        }
+
+        if indexedItemCount == 0 {
+            return "Scanning Minecraft library..."
+        }
+
+        let discoveryIsComplete = (scanProgress ?? 0) >= 0.65
+
+        if !discoveryIsComplete {
+            return "Discovering items..."
+        }
+
+        if indexedItemCount > 0, previewLoadedCount >= indexedItemCount, sizeLoadedCount == 0 {
+            return "Preparing size calculations..."
+        }
+
+        if scanStatus == "Preparing previews..." || scanStatus == "Preparing size calculations..." {
+            return scanStatus
+        }
+
+        switch scanPhase {
+        case .discovering, .metadata, .previews:
+            return "Loading previews for \(previewLoadedCount) of \(indexedItemCount) items..."
+        case .sizing:
+            return "Calculating sizes for \(sizeLoadedCount) of \(indexedItemCount) items..."
+        case .completed:
+            return indexedItemCount == 0 ? "No Minecraft items found." : "Loaded \(indexedDetailCount) items."
+        case .idle:
+            return scanStatus
+        }
+    }
+
+    var showsIndeterminateScanActivityIndicator: Bool {
+        guard isScanning else {
+            return false
+        }
+
+        let discoveryIsComplete = (scanProgress ?? 0) >= 0.65
+        if !discoveryIsComplete {
+            return true
+        }
+
+        if indexedItemCount > 0, previewLoadedCount >= indexedItemCount, sizeLoadedCount == 0 {
+            return true
+        }
+
+        return scanStatus == "Preparing previews..." || scanStatus == "Preparing size calculations..."
     }
 
     func rawItem(withID itemID: URL) -> MinecraftContentItem? {

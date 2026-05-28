@@ -49,9 +49,20 @@ struct AppleMobileMinecraftItemMetadataSummary: Sendable {
     let packReferences: [AppleMobilePackReferenceSummary]
 }
 
+struct AppleMobileMinecraftIconSummary: Sendable {
+    let relativePath: String
+    let iconFileName: String
+    let data: Data
+}
+
 struct AppleMobileDevicePathMetrics: Sendable {
     let sizeBytes: Int64?
     let modifiedDate: Date?
+}
+
+struct AppleMobileDevicePathMetricsSummary: Sendable {
+    let relativePath: String
+    let metrics: AppleMobileDevicePathMetrics
 }
 
 actor AppleMobileDeviceOperationLimiter {
@@ -387,6 +398,63 @@ enum AppleMobileDeviceAccess {
         }
     }
 
+    static func minecraftIconBatch(
+        deviceIdentifier: String,
+        bundleIdentifier: String,
+        relativePath: String,
+        items: [AppleMobileMinecraftLibraryItemSummary]
+    ) async throws -> [AppleMobileMinecraftIconSummary] {
+        try await AppleMobileDeviceOperationLimiter.shared.run(for: deviceIdentifier) {
+            try await Task.detached(priority: .userInitiated) {
+                let requestItems = items.map { item in
+                    [
+                        "contentType": item.contentType,
+                        "relativePath": item.relativePath
+                    ]
+                }
+
+                var error: NSError?
+                guard let response = WMMCopyConnectedDeviceMinecraftIconBatch(
+                    deviceIdentifier,
+                    bundleIdentifier,
+                    relativePath,
+                    requestItems,
+                    &error
+                ) else {
+                    throw error ?? NSError(
+                        domain: "AppleMobileDeviceAccess",
+                        code: 12,
+                        userInfo: [NSLocalizedDescriptionKey: "The MobileDevice icon batch failed."]
+                    )
+                }
+
+                guard let rawItems = response["items"] as? [[String: Any]] else {
+                    throw NSError(
+                        domain: "AppleMobileDeviceAccess",
+                        code: 13,
+                        userInfo: [NSLocalizedDescriptionKey: "The MobileDevice icon batch returned an unexpected payload."]
+                    )
+                }
+
+                return rawItems.compactMap { item in
+                    guard
+                        let relativePath = item["relativePath"] as? String,
+                        let iconFileName = item["iconFileName"] as? String,
+                        let data = item["data"] as? Data
+                    else {
+                        return nil
+                    }
+
+                    return AppleMobileMinecraftIconSummary(
+                        relativePath: relativePath,
+                        iconFileName: iconFileName,
+                        data: data
+                    )
+                }
+            }.value
+        }
+    }
+
     static func pathMetrics(
         deviceIdentifier: String,
         bundleIdentifier: String,
@@ -425,6 +493,65 @@ enum AppleMobileDeviceAccess {
                     sizeBytes: sizeBytes,
                     modifiedDate: response["modifiedDate"] as? Date
                 )
+            }.value
+        }
+    }
+
+    static func pathMetricsBatch(
+        deviceIdentifier: String,
+        bundleIdentifier: String,
+        relativePaths: [String]
+    ) async throws -> [AppleMobileDevicePathMetricsSummary] {
+        try await AppleMobileDeviceOperationLimiter.shared.run(for: deviceIdentifier) {
+            try await Task.detached(priority: .utility) {
+                var error: NSError?
+                guard let response = WMMCopyConnectedDeviceAppPathMetricsBatch(
+                    deviceIdentifier,
+                    bundleIdentifier,
+                    relativePaths,
+                    &error
+                ) else {
+                    throw error ?? NSError(
+                        domain: "AppleMobileDeviceAccess",
+                        code: 14,
+                        userInfo: [NSLocalizedDescriptionKey: "The MobileDevice path metrics batch lookup failed."]
+                    )
+                }
+
+                guard let rawItems = response["items"] as? [[String: Any]] else {
+                    throw NSError(
+                        domain: "AppleMobileDeviceAccess",
+                        code: 15,
+                        userInfo: [NSLocalizedDescriptionKey: "The MobileDevice path metrics batch returned an unexpected payload."]
+                    )
+                }
+
+                return rawItems.compactMap { item in
+                    guard let relativePath = item["relativePath"] as? String else {
+                        return nil
+                    }
+
+                    let rawSize = item["sizeBytes"]
+                    let sizeBytes: Int64?
+                    switch rawSize {
+                    case let number as NSNumber:
+                        sizeBytes = number.int64Value
+                    case let value as Int64:
+                        sizeBytes = value
+                    case let value as Int:
+                        sizeBytes = Int64(value)
+                    default:
+                        sizeBytes = nil
+                    }
+
+                    return AppleMobileDevicePathMetricsSummary(
+                        relativePath: relativePath,
+                        metrics: AppleMobileDevicePathMetrics(
+                            sizeBytes: sizeBytes,
+                            modifiedDate: item["modifiedDate"] as? Date
+                        )
+                    )
+                }
             }.value
         }
     }

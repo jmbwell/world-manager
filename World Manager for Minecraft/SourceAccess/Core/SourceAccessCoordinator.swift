@@ -17,7 +17,9 @@ protocol SourceAccessMethod: Sendable {
     ) async throws -> [MinecraftContentItem]
     nonisolated func enrich(_ item: MinecraftContentItem, for source: MinecraftSource) async -> MinecraftContentItem
     nonisolated func loadPreviewAssets(for item: MinecraftContentItem, in source: MinecraftSource) async -> MinecraftContentItem
+    nonisolated func loadPreviewAssets(for items: [MinecraftContentItem], in source: MinecraftSource) async -> [MinecraftContentItem]
     nonisolated func loadSize(for item: MinecraftContentItem, in source: MinecraftSource) async -> MinecraftContentItem
+    nonisolated func loadSizeAssets(for items: [MinecraftContentItem], in source: MinecraftSource) async -> [MinecraftContentItem]
     nonisolated func listItemContents(for item: MinecraftContentItem, in source: MinecraftSource) async throws -> [DirectoryPreviewEntry]
     nonisolated func materializeItem(for item: MinecraftContentItem, in source: MinecraftSource) async throws -> URL
     nonisolated func purgeCachedArtifacts(for source: MinecraftSource) async
@@ -61,9 +63,31 @@ extension SourceAccessMethod {
         return item
     }
 
+    nonisolated func loadPreviewAssets(for items: [MinecraftContentItem], in source: MinecraftSource) async -> [MinecraftContentItem] {
+        var previewItems: [MinecraftContentItem] = []
+        previewItems.reserveCapacity(items.count)
+
+        for item in items {
+            previewItems.append(await loadPreviewAssets(for: item, in: source))
+        }
+
+        return previewItems
+    }
+
     nonisolated func loadSize(for item: MinecraftContentItem, in source: MinecraftSource) async -> MinecraftContentItem {
         _ = source
         return item
+    }
+
+    nonisolated func loadSizeAssets(for items: [MinecraftContentItem], in source: MinecraftSource) async -> [MinecraftContentItem] {
+        var sizedItems: [MinecraftContentItem] = []
+        sizedItems.reserveCapacity(items.count)
+
+        for item in items {
+            sizedItems.append(await loadSize(for: item, in: source))
+        }
+
+        return sizedItems
     }
 
     nonisolated func listItemContents(for item: MinecraftContentItem, in source: MinecraftSource) async throws -> [DirectoryPreviewEntry] {
@@ -144,8 +168,16 @@ struct SourceAccessCoordinator: SourceAccessMethod {
         return await accessMethod(for: source).loadPreviewAssets(for: item, in: source)
     }
 
+    nonisolated func loadPreviewAssets(for items: [MinecraftContentItem], in source: MinecraftSource) async -> [MinecraftContentItem] {
+        return await accessMethod(for: source).loadPreviewAssets(for: items, in: source)
+    }
+
     nonisolated func loadSize(for item: MinecraftContentItem, in source: MinecraftSource) async -> MinecraftContentItem {
         return await accessMethod(for: source).loadSize(for: item, in: source)
+    }
+
+    nonisolated func loadSizeAssets(for items: [MinecraftContentItem], in source: MinecraftSource) async -> [MinecraftContentItem] {
+        return await accessMethod(for: source).loadSizeAssets(for: items, in: source)
     }
 
     nonisolated func listItemContents(for item: MinecraftContentItem, in source: MinecraftSource) async throws -> [DirectoryPreviewEntry] {

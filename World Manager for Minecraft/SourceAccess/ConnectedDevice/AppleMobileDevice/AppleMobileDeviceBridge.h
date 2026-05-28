@@ -60,6 +60,15 @@ WMMCopyConnectedDeviceMinecraftMetadataBatch(
     NSError **error
 );
 
+FOUNDATION_EXPORT NSDictionary<NSString *, id> * _Nullable
+WMMCopyConnectedDeviceMinecraftIconBatch(
+    NSString *deviceIdentifier,
+    NSString *bundleIdentifier,
+    NSString *relativePath,
+    NSArray<NSDictionary<NSString *, id> *> *items,
+    NSError **error
+);
+
 FOUNDATION_EXPORT NSData * _Nullable
 WMMCopyConnectedDeviceAppFileData(
     NSString *deviceIdentifier,
@@ -73,6 +82,14 @@ WMMCopyConnectedDeviceAppPathMetrics(
     NSString *deviceIdentifier,
     NSString *bundleIdentifier,
     NSString *relativePath,
+    NSError **error
+);
+
+FOUNDATION_EXPORT NSDictionary<NSString *, id> * _Nullable
+WMMCopyConnectedDeviceAppPathMetricsBatch(
+    NSString *deviceIdentifier,
+    NSString *bundleIdentifier,
+    NSArray<NSString *> *relativePaths,
     NSError **error
 );
 

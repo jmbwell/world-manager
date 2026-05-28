@@ -13,6 +13,23 @@
 
 NSErrorDomain const WMMMobileDeviceErrorDomain = @"WMMMobileDeviceErrorDomain";
 
+static BOOL WMMMobileDeviceVerboseLoggingEnabled(void) {
+    static BOOL initialized = NO;
+    static BOOL enabled = NO;
+    if (!initialized) {
+        NSString *value = [[[NSProcessInfo processInfo] environment][@"WMM_MOBILEDEVICE_VERBOSE_LOGGING"] lowercaseString];
+        enabled = [value isEqualToString:@"1"] || [value isEqualToString:@"true"] || [value isEqualToString:@"yes"];
+        initialized = YES;
+    }
+    return enabled;
+}
+
+#define WMMBridgeLog(...) do { \
+    if (WMMMobileDeviceVerboseLoggingEnabled()) { \
+        NSLog(__VA_ARGS__); \
+    } \
+} while (0)
+
 typedef struct am_device *AMDeviceRef;
 typedef struct am_device_notification *AMDeviceNotificationRef;
 typedef struct amd_service_connection *AMDServiceConnectionRef;
@@ -455,7 +472,7 @@ static void WMMLogDeviceTransportDiagnostics(
         values[key] = value.length > 0 ? value : @"<nil>";
     }
 
-    NSLog(@"[DeviceSummary] udid=%@ diagnostics=%@", resolvedIdentifier, values);
+    WMMBridgeLog(@"[DeviceSummary] udid=%@ diagnostics=%@", resolvedIdentifier, values);
 }
 
 static BOOL WMMConnectAndValidateDevice(
@@ -576,7 +593,7 @@ static AFCConnectionRef _Nullable WMMCreateVendAFCConnection(
         *backingServiceConnection = NULL;
     }
 
-    NSLog(@"[HouseArrest] Trying AMDeviceCreateHouseArrestService for %@", bundleIdentifier);
+    WMMBridgeLog(@"[HouseArrest] Trying AMDeviceCreateHouseArrestService for %@", bundleIdentifier);
     AFCConnectionRef directConnection = NULL;
     int directStatus = functions->AMDeviceCreateHouseArrestService(
         device,
@@ -584,7 +601,7 @@ static AFCConnectionRef _Nullable WMMCreateVendAFCConnection(
         NULL,
         &directConnection
     );
-    NSLog(@"[HouseArrest] AMDeviceCreateHouseArrestService returned %d connection=%p", directStatus, directConnection);
+    WMMBridgeLog(@"[HouseArrest] AMDeviceCreateHouseArrestService returned %d connection=%p", directStatus, directConnection);
     if (directStatus == 0 && directConnection != NULL) {
         return directConnection;
     }
@@ -594,7 +611,7 @@ static AFCConnectionRef _Nullable WMMCreateVendAFCConnection(
     [failures addObject:[NSString stringWithFormat:@"AMDeviceCreateHouseArrestService returned %d", directStatus]];
 
     for (NSString *command in commands) {
-        NSLog(@"[HouseArrest] Starting %@ for %@", command, bundleIdentifier);
+        WMMBridgeLog(@"[HouseArrest] Starting %@ for %@", command, bundleIdentifier);
         AMDServiceConnectionRef serviceConnection = NULL;
         int startStatus = functions->AMDeviceSecureStartService(
             device,
@@ -603,14 +620,14 @@ static AFCConnectionRef _Nullable WMMCreateVendAFCConnection(
             &serviceConnection
         );
         if (startStatus != 0 || serviceConnection == NULL) {
-            NSLog(@"[HouseArrest] %@ service start failed: %d", command, startStatus);
+            WMMBridgeLog(@"[HouseArrest] %@ service start failed: %d", command, startStatus);
             [failures addObject:[NSString stringWithFormat:@"%@ service start failed (%d)", command, startStatus]];
             continue;
         }
 
         int socket = functions->AMDServiceConnectionGetSocket(serviceConnection);
         void *secureContext = functions->AMDServiceConnectionGetSecureIOContext(serviceConnection);
-        NSLog(@"[HouseArrest] %@ service connection socket=%d secureContext=%p", command, socket, secureContext);
+        WMMBridgeLog(@"[HouseArrest] %@ service connection socket=%d secureContext=%p", command, socket, secureContext);
 
         NSDictionary *request = @{
             @"Command": command,
@@ -622,7 +639,7 @@ static AFCConnectionRef _Nullable WMMCreateVendAFCConnection(
             (__bridge CFPropertyListRef)request,
             100
         );
-        NSLog(@"[HouseArrest] %@ send returned %d", command, sent);
+        WMMBridgeLog(@"[HouseArrest] %@ send returned %d", command, sent);
         if (sent != 0) {
             [failures addObject:[NSString stringWithFormat:@"%@ request failed to send (%d)", command, sent]];
             functions->AMDServiceConnectionInvalidate(serviceConnection);
@@ -635,7 +652,7 @@ static AFCConnectionRef _Nullable WMMCreateVendAFCConnection(
             &response,
             0
         );
-        NSLog(@"[HouseArrest] %@ receive returned %d", command, received);
+        WMMBridgeLog(@"[HouseArrest] %@ receive returned %d", command, received);
         if (received != 0 || response == NULL) {
             [failures addObject:[NSString stringWithFormat:@"%@ response could not be read (%d)", command, received]];
             functions->AMDServiceConnectionInvalidate(serviceConnection);
@@ -643,7 +660,7 @@ static AFCConnectionRef _Nullable WMMCreateVendAFCConnection(
         }
 
         NSDictionary *responseDictionary = CFBridgingRelease(response);
-        NSLog(@"[HouseArrest] %@ response: %@", command, responseDictionary);
+        WMMBridgeLog(@"[HouseArrest] %@ response: %@", command, responseDictionary);
         NSString *status = [responseDictionary isKindOfClass:[NSDictionary class]] ? responseDictionary[@"Status"] : nil;
         if ([status isKindOfClass:[NSString class]] && [status isEqualToString:@"Complete"]) {
             AFCConnectionRef afcConnection = WMMCreateAFCConnectionFromServiceConnection(functions, serviceConnection);
@@ -651,22 +668,22 @@ static AFCConnectionRef _Nullable WMMCreateVendAFCConnection(
                 if (backingServiceConnection != NULL) {
                     *backingServiceConnection = serviceConnection;
                 }
-                NSLog(@"[HouseArrest] %@ completed and AFC initialized", command);
+                WMMBridgeLog(@"[HouseArrest] %@ completed and AFC initialized", command);
                 return afcConnection;
             }
 
             functions->AMDServiceConnectionInvalidate(serviceConnection);
-            NSLog(@"[HouseArrest] %@ completed but AFC initialization failed", command);
+            WMMBridgeLog(@"[HouseArrest] %@ completed but AFC initialization failed", command);
             [failures addObject:[NSString stringWithFormat:@"%@ succeeded but AFC initialization failed", command]];
             break;
         }
 
         NSString *serviceError = [responseDictionary isKindOfClass:[NSDictionary class]] ? responseDictionary[@"Error"] : nil;
         if ([serviceError isKindOfClass:[NSString class]] && serviceError.length > 0) {
-            NSLog(@"[HouseArrest] %@ rejected with error: %@", command, serviceError);
+            WMMBridgeLog(@"[HouseArrest] %@ rejected with error: %@", command, serviceError);
             [failures addObject:[NSString stringWithFormat:@"%@ was rejected: %@", command, serviceError]];
         } else {
-            NSLog(@"[HouseArrest] %@ did not complete", command);
+            WMMBridgeLog(@"[HouseArrest] %@ did not complete", command);
             [failures addObject:[NSString stringWithFormat:@"%@ did not complete", command]];
         }
         functions->AMDServiceConnectionInvalidate(serviceConnection);
@@ -1087,6 +1104,14 @@ static BOOL WMMEntryArrayContainsName(NSArray<NSString *> *entries, NSString *ca
         }
     }
     return NO;
+}
+
+static NSArray<NSString *> *WMMIconCandidateFileNamesForContentType(NSString *contentType) {
+    if ([contentType isEqualToString:@"World"]) {
+        return @[ @"world_icon.jpeg", @"world_icon.jpg", @"world_icon.png" ];
+    }
+
+    return @[ @"pack_icon.png", @"pack_icon.jpeg", @"pack_icon.jpg" ];
 }
 
 static NSString * _Nullable WMMReadUTF8TextFile(
@@ -1921,6 +1946,87 @@ WMMCopyConnectedDeviceMinecraftMetadataBatch(
     };
 }
 
+NSDictionary<NSString *, id> * _Nullable
+WMMCopyConnectedDeviceMinecraftIconBatch(
+    NSString *deviceIdentifier,
+    NSString *bundleIdentifier,
+    NSString *relativePath,
+    NSArray<NSDictionary<NSString *, id> *> *items,
+    NSError **error
+) {
+    if (bundleIdentifier.length == 0) {
+        if (error != NULL) {
+            *error = WMMMakeError(20, @"A bundle identifier is required.");
+        }
+        return nil;
+    }
+
+    WMMMobileDeviceFunctions functions;
+    if (!WMMLoadFunctions(&functions, error)) {
+        return nil;
+    }
+
+    AMDeviceRef device = WMMCopyConnectedDevice(&functions, deviceIdentifier, error);
+    if (device == NULL) {
+        return nil;
+    }
+
+    if (!WMMConnectAndValidateDevice(&functions, device, YES, error)) {
+        functions.AMDeviceRelease(device);
+        return nil;
+    }
+
+    AMDServiceConnectionRef backingServiceConnection = NULL;
+    AFCConnectionRef afcConnection = WMMCreateVendAFCConnection(
+        &functions,
+        device,
+        bundleIdentifier,
+        &backingServiceConnection,
+        error
+    );
+    if (afcConnection == NULL) {
+        WMMCloseVendSession(&functions, device, YES, NULL, backingServiceConnection);
+        functions.AMDeviceRelease(device);
+        return nil;
+    }
+
+    NSString *normalizedRootPath = WMMNormalizedAFCPath(relativePath);
+    NSMutableArray<NSDictionary<NSString *, id> *> *results = [NSMutableArray array];
+
+    for (NSDictionary<NSString *, id> *item in items) {
+        NSString *contentType = [item[@"contentType"] isKindOfClass:[NSString class]] ? item[@"contentType"] : nil;
+        NSString *relativeItemPath = [item[@"relativePath"] isKindOfClass:[NSString class]] ? item[@"relativePath"] : nil;
+        if (contentType.length == 0 || relativeItemPath.length == 0) {
+            continue;
+        }
+
+        NSString *itemRemotePath = [normalizedRootPath stringByAppendingPathComponent:relativeItemPath];
+        for (NSString *candidateFileName in WMMIconCandidateFileNamesForContentType(contentType)) {
+            NSString *candidateRemotePath = [itemRemotePath stringByAppendingPathComponent:candidateFileName];
+            NSData *data = WMMCopyAFCFileData(&functions, afcConnection, candidateRemotePath, NULL);
+            if (data == nil) {
+                continue;
+            }
+
+            [results addObject:@{
+                @"relativePath": relativeItemPath,
+                @"iconFileName": candidateFileName,
+                @"data": data
+            }];
+            break;
+        }
+    }
+
+    WMMCloseVendSession(&functions, device, YES, afcConnection, backingServiceConnection);
+    functions.AMDeviceRelease(device);
+
+    return @{
+        @"bundleIdentifier": bundleIdentifier,
+        @"path": normalizedRootPath,
+        @"items": results
+    };
+}
+
 NSData * _Nullable
 WMMCopyConnectedDeviceAppFileData(
     NSString *deviceIdentifier,
@@ -2036,6 +2142,82 @@ WMMCopyConnectedDeviceAppPathMetrics(
         @"path": normalizedPath,
         @"sizeBytes": metrics[@"sizeBytes"] ?: @0,
         @"modifiedDate": metrics[@"modifiedDate"] ?: [NSNull null]
+    };
+}
+
+NSDictionary<NSString *, id> * _Nullable
+WMMCopyConnectedDeviceAppPathMetricsBatch(
+    NSString *deviceIdentifier,
+    NSString *bundleIdentifier,
+    NSArray<NSString *> *relativePaths,
+    NSError **error
+) {
+    if (bundleIdentifier.length == 0) {
+        if (error != NULL) {
+            *error = WMMMakeError(21, @"A bundle identifier is required.");
+        }
+        return nil;
+    }
+
+    WMMMobileDeviceFunctions functions;
+    if (!WMMLoadFunctions(&functions, error)) {
+        return nil;
+    }
+
+    AMDeviceRef device = WMMCopyConnectedDevice(&functions, deviceIdentifier, error);
+    if (device == NULL) {
+        return nil;
+    }
+
+    if (!WMMConnectAndValidateDevice(&functions, device, YES, error)) {
+        functions.AMDeviceRelease(device);
+        return nil;
+    }
+
+    AMDServiceConnectionRef backingServiceConnection = NULL;
+    AFCConnectionRef afcConnection = WMMCreateVendAFCConnection(
+        &functions,
+        device,
+        bundleIdentifier,
+        &backingServiceConnection,
+        error
+    );
+    if (afcConnection == NULL) {
+        WMMCloseVendSession(&functions, device, YES, NULL, backingServiceConnection);
+        functions.AMDeviceRelease(device);
+        return nil;
+    }
+
+    NSMutableArray<NSDictionary<NSString *, id> *> *results = [NSMutableArray array];
+    for (NSString *relativePath in relativePaths) {
+        if (![relativePath isKindOfClass:[NSString class]] || relativePath.length == 0) {
+            continue;
+        }
+
+        NSString *normalizedPath = WMMNormalizedAFCPath(relativePath);
+        NSDictionary<NSString *, id> *metrics = WMMCopyAFCTreeMetrics(
+            &functions,
+            afcConnection,
+            normalizedPath,
+            NULL
+        );
+
+        NSMutableDictionary<NSString *, id> *result = [@{
+            @"relativePath": relativePath
+        } mutableCopy];
+        if (metrics != nil) {
+            result[@"sizeBytes"] = metrics[@"sizeBytes"] ?: @0;
+            result[@"modifiedDate"] = metrics[@"modifiedDate"] ?: [NSNull null];
+        }
+        [results addObject:result];
+    }
+
+    WMMCloseVendSession(&functions, device, YES, afcConnection, backingServiceConnection);
+    functions.AMDeviceRelease(device);
+
+    return @{
+        @"bundleIdentifier": bundleIdentifier,
+        @"items": results
     };
 }
 
