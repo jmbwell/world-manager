@@ -211,11 +211,4 @@ struct MinecraftContentItem: Identifiable, Hashable, Sendable, Codable {
             .joined(separator: "\n")
     }
 
-    nonisolated static func == (lhs: MinecraftContentItem, rhs: MinecraftContentItem) -> Bool {
-        lhs.id == rhs.id
-    }
-
-    nonisolated func hash(into hasher: inout Hasher) {
-        hasher.combine(id)
-    }
 }

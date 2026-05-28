@@ -50,7 +50,7 @@ struct ContentView: View {
                 addDeviceSourceAction: { isShowingDeviceSourceSheet = true },
                 addConnectedDeviceAction: addConnectedDeviceSource(from:),
                 rescanSourceAction: { source in
-                    selectedSidebarSelection = .allContent(sourceID: source.id)
+                    selectedSidebarSelection = .source(sourceID: source.id)
                     selectedItemID = nil
                     library.rescanSource(withID: source.id)
                 },
@@ -86,6 +86,7 @@ struct ContentView: View {
             ItemDetailColumnView(
                 item: currentSelectedItem,
                 source: currentSource,
+                showsSourceDetails: currentSelectedItem == nil && isSourceOverviewSelection,
                 behaviorPacks: currentSelectedItem.map { logicalPackReferences(for: $0, type: .behaviorPack) } ?? [],
                 resourcePacks: currentSelectedItem.map { logicalPackReferences(for: $0, type: .resourcePack) } ?? [],
                 worldsUsingPack: currentSelectedItem.map(worldsUsingPack(for:)) ?? [],
@@ -131,7 +132,7 @@ struct ContentView: View {
                 sourceFactory: deviceSourceFactory,
                 onAddSource: { source in
                     let sourceID = library.addSource(source, shouldPersist: true, shouldScan: true)
-                    selectedSidebarSelection = .allContent(sourceID: sourceID)
+                    selectedSidebarSelection = .source(sourceID: sourceID)
                     selectedItemID = nil
                     isShowingDeviceSourceSheet = false
                 }
@@ -151,6 +152,15 @@ struct ContentView: View {
 
             self.selectedItemID = nil
         }
+        .onChange(of: selectedSidebarSelection) { _, selection in
+            guard let selection else {
+                return
+            }
+
+            if case .source = selection {
+                selectedItemID = nil
+            }
+        }
         .onChange(of: library.sources.map(\.id)) { _, _ in
             syncSelection(with: library.visibleSources.map(\.id))
         }
@@ -168,7 +178,7 @@ struct ContentView: View {
         }
 
         switch selectedSidebarSelection {
-        case .allContent(let sourceID):
+        case .source(let sourceID), .allContent(let sourceID):
             return library.source(withID: sourceID)?.items ?? []
         case .contentType(let sourceID, let contentType):
             return library.source(withID: sourceID)?.items.filter { $0.contentType == contentType } ?? []
@@ -261,7 +271,7 @@ struct ContentView: View {
         }
 
         switch selectedSidebarSelection {
-        case .allContent:
+        case .source, .allContent:
             return "All Items"
         case .contentType(_, let contentType):
             return sidebarTitle(for: contentType)
@@ -310,6 +320,8 @@ struct ContentView: View {
 
     private var searchScopeTitle: String {
         switch selectedSidebarSelection {
+        case .some(.source(let sourceID)):
+            return library.source(withID: sourceID)?.displayName ?? "Library"
         case .some(.allContent):
             return "All"
         case .some(.contentType(_, let contentType)):
@@ -337,7 +349,7 @@ struct ContentView: View {
         }
 
         switch selectedSidebarSelection {
-        case .allContent:
+        case .source, .allContent:
             return scopedItems.count == 1 ? "item" : "items"
         case .contentType(_, let contentType):
             switch contentType {
@@ -351,6 +363,9 @@ struct ContentView: View {
 
     private var searchPrompt: String {
         switch selectedSidebarSelection {
+        case .some(.source(let sourceID)):
+            let sourceName = library.source(withID: sourceID)?.displayName ?? "Library"
+            return "Search \(sourceName)"
         case .some(.allContent):
             return "Search All Items"
         case .some(.contentType(_, let contentType)):
@@ -361,32 +376,31 @@ struct ContentView: View {
     }
 
     private func sidebarFilters(for source: MinecraftSource) -> [SidebarFilter] {
-        var filters = [
-            SidebarFilter(
-                title: "All Items",
-                iconName: "square.grid.2x2",
-                count: source.items.count,
-                selection: .allContent(sourceID: source.id)
-            )
-        ]
-
-        filters.append(
-            contentsOf: MinecraftContentType.allCases.compactMap { contentType in
-                let count = source.items.filter { $0.contentType == contentType }.count
-                guard count > 0 else {
-                    return nil
-                }
-
-                return SidebarFilter(
-                    title: sidebarTitle(for: contentType),
-                    iconName: sidebarIcon(for: contentType),
-                    count: count,
-                    selection: .contentType(sourceID: source.id, contentType: contentType)
-                )
+        MinecraftContentType.allCases.compactMap { contentType in
+            let count = source.items.filter { $0.contentType == contentType }.count
+            guard count > 0 else {
+                return nil
             }
-        )
 
-        return filters
+            return SidebarFilter(
+                title: sidebarTitle(for: contentType),
+                iconName: sidebarIcon(for: contentType),
+                count: count,
+                selection: .contentType(sourceID: source.id, contentType: contentType)
+            )
+        }
+    }
+
+    private var isSourceOverviewSelection: Bool {
+        guard let selectedSidebarSelection else {
+            return false
+        }
+
+        if case .source = selectedSidebarSelection {
+            return true
+        }
+
+        return false
     }
 
     private func sidebarTitle(for contentType: MinecraftContentType) -> String {
@@ -585,7 +599,7 @@ struct ContentView: View {
             return
         }
 
-        selectedSidebarSelection = .allContent(sourceID: sourceID)
+        selectedSidebarSelection = .source(sourceID: sourceID)
     }
 
     private func removeSource(_ sourceID: URL) {
@@ -593,7 +607,7 @@ struct ContentView: View {
         library.removeSource(withID: sourceID)
 
         if selectedSidebarSelection?.sourceID == sourceID {
-            selectedSidebarSelection = fallbackSourceID.map { .allContent(sourceID: $0) }
+            selectedSidebarSelection = fallbackSourceID.map { .source(sourceID: $0) }
         }
 
         if let selectedItemID, currentSelectedItem?.id != selectedItemID {
@@ -608,15 +622,15 @@ struct ContentView: View {
 
         let source = deviceSourceFactory.makeSource(device: entry.device, container: container)
         let sourceID = library.addSource(source, shouldPersist: true, shouldScan: true)
-        selectedSidebarSelection = .allContent(sourceID: sourceID)
+        selectedSidebarSelection = .source(sourceID: sourceID)
         selectedItemID = nil
     }
 
     private func syncSelection(with sourceIDs: [URL]) {
         if let selectedSidebarSelection, !sourceIDs.contains(selectedSidebarSelection.sourceID) {
-            self.selectedSidebarSelection = sourceIDs.first.map { .allContent(sourceID: $0) }
+            self.selectedSidebarSelection = sourceIDs.first.map { .source(sourceID: $0) }
         } else if self.selectedSidebarSelection == nil, let firstSourceID = sourceIDs.first {
-            self.selectedSidebarSelection = .allContent(sourceID: firstSourceID)
+            self.selectedSidebarSelection = .source(sourceID: firstSourceID)
         }
 
         if let selectedItemID {

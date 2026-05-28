@@ -10,6 +10,7 @@ struct DirectoryPreviewEntry: Identifiable {
 struct ItemDetailColumnView: View {
     let item: MinecraftContentItem?
     let source: MinecraftSource?
+    let showsSourceDetails: Bool
     let behaviorPacks: [ContentPackReference]
     let resourcePacks: [ContentPackReference]
     let worldsUsingPack: [MinecraftContentItem]
@@ -46,6 +47,8 @@ struct ItemDetailColumnView: View {
                     revealAction: revealAction,
                     shareAction: shareAction
                 )
+            } else if showsSourceDetails, let source {
+                SourceDetailView(source: source)
             } else {
                 Text("Select a world or pack to see details")
                     .foregroundStyle(.secondary)
@@ -79,6 +82,165 @@ struct ItemDetailColumnView: View {
                     .help("Share")
                 }
             }
+        }
+    }
+}
+
+private struct SourceDetailView: View {
+    let source: MinecraftSource
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 24) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(source.displayName)
+                        .font(.largeTitle.weight(.semibold))
+
+                    Text(sourceSummary)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+
+                sourceSection(title: "Overview", rows: overviewRows)
+                sourceSection(title: "Contents", rows: contentRows)
+                sourceSection(title: "Location", rows: locationRows)
+
+                if !technicalRows.isEmpty {
+                    sourceSection(title: "Technical Details", rows: technicalRows)
+                }
+            }
+            .frame(maxWidth: 760, alignment: .leading)
+            .padding(28)
+        }
+    }
+
+    private var sourceSummary: String {
+        switch source.origin {
+        case .localFolder:
+            return "Local filesystem source"
+        case .connectedDevice(let device, let container):
+            return "\(device.name) • \(container.appName)"
+        }
+    }
+
+    private var overviewRows: [(String, String)] {
+        var rows: [(String, String)] = [
+            ("Type", sourceTypeLabel),
+            ("Availability", availabilityLabel)
+        ]
+
+        if let lastScanDate = source.lastScanDate {
+            rows.append(("Last Successful Scan", lastScanDate.formatted(date: .abbreviated, time: .shortened)))
+        }
+
+        switch source.origin {
+        case .localFolder:
+            break
+        case .connectedDevice(let device, let container):
+            rows.append(("Connection", device.connection == .network ? "Network" : "USB"))
+            rows.append(("App Container", container.appName))
+            if let osVersion = device.osVersion, !osVersion.isEmpty {
+                rows.append(("OS Version", osVersion))
+            }
+        }
+
+        return rows
+    }
+
+    private var contentRows: [(String, String)] {
+        [
+            ("Total Items", source.items.count.formatted(.number)),
+            ("Worlds", itemCount(for: .world).formatted(.number)),
+            ("Behavior Packs", itemCount(for: .behaviorPack).formatted(.number)),
+            ("Resource Packs", itemCount(for: .resourcePack).formatted(.number)),
+            ("Skin Packs", itemCount(for: .skinPack).formatted(.number)),
+            ("World Templates", itemCount(for: .worldTemplate).formatted(.number))
+        ]
+    }
+
+    private var locationRows: [(String, String)] {
+        switch source.origin {
+        case .localFolder:
+            return [("Filesystem Path", source.folderURL.path)]
+        case .connectedDevice(_, let container):
+            var rows: [(String, String)] = [
+                ("Source Identifier", source.folderURL.absoluteString)
+            ]
+            if let relativePath = container.minecraftFolderRelativePath, !relativePath.isEmpty {
+                rows.append(("Minecraft Path", relativePath))
+            }
+            return rows
+        }
+    }
+
+    private var technicalRows: [(String, String)] {
+        switch source.origin {
+        case .localFolder:
+            return []
+        case .connectedDevice(let device, let container):
+            var rows: [(String, String)] = [
+                ("UDID", device.udid),
+                ("App ID", container.appID),
+                ("Access Mode", container.accessMode.rawValue)
+            ]
+            if let productType = device.productType, !productType.isEmpty {
+                rows.append(("Product Type", productType))
+            }
+            rows.append(("Trust State", device.trustState.rawValue.capitalized))
+            return rows
+        }
+    }
+
+    private var sourceTypeLabel: String {
+        switch source.origin {
+        case .localFolder:
+            return "Local Folder"
+        case .connectedDevice:
+            return "Connected Device"
+        }
+    }
+
+    private var availabilityLabel: String {
+        switch source.availability {
+        case .unknown:
+            return "Unknown"
+        case .available:
+            return "Available"
+        case .disconnected:
+            return "Disconnected"
+        case .limited:
+            return "Limited"
+        case .unavailable:
+            return "Unavailable"
+        }
+    }
+
+    private func itemCount(for type: MinecraftContentType) -> Int {
+        source.items.filter { $0.contentType == type }.count
+    }
+
+    @ViewBuilder
+    private func sourceSection(title: String, rows: [(String, String)]) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(title)
+                .font(.headline)
+
+            VStack(alignment: .leading, spacing: 12) {
+                ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+                    HStack(alignment: .top, spacing: 16) {
+                        Text(row.0)
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 170, alignment: .leading)
+
+                        Text(row.1)
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+            }
+            .padding(18)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
         }
     }
 }

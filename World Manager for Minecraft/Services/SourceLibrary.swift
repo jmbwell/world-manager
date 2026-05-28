@@ -1736,6 +1736,14 @@ final class SourceLibrary: ObservableObject {
             return candidate.metadataLoaded
         }
 
+        if (candidate.iconURL != nil) != (existing.iconURL != nil) {
+            return candidate.iconURL != nil
+        }
+
+        if candidate.previewLoaded != existing.previewLoaded {
+            return candidate.previewLoaded
+        }
+
         if candidate.modifiedDate != existing.modifiedDate {
             return (candidate.modifiedDate ?? .distantPast) > (existing.modifiedDate ?? .distantPast)
         }
@@ -2257,6 +2265,14 @@ private actor SourceIndexActor {
 
         if candidate.metadataLoaded != existing.metadataLoaded {
             return candidate.metadataLoaded
+        }
+
+        if (candidate.iconURL != nil) != (existing.iconURL != nil) {
+            return candidate.iconURL != nil
+        }
+
+        if candidate.previewLoaded != existing.previewLoaded {
+            return candidate.previewLoaded
         }
 
         if candidate.modifiedDate != existing.modifiedDate {

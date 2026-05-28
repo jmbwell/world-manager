@@ -1,12 +1,13 @@
 import SwiftUI
 
 enum SidebarSelection: Hashable {
+    case source(sourceID: URL)
     case allContent(sourceID: URL)
     case contentType(sourceID: URL, contentType: MinecraftContentType)
 
     var sourceID: URL {
         switch self {
-        case .allContent(let sourceID), .contentType(let sourceID, _):
+        case .source(let sourceID), .allContent(let sourceID), .contentType(let sourceID, _):
             return sourceID
         }
     }
@@ -75,7 +76,14 @@ struct SourcesSidebarView: View {
 
     @ViewBuilder
     private func sourceSectionRows(for source: MinecraftSource) -> some View {
-        SourceHeaderRow(source: source)
+        SourceHeaderRow(
+            source: source,
+            isSelected: selection == .source(sourceID: source.id),
+            onSelect: {
+                selection = .source(sourceID: source.id)
+            }
+        )
+            .tag(SidebarSelection.source(sourceID: source.id) as SidebarSelection?)
             .listRowSeparator(.hidden)
             .padding(.top, 6)
             .contextMenu {
@@ -143,13 +151,20 @@ private struct SidebarSourcesSectionHeaderView: View {
 
 private struct SourceHeaderRow: View {
     let source: MinecraftSource
+    let isSelected: Bool
+    let onSelect: () -> Void
     @State private var isPresentingStatusPopover = false
+    @State private var isHovering = false
 
     var body: some View {
         HStack(spacing: 8) {
+            Image(systemName: headerSymbolName)
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(titleColor)
+
             Text(source.displayName)
                 .font(.subheadline.weight(.semibold))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(titleColor)
 
             Spacer(minLength: 8)
 
@@ -172,6 +187,12 @@ private struct SourceHeaderRow: View {
                 }
             }
         }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(backgroundStyle, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .contentShape(Rectangle())
+        .onTapGesture(perform: onSelect)
+        .onHover { isHovering = $0 }
     }
 
     private var connection: DeviceConnection? {
@@ -192,6 +213,31 @@ private struct SourceHeaderRow: View {
         }
 
         return "Scanning library…"
+    }
+
+    private var headerSymbolName: String {
+        switch source.origin {
+        case .localFolder:
+            return "folder"
+        case .connectedDevice:
+            return "iphone.gen3"
+        }
+    }
+
+    private var titleColor: Color {
+        isSelected ? .primary : .secondary
+    }
+
+    private var backgroundStyle: AnyShapeStyle {
+        if isSelected {
+            return AnyShapeStyle(Color.appAccent.opacity(0.14))
+        }
+
+        if isHovering {
+            return AnyShapeStyle(.secondary.opacity(0.08))
+        }
+
+        return AnyShapeStyle(.clear)
     }
 
     @ViewBuilder

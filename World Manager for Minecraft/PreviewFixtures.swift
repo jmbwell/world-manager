@@ -345,6 +345,7 @@ struct ItemDetailColumnPreviewContainer: View {
             ItemDetailColumnView(
                 item: PreviewFixtures.featuredWorld,
                 source: PreviewFixtures.primarySource,
+                showsSourceDetails: false,
                 behaviorPacks: PreviewFixtures.primarySource.resolvedPackReferences(for: PreviewFixtures.featuredWorld.id, type: .behaviorPack),
                 resourcePacks: PreviewFixtures.primarySource.resolvedPackReferences(for: PreviewFixtures.featuredWorld.id, type: .resourcePack),
                 worldsUsingPack: [],
