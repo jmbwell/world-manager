@@ -290,7 +290,7 @@ struct SidebarColumnPreviewContainer: View {
     var body: some View {
         NavigationStack {
             SourcesSidebarView(
-                localSources: PreviewFixtures.allSources,
+                sources: PreviewFixtures.allSources,
                 connectedDevices: [],
                 selection: $selection,
                 footerState: PreviewFixtures.sidebarFooter,
@@ -300,8 +300,7 @@ struct SidebarColumnPreviewContainer: View {
                 rescanSourceAction: { _ in },
                 removeSourceAction: { _ in },
                 revealFooterURLAction: { _ in },
-                filters: PreviewFixtures.sidebarFilters(for:),
-                matchedSource: { _ in nil }
+                filters: PreviewFixtures.sidebarFilters(for:)
             )
         }
     }

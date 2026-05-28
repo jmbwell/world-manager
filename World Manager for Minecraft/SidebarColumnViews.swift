@@ -21,7 +21,7 @@ struct SidebarFilter: Identifiable, Hashable {
 }
 
 struct SourcesSidebarView: View {
-    let localSources: [MinecraftSource]
+    let sources: [MinecraftSource]
     let connectedDevices: [ConnectedDeviceSidebarEntry]
     @Binding var selection: SidebarSelection?
     let footerState: SidebarFooterState
@@ -32,13 +32,12 @@ struct SourcesSidebarView: View {
     let removeSourceAction: (MinecraftSource) -> Void
     let revealFooterURLAction: (URL) -> Void
     let filters: (MinecraftSource) -> [SidebarFilter]
-    let matchedSource: (ConnectedDeviceSidebarEntry) -> MinecraftSource?
 
     var body: some View {
         List(selection: $selection) {
-            if !localSources.isEmpty {
+            if !sources.isEmpty {
                 Section {
-                    ForEach(localSources) { source in
+                    ForEach(sources) { source in
                         sourceSectionRows(for: source)
                     }
                 } header: {
@@ -57,17 +56,6 @@ struct SourcesSidebarView: View {
             }
         }
         .listStyle(.sidebar)
-        .overlay(alignment: .bottom) {
-            if footerState.style != .idle {
-                SidebarFooterView(
-                    state: footerState,
-                    revealAction: revealFooterURLAction
-                )
-                .padding(.horizontal, 10)
-                .padding(.bottom, 10)
-                .transition(.move(edge: .bottom).combined(with: .opacity))
-            }
-        }
         .toolbar {
             ToolbarItem {
                 Button(action: addSourceAction) {
@@ -83,12 +71,11 @@ struct SourcesSidebarView: View {
                 .help("Add Connected Device Source")
             }
         }
-        .animation(.easeInOut(duration: 0.2), value: footerState.style)
     }
 
     @ViewBuilder
     private func sourceSectionRows(for source: MinecraftSource) -> some View {
-        SourceHeaderRow(title: source.displayName)
+        SourceHeaderRow(source: source)
             .listRowSeparator(.hidden)
             .padding(.top, 6)
             .contextMenu {
@@ -111,18 +98,14 @@ struct SourcesSidebarView: View {
 
     @ViewBuilder
     private func connectedDeviceSectionRows(for entry: ConnectedDeviceSidebarEntry) -> some View {
-        if let source = matchedSource(entry) {
-            sourceSectionRows(for: source)
-        } else {
-            ConnectedDeviceRow(
-                entry: entry,
-                addAction: entry.hasMinecraftContainer ? {
-                    addConnectedDeviceAction(entry)
-                } : nil
-            )
-            .listRowSeparator(.hidden)
-            .padding(.top, 6)
-        }
+        ConnectedDeviceRow(
+            entry: entry,
+            addAction: entry.hasMinecraftContainer ? {
+                addConnectedDeviceAction(entry)
+            } : nil
+        )
+        .listRowSeparator(.hidden)
+        .padding(.top, 6)
     }
 }
 
@@ -159,12 +142,223 @@ private struct SidebarSourcesSectionHeaderView: View {
 }
 
 private struct SourceHeaderRow: View {
-    let title: String
+    let source: MinecraftSource
+    @State private var isPresentingStatusPopover = false
 
     var body: some View {
-        Text(title)
-            .font(.subheadline.weight(.semibold))
+        HStack(spacing: 8) {
+            Text(source.displayName)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.secondary)
+
+            Spacer(minLength: 8)
+
+            if let connection {
+                SourceConnectionBadge(connection: connection)
+            }
+
+            if showsStatusButton {
+                Button {
+                    isPresentingStatusPopover = true
+                } label: {
+                    statusIndicator
+                        .frame(width: 24, height: 24)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help(scanStatusHelpText)
+                .popover(isPresented: $isPresentingStatusPopover, arrowEdge: .top) {
+                    SourceStatusPopover(source: source)
+                }
+            }
+        }
+    }
+
+    private var connection: DeviceConnection? {
+        guard case .connectedDevice(let device, _) = source.origin else {
+            return nil
+        }
+
+        return device.connection
+    }
+
+    private var scanStatusHelpText: String {
+        if let scanError = source.scanError, !scanError.isEmpty {
+            return scanError
+        }
+
+        if !source.scanStatus.isEmpty {
+            return source.scanStatus
+        }
+
+        return "Scanning library…"
+    }
+
+    @ViewBuilder
+    private var statusIndicator: some View {
+        if source.isScanning {
+            if let scanProgress = source.scanProgress {
+                CircularScanProgressView(progress: scanProgress)
+            } else {
+                ProgressView()
+                    .controlSize(.small)
+            }
+        } else if source.scanError != nil {
+            Image(systemName: "exclamationmark.circle")
+                .foregroundStyle(.secondary)
+        } else {
+            Image(systemName: "info.circle")
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var showsStatusButton: Bool {
+        source.isScanning || source.scanError != nil
+    }
+}
+
+private struct SourceConnectionBadge: View {
+    let connection: DeviceConnection
+
+    var body: some View {
+        Image(systemName: symbolName)
+            .font(.caption.weight(.semibold))
             .foregroundStyle(.secondary)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 4)
+            .background(.secondary.opacity(0.12), in: Capsule())
+            .help(helpText)
+            .accessibilityLabel(helpText)
+    }
+
+    private var symbolName: String {
+        switch connection {
+        case .usb:
+            return "cable.connector"
+        case .network:
+            return "wifi"
+        }
+    }
+
+    private var helpText: String {
+        switch connection {
+        case .usb:
+            return "USB"
+        case .network:
+            return "Network"
+        }
+    }
+}
+
+private struct SourceStatusPopover: View {
+    let source: MinecraftSource
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .center, spacing: 8) {
+                if !source.isScanning, source.scanError != nil {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                } else if !source.isScanning {
+                    Image(systemName: "info.circle")
+                        .foregroundStyle(.secondary)
+                }
+
+                Text(titleText)
+                    .font(.headline)
+            }
+
+            if source.isScanning, let scanProgress = source.scanProgress {
+                ProgressView(value: scanProgress, total: 1)
+            }
+
+            if let subtitleText {
+                Text(subtitleText)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+
+            if let detailText {
+                Text(detailText)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(width: 280, alignment: .leading)
+        .padding(14)
+    }
+
+    private var titleText: String {
+        if let scanError = source.scanError, !scanError.isEmpty {
+            return "Scan Failed"
+        }
+
+        if !source.scanStatus.isEmpty {
+            return source.scanStatus
+        }
+
+        return "Scanning Minecraft library..."
+    }
+
+    private var subtitleText: String? {
+        if let scanError = source.scanError, !scanError.isEmpty {
+            return scanError
+        }
+
+        if source.indexedItemCount > 0 {
+            return source.displayName
+        }
+
+        return "Searching \(source.displayName)"
+    }
+
+    private var detailText: String? {
+        if let diagnostic = source.scanDiagnostic, !diagnostic.isEmpty {
+            return diagnostic
+        }
+
+        guard source.scanError == nil, source.indexedItemCount > 0 else {
+            return nil
+        }
+
+        if source.isScanning, let scanProgress = source.scanProgress {
+            let percentage = Int((scanProgress * 100).rounded())
+            let previewLoadedCount = source.rawItems.filter(\.previewLoaded).count
+            let sizeLoadedCount = source.rawItems.filter(\.sizeLoaded).count
+            if sizeLoadedCount > 0 || source.scanStatus.contains("Calculating sizes") {
+                return "\(sizeLoadedCount) of \(source.indexedItemCount) sizes calculated • \(percentage)%"
+            }
+            if previewLoadedCount > 0 || source.scanStatus.contains("Loading previews") {
+                return "\(previewLoadedCount) of \(source.indexedItemCount) previews loaded • \(percentage)%"
+            }
+
+            return "\(source.indexedDetailCount) of \(source.indexedItemCount) indexed • \(percentage)%"
+        }
+
+        return "\(source.indexedDetailCount) of \(source.indexedItemCount) indexed"
+    }
+}
+
+private struct CircularScanProgressView: View {
+    let progress: Double
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .stroke(.secondary.opacity(0.18), lineWidth: 3)
+
+            Circle()
+                .trim(from: 0, to: max(0.02, min(progress, 1)))
+                .stroke(
+                    Color.appAccent,
+                    style: StrokeStyle(lineWidth: 3, lineCap: .round)
+                )
+                .rotationEffect(.degrees(-90))
+        }
+        .frame(width: 18, height: 18)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Scan progress")
+        .accessibilityValue(Text("\(Int((progress * 100).rounded())) percent"))
     }
 }
 
@@ -174,9 +368,11 @@ private struct ConnectedDeviceRow: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
-            Image(systemName: iconName)
-                .frame(width: 16)
-                .foregroundStyle(iconColor)
+            ConnectedDeviceTransportIcon(
+                baseSymbolName: iconName,
+                connection: entry.device.connection,
+                tint: iconColor
+            )
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(entry.device.name)
@@ -242,6 +438,49 @@ private struct ConnectedDeviceRow: View {
             return "Trust this device to inspect apps"
         case .unavailable:
             return "Device unavailable"
+        }
+    }
+}
+
+private struct ConnectedDeviceTransportIcon: View {
+    let baseSymbolName: String
+    let connection: DeviceConnection
+    let tint: Color
+
+    var body: some View {
+        ZStack(alignment: .bottomTrailing) {
+            Image(systemName: baseSymbolName)
+                .font(.system(size: 22, weight: .medium))
+                .foregroundStyle(tint)
+                .frame(width: 28, height: 28)
+
+            Image(systemName: badgeSymbolName)
+                .font(.system(size: 8, weight: .bold))
+                .foregroundStyle(.primary)
+                .padding(4)
+                .background(.thinMaterial, in: Circle())
+                .offset(x: 4, y: 4)
+        }
+        .help(helpText)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(helpText)
+    }
+
+    private var badgeSymbolName: String {
+        switch connection {
+        case .usb:
+            return "cable.connector"
+        case .network:
+            return "wifi"
+        }
+    }
+
+    private var helpText: String {
+        switch connection {
+        case .usb:
+            return "Connected by USB"
+        case .network:
+            return "Connected by Network"
         }
     }
 }

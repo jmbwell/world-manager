@@ -1,0 +1,144 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDocumentTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>Minecraft World</string>
+			<key>CFBundleTypeIconFile</key>
+			<string>MinecraftVoxelDocument.png</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>us.b-wells.minecraft.mcworld</string>
+			</array>
+		</dict>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>Minecraft Pack</string>
+			<key>CFBundleTypeIconFile</key>
+			<string>MinecraftVoxelDocument.png</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>us.b-wells.minecraft.mcpack</string>
+			</array>
+		</dict>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>Minecraft Template</string>
+			<key>CFBundleTypeIconFile</key>
+			<string>MinecraftVoxelDocument.png</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>us.b-wells.minecraft.template</string>
+			</array>
+		</dict>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>Minecraft Add-on</string>
+			<key>CFBundleTypeIconFile</key>
+			<string>MinecraftVoxelDocument.png</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Default</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>us.b-wells.minecraft.mcaddon</string>
+			</array>
+		</dict>
+	</array>
+	<key>UTExportedTypeDeclarations</key>
+	<array>
+		<dict>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.zip-archive</string>
+			</array>
+			<key>UTTypeDescription</key>
+			<string>Minecraft World</string>
+			<key>UTTypeIconFile</key>
+			<string>MinecraftVoxelDocument.png</string>
+			<key>UTTypeIdentifier</key>
+			<string>us.b-wells.minecraft.mcworld</string>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>mcworld</string>
+				</array>
+			</dict>
+		</dict>
+		<dict>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.zip-archive</string>
+			</array>
+			<key>UTTypeDescription</key>
+			<string>Minecraft Pack</string>
+			<key>UTTypeIconFile</key>
+			<string>MinecraftVoxelDocument.png</string>
+			<key>UTTypeIdentifier</key>
+			<string>us.b-wells.minecraft.mcpack</string>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>mcpack</string>
+				</array>
+			</dict>
+		</dict>
+		<dict>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.zip-archive</string>
+			</array>
+			<key>UTTypeDescription</key>
+			<string>Minecraft Template</string>
+			<key>UTTypeIconFile</key>
+			<string>MinecraftVoxelDocument.png</string>
+			<key>UTTypeIdentifier</key>
+			<string>us.b-wells.minecraft.mctemplate</string>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>mctemplate</string>
+				</array>
+			</dict>
+		</dict>
+		<dict>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.zip-archive</string>
+			</array>
+			<key>UTTypeDescription</key>
+			<string>Minecraft Add-on</string>
+			<key>UTTypeIconFile</key>
+			<string>MinecraftVoxelDocument.png</string>
+			<key>UTTypeIdentifier</key>
+			<string>us.b-wells.minecraft.mcaddon</string>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>mcaddon</string>
+				</array>
+			</dict>
+		</dict>
+	</array>
+</dict>
+</plist>

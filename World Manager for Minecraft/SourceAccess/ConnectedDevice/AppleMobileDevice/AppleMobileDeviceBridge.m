@@ -152,8 +152,11 @@ typedef struct {
 typedef struct {
     WMMMobileDeviceFunctions *functions;
     CFRunLoopRef runLoop;
-    AMDeviceRef device;
-} WMMDeviceWaitContext;
+    NSMutableArray<NSValue *> *devices;
+} WMMDeviceCollectionContext;
+
+static NSString *WMMDeviceStringValue(WMMMobileDeviceFunctions *functions, AMDeviceRef device, CFStringRef key);
+static NSInteger WMMConnectionPreferenceRank(AMDeviceRef device);
 
 static NSError *WMMMakeError(NSInteger code, NSString *description) {
     return [NSError errorWithDomain:WMMMobileDeviceErrorDomain code:code userInfo:@{
@@ -273,20 +276,16 @@ static void WMMDeviceNotificationCallback(struct am_device_notification_callback
         return;
     }
 
-    WMMDeviceWaitContext *context = contextPointer;
-    if (context->device == NULL) {
-        context->device = context->functions->AMDeviceRetain(info->dev);
-        if (context->runLoop != NULL) {
-            CFRunLoopStop(context->runLoop);
-        }
-    }
+    WMMDeviceCollectionContext *context = contextPointer;
+    AMDeviceRef retainedDevice = context->functions->AMDeviceRetain(info->dev);
+    [context->devices addObject:[NSValue valueWithPointer:retainedDevice]];
 }
 
-static AMDeviceRef WMMCopyFirstConnectedDevice(WMMMobileDeviceFunctions *functions, NSError **error) {
-    WMMDeviceWaitContext context = {
+static NSArray<NSValue *> *WMMCopyConnectedDevices(WMMMobileDeviceFunctions *functions, NSError **error) {
+    WMMDeviceCollectionContext context = {
         .functions = functions,
         .runLoop = CFRunLoopGetCurrent(),
-        .device = NULL
+        .devices = [NSMutableArray array]
     };
 
     AMDeviceNotificationRef subscription = NULL;
@@ -307,11 +306,78 @@ static AMDeviceRef WMMCopyFirstConnectedDevice(WMMMobileDeviceFunctions *functio
     CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.2, false);
     functions->AMDeviceNotificationUnsubscribe(subscription);
 
-    if (context.device == NULL && error != NULL) {
+    if (context.devices.count == 0 && error != NULL) {
         *error = WMMMakeError(3, @"No connected iPhone or iPad was detected through MobileDevice.framework.");
     }
 
-    return context.device;
+    return [context.devices copy];
+}
+
+static NSString *WMMResolvedDeviceIdentifier(WMMMobileDeviceFunctions *functions, AMDeviceRef device) {
+    if (functions->AMDeviceCopyDeviceIdentifier != NULL) {
+        CFStringRef copiedIdentifier = functions->AMDeviceCopyDeviceIdentifier(device);
+        if (copiedIdentifier != NULL) {
+            return CFBridgingRelease(copiedIdentifier);
+        }
+    }
+
+    return WMMDeviceStringValue(functions, device, CFSTR("UniqueDeviceID")) ?:
+        WMMDeviceStringValue(functions, device, CFSTR("SerialNumber")) ?:
+        @"";
+}
+
+static void WMMReleaseDeviceValues(WMMMobileDeviceFunctions *functions, NSArray<NSValue *> *devices) {
+    for (NSValue *value in devices) {
+        AMDeviceRef device = (AMDeviceRef)value.pointerValue;
+        if (device != NULL) {
+            functions->AMDeviceRelease(device);
+        }
+    }
+}
+
+static AMDeviceRef WMMCopyConnectedDevice(
+    WMMMobileDeviceFunctions *functions,
+    NSString *targetDeviceIdentifier,
+    NSError **error
+) {
+    NSArray<NSValue *> *devices = WMMCopyConnectedDevices(functions, error);
+    if (devices.count == 0) {
+        return NULL;
+    }
+
+    AMDeviceRef matchedDevice = NULL;
+    for (NSValue *value in devices) {
+        AMDeviceRef device = (AMDeviceRef)value.pointerValue;
+        NSString *deviceIdentifier = WMMResolvedDeviceIdentifier(functions, device);
+        BOOL matchesTarget = targetDeviceIdentifier.length == 0 || [deviceIdentifier isEqualToString:targetDeviceIdentifier];
+        if (!matchesTarget) {
+            if (device != NULL) {
+                functions->AMDeviceRelease(device);
+            }
+            continue;
+        }
+
+        if (matchedDevice == NULL) {
+            matchedDevice = device;
+            continue;
+        }
+
+        if (WMMConnectionPreferenceRank(device) > WMMConnectionPreferenceRank(matchedDevice)) {
+            functions->AMDeviceRelease(matchedDevice);
+            matchedDevice = device;
+            continue;
+        }
+
+        if (device != NULL) {
+            functions->AMDeviceRelease(device);
+        }
+    }
+
+    if (matchedDevice == NULL && error != NULL) {
+        *error = WMMMakeError(3, [NSString stringWithFormat:@"The connected device %@ is no longer available.", targetDeviceIdentifier]);
+    }
+
+    return matchedDevice;
 }
 
 static NSString *WMMDeviceStringValue(WMMMobileDeviceFunctions *functions, AMDeviceRef device, CFStringRef key) {
@@ -330,6 +396,66 @@ static NSString *WMMDeviceStringValue(WMMMobileDeviceFunctions *functions, AMDev
     }
 
     return CFBridgingRelease(value);
+}
+
+static NSString *WMMInferredConnectionType(AMDeviceRef device) {
+    if (device == NULL) {
+        return @"USB";
+    }
+
+    NSString *deviceDescription = [(__bridge id)device description];
+    if (deviceDescription.length == 0) {
+        return @"USB";
+    }
+
+    if ([deviceDescription containsString:@"FullServiceName = "]) {
+        return @"Network";
+    }
+
+    if ([deviceDescription containsString:@"location ID = "]) {
+        return @"USB";
+    }
+
+    return @"USB";
+}
+
+static NSInteger WMMConnectionPreferenceRank(AMDeviceRef device) {
+    NSString *connectionType = WMMInferredConnectionType(device);
+    if ([connectionType caseInsensitiveCompare:@"USB"] == NSOrderedSame) {
+        return 2;
+    }
+
+    if ([connectionType caseInsensitiveCompare:@"Network"] == NSOrderedSame) {
+        return 1;
+    }
+
+    return 0;
+}
+
+static void WMMLogDeviceTransportDiagnostics(
+    WMMMobileDeviceFunctions *functions,
+    AMDeviceRef device,
+    NSString *resolvedIdentifier
+) {
+    NSArray<NSString *> *keys = @[
+        @"ConnectionType",
+        @"InterfaceType",
+        @"DeviceName",
+        @"ProductType",
+        @"ProductVersion",
+        @"UniqueDeviceID",
+        @"SerialNumber",
+        @"WiFiAddress",
+        @"EthernetAddress"
+    ];
+
+    NSMutableDictionary<NSString *, NSString *> *values = [NSMutableDictionary dictionary];
+    for (NSString *key in keys) {
+        NSString *value = WMMDeviceStringValue(functions, device, (__bridge CFStringRef)key);
+        values[key] = value.length > 0 ? value : @"<nil>";
+    }
+
+    NSLog(@"[DeviceSummary] udid=%@ diagnostics=%@", resolvedIdentifier, values);
 }
 
 static BOOL WMMConnectAndValidateDevice(
@@ -389,6 +515,26 @@ static void WMMDisconnectDevice(
     }
 
     functions->AMDeviceDisconnect(device);
+}
+
+static void WMMCloseVendSession(
+    WMMMobileDeviceFunctions *functions,
+    AMDeviceRef _Nullable device,
+    BOOL hadSession,
+    AFCConnectionRef _Nullable afcConnection,
+    AMDServiceConnectionRef _Nullable backingServiceConnection
+) {
+    if (afcConnection != NULL) {
+        functions->AFCConnectionClose(afcConnection);
+    }
+
+    if (backingServiceConnection != NULL) {
+        functions->AMDServiceConnectionInvalidate(backingServiceConnection);
+    }
+
+    if (device != NULL) {
+        WMMDisconnectDevice(functions, device, hadSession);
+    }
 }
 
 static AFCConnectionRef _Nullable WMMCreateAFCConnectionFromServiceConnection(
@@ -1001,6 +1147,115 @@ static NSString * _Nullable WMMVersionStringFromValue(id value) {
     return nil;
 }
 
+static NSDictionary<NSString *, id> *WMMBuildPackReferenceSummary(
+    NSString *name,
+    NSString *contentType,
+    NSString * _Nullable uuid,
+    NSString * _Nullable version,
+    NSString *source
+) {
+    NSMutableDictionary<NSString *, id> *summary = [@{
+        @"name": name,
+        @"contentType": contentType,
+        @"source": source
+    } mutableCopy];
+
+    if (uuid.length > 0) {
+        summary[@"uuid"] = [uuid lowercaseString];
+    }
+
+    if (version.length > 0) {
+        summary[@"version"] = version;
+    }
+
+    return summary;
+}
+
+static NSArray<NSDictionary<NSString *, id> *> *WMMParsePackReferenceSummariesFromData(
+    NSData *data,
+    NSString *contentType
+) {
+    id jsonObject = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+    if (![jsonObject isKindOfClass:[NSArray class]]) {
+        return @[];
+    }
+
+    NSMutableArray<NSDictionary<NSString *, id> *> *references = [NSMutableArray array];
+    for (id entry in (NSArray *)jsonObject) {
+        if (![entry isKindOfClass:[NSDictionary class]]) {
+            continue;
+        }
+
+        NSDictionary *entryDictionary = (NSDictionary *)entry;
+        NSString *uuid = [entryDictionary[@"pack_id"] isKindOfClass:[NSString class]] ? entryDictionary[@"pack_id"] : nil;
+        NSString *version = WMMVersionStringFromValue(entryDictionary[@"version"]);
+        NSString *name = uuid.length > 0 ? uuid : @"Referenced Pack";
+        [references addObject:WMMBuildPackReferenceSummary(
+            name,
+            contentType,
+            uuid,
+            version,
+            @"referencedByWorld"
+        )];
+    }
+
+    return references;
+}
+
+static NSArray<NSDictionary<NSString *, id> *> *WMMReadPackReferenceSummariesFile(
+    WMMMobileDeviceFunctions *functions,
+    AFCConnectionRef afcConnection,
+    NSString *remotePath,
+    NSString *contentType
+) {
+    NSData *data = WMMCopyAFCFileData(functions, afcConnection, remotePath, NULL);
+    if (data == nil) {
+        return @[];
+    }
+
+    return WMMParsePackReferenceSummariesFromData(data, contentType);
+}
+
+static NSArray<NSDictionary<NSString *, id> *> *WMMLoadEmbeddedPackReferenceSummaries(
+    WMMMobileDeviceFunctions *functions,
+    AFCConnectionRef afcConnection,
+    NSString *remoteFolderPath,
+    NSString *contentType
+) {
+    NSMutableArray<NSString *> *childFolders = nil;
+    if (WMMReadAFCDirectory(functions, afcConnection, remoteFolderPath, &childFolders) != 0 || childFolders == nil) {
+        return @[];
+    }
+
+    NSMutableArray<NSDictionary<NSString *, id> *> *references = [NSMutableArray array];
+    for (NSString *childFolder in childFolders) {
+        if ([childFolder isEqualToString:@"."] || [childFolder isEqualToString:@".."]) {
+            continue;
+        }
+
+        NSString *manifestPath = [[remoteFolderPath stringByAppendingPathComponent:childFolder] stringByAppendingPathComponent:@"manifest.json"];
+        NSDictionary<NSString *, id> *header = WMMReadManifestHeader(functions, afcConnection, manifestPath);
+        if (header == nil) {
+            continue;
+        }
+
+        NSString *name = [header[@"name"] isKindOfClass:[NSString class]] && [header[@"name"] length] > 0
+            ? header[@"name"]
+            : childFolder;
+        NSString *uuid = [header[@"uuid"] isKindOfClass:[NSString class]] ? header[@"uuid"] : nil;
+        NSString *version = WMMVersionStringFromValue(header[@"version"]);
+        [references addObject:WMMBuildPackReferenceSummary(
+            name,
+            contentType,
+            uuid,
+            version,
+            @"embeddedInWorld"
+        )];
+    }
+
+    return references;
+}
+
 static BOOL WMMIsCandidateItem(NSString *contentType, NSArray<NSString *> *entries) {
     if ([contentType isEqualToString:@"World"]) {
         return WMMEntryArrayContainsName(entries, @"level.dat")
@@ -1014,12 +1269,9 @@ static BOOL WMMIsCandidateItem(NSString *contentType, NSArray<NSString *> *entri
         || WMMEntryArrayContainsName(entries, @"pack_icon.jpg");
 }
 
-static NSDictionary<NSString *, id> *WMMBuildMinecraftItemSummary(
-    WMMMobileDeviceFunctions *functions,
-    AFCConnectionRef afcConnection,
+static NSDictionary<NSString *, id> *WMMBuildShallowMinecraftItemSummary(
     NSString *contentType,
     NSString *collectionFolderName,
-    NSString *itemRemotePath,
     NSString *itemRelativePath,
     NSString *folderName,
     NSArray<NSString *> *entries
@@ -1028,44 +1280,9 @@ static NSDictionary<NSString *, id> *WMMBuildMinecraftItemSummary(
         @"contentType": contentType,
         @"collectionFolderName": collectionFolderName,
         @"relativePath": itemRelativePath,
-        @"folderName": folderName
+        @"folderName": folderName,
+        @"displayName": folderName
     } mutableCopy];
-
-    NSString *displayName = folderName;
-    if ([contentType isEqualToString:@"World"]) {
-        NSString *levelName = WMMReadUTF8TextFile(
-            functions,
-            afcConnection,
-            [itemRemotePath stringByAppendingPathComponent:@"levelname.txt"]
-        );
-        if (levelName.length > 0) {
-            displayName = levelName;
-        }
-    } else {
-        NSDictionary<NSString *, id> *header = WMMReadManifestHeader(
-            functions,
-            afcConnection,
-            [itemRemotePath stringByAppendingPathComponent:@"manifest.json"]
-        );
-        NSString *manifestName = [header[@"name"] isKindOfClass:[NSString class]] ? header[@"name"] : nil;
-        if (manifestName.length > 0) {
-            displayName = manifestName;
-        }
-
-        if ([header[@"uuid"] isKindOfClass:[NSString class]]) {
-            summary[@"packUUID"] = [header[@"uuid"] lowercaseString];
-        }
-        NSString *version = WMMVersionStringFromValue(header[@"version"]);
-        if (version.length > 0) {
-            summary[@"packVersion"] = version;
-        }
-        NSString *minimumEngineVersion = WMMVersionStringFromValue(header[@"min_engine_version"]);
-        if (minimumEngineVersion.length > 0) {
-            summary[@"minimumEngineVersion"] = minimumEngineVersion;
-        }
-    }
-
-    summary[@"displayName"] = displayName;
     summary[@"hasIcon"] = @(
         WMMEntryArrayContainsName(entries, @"world_icon.png")
             || WMMEntryArrayContainsName(entries, @"world_icon.jpeg")
@@ -1107,12 +1324,9 @@ static void WMMAppendCollectionSummaries(
         }
 
         NSString *itemRelativePath = [collectionFolderName stringByAppendingPathComponent:itemFolderName];
-        [results addObject:WMMBuildMinecraftItemSummary(
-            functions,
-            afcConnection,
+        [results addObject:WMMBuildShallowMinecraftItemSummary(
             contentType,
             collectionFolderName,
-            itemRemotePath,
             itemRelativePath,
             itemFolderName,
             itemEntries
@@ -1152,12 +1366,9 @@ static void WMMAppendCollectionSummaries(
                 }
 
                 NSString *embeddedRelativePath = [itemRelativePath stringByAppendingPathComponent:[embeddedFolder stringByAppendingPathComponent:embeddedFolderName]];
-                [results addObject:WMMBuildMinecraftItemSummary(
-                    functions,
-                    afcConnection,
+                [results addObject:WMMBuildShallowMinecraftItemSummary(
                     embeddedType,
                     embeddedFolder,
-                    embeddedItemPath,
                     embeddedRelativePath,
                     embeddedFolderName,
                     embeddedEntries
@@ -1168,47 +1379,78 @@ static void WMMAppendCollectionSummaries(
 }
 
 NSDictionary<NSString *, id> * _Nullable
-WMMCopyFirstConnectedDeviceSummary(NSError **error) {
+WMMCopyConnectedDeviceSummaries(NSError **error) {
     WMMMobileDeviceFunctions functions;
     if (!WMMLoadFunctions(&functions, error)) {
         return nil;
     }
 
-    AMDeviceRef device = WMMCopyFirstConnectedDevice(&functions, error);
-    if (device == NULL) {
+    NSArray<NSValue *> *devices = WMMCopyConnectedDevices(&functions, error);
+    if (devices.count == 0) {
         return nil;
     }
 
-    if (!WMMConnectAndValidateDevice(&functions, device, NO, error)) {
-        functions.AMDeviceRelease(device);
-        return nil;
+    NSMutableArray<NSDictionary<NSString *, id> *> *summaries = [NSMutableArray array];
+    NSMutableDictionary<NSString *, NSValue *> *preferredDevicesByIdentifier = [NSMutableDictionary dictionary];
+    for (NSValue *value in devices) {
+        AMDeviceRef device = (AMDeviceRef)value.pointerValue;
+        if (device == NULL) {
+            continue;
+        }
+
+        NSString *deviceIdentifier = WMMResolvedDeviceIdentifier(&functions, device);
+        if (deviceIdentifier.length == 0) {
+            continue;
+        }
+
+        NSValue *existingValue = preferredDevicesByIdentifier[deviceIdentifier];
+        AMDeviceRef existingDevice = existingValue != nil ? (AMDeviceRef)existingValue.pointerValue : NULL;
+        if (existingDevice != NULL && WMMConnectionPreferenceRank(device) <= WMMConnectionPreferenceRank(existingDevice)) {
+            continue;
+        }
+        preferredDevicesByIdentifier[deviceIdentifier] = value;
     }
 
-    NSString *deviceName = WMMDeviceStringValue(&functions, device, CFSTR("DeviceName")) ?: @"Unknown Device";
-    NSString *productType = WMMDeviceStringValue(&functions, device, CFSTR("ProductType")) ?: @"";
-    NSString *productVersion = WMMDeviceStringValue(&functions, device, CFSTR("ProductVersion")) ?: @"";
-    NSString *deviceIdentifier =
-        WMMDeviceStringValue(&functions, device, CFSTR("UniqueDeviceID")) ?:
-        WMMDeviceStringValue(&functions, device, CFSTR("SerialNumber")) ?:
-        @"";
+    for (NSString *deviceIdentifier in preferredDevicesByIdentifier) {
+        AMDeviceRef device = (AMDeviceRef)preferredDevicesByIdentifier[deviceIdentifier].pointerValue;
+        if (device == NULL) {
+            continue;
+        }
+        NSString *deviceName = @"Unknown Device";
+        NSString *productType = @"";
+        NSString *productVersion = @"";
+        NSString *connectionType = WMMDeviceStringValue(&functions, device, CFSTR("ConnectionType")) ?: WMMInferredConnectionType(device);
+        if (WMMConnectAndValidateDevice(&functions, device, NO, NULL)) {
+            deviceName = WMMDeviceStringValue(&functions, device, CFSTR("DeviceName")) ?: @"Unknown Device";
+            productType = WMMDeviceStringValue(&functions, device, CFSTR("ProductType")) ?: @"";
+            productVersion = WMMDeviceStringValue(&functions, device, CFSTR("ProductVersion")) ?: @"";
+            connectionType = WMMDeviceStringValue(&functions, device, CFSTR("ConnectionType")) ?: WMMInferredConnectionType(device);
+            WMMLogDeviceTransportDiagnostics(&functions, device, deviceIdentifier);
+            WMMDisconnectDevice(&functions, device, NO);
+        }
 
-    NSString *trustState = @"trusted";
+        [summaries addObject:@{
+            @"deviceName": deviceName,
+            @"deviceIdentifier": deviceIdentifier,
+            @"productType": productType,
+            @"productVersion": productVersion,
+            @"connectionType": connectionType,
+            @"trustState": @"trusted"
+        }];
+    }
 
-    WMMDisconnectDevice(&functions, device, NO);
+    WMMReleaseDeviceValues(&functions, devices);
 
-    functions.AMDeviceRelease(device);
+    [summaries sortUsingComparator:^NSComparisonResult(NSDictionary<NSString *, id> *lhs, NSDictionary<NSString *, id> *rhs) {
+        return [lhs[@"deviceName"] localizedStandardCompare:rhs[@"deviceName"]];
+    }];
 
-    return @{
-        @"deviceName": deviceName,
-        @"deviceIdentifier": deviceIdentifier,
-        @"productType": productType,
-        @"productVersion": productVersion,
-        @"trustState": trustState
-    };
+    return @{ @"devices": summaries };
 }
 
 NSDictionary<NSString *, id> * _Nullable
-WMMCopyFirstConnectedDeviceAppDirectoryListing(
+WMMCopyConnectedDeviceAppDirectoryListing(
+    NSString *deviceIdentifier,
     NSString *bundleIdentifier,
     NSString *relativePath,
     NSError **error
@@ -1225,7 +1467,7 @@ WMMCopyFirstConnectedDeviceAppDirectoryListing(
         return nil;
     }
 
-    AMDeviceRef device = WMMCopyFirstConnectedDevice(&functions, error);
+    AMDeviceRef device = WMMCopyConnectedDevice(&functions, deviceIdentifier, error);
     if (device == NULL) {
         return nil;
     }
@@ -1238,10 +1480,7 @@ WMMCopyFirstConnectedDeviceAppDirectoryListing(
     NSString *deviceName = WMMDeviceStringValue(&functions, device, CFSTR("DeviceName")) ?: @"Unknown Device";
     NSString *productType = WMMDeviceStringValue(&functions, device, CFSTR("ProductType")) ?: @"";
     NSString *productVersion = WMMDeviceStringValue(&functions, device, CFSTR("ProductVersion")) ?: @"";
-    NSString *deviceIdentifier =
-        WMMDeviceStringValue(&functions, device, CFSTR("UniqueDeviceID")) ?:
-        WMMDeviceStringValue(&functions, device, CFSTR("SerialNumber")) ?:
-        @"";
+    NSString *resolvedDeviceIdentifier = WMMResolvedDeviceIdentifier(&functions, device);
 
     AMDServiceConnectionRef backingServiceConnection = NULL;
     AFCConnectionRef afcConnection = WMMCreateVendAFCConnection(
@@ -1252,7 +1491,7 @@ WMMCopyFirstConnectedDeviceAppDirectoryListing(
         error
     );
     if (afcConnection == NULL) {
-        WMMDisconnectDevice(&functions, device, YES);
+        WMMCloseVendSession(&functions, device, YES, NULL, backingServiceConnection);
         functions.AMDeviceRelease(device);
         return nil;
     }
@@ -1268,11 +1507,7 @@ WMMCopyFirstConnectedDeviceAppDirectoryListing(
         NSMutableArray<NSString *> *rootEntries = nil;
         const int rootStatus = WMMReadAFCDirectory(&functions, afcConnection, @"/", &rootEntries);
 
-        functions.AFCConnectionClose(afcConnection);
-        if (backingServiceConnection != NULL) {
-            functions.AMDServiceConnectionInvalidate(backingServiceConnection);
-        }
-        WMMDisconnectDevice(&functions, device, YES);
+        WMMCloseVendSession(&functions, device, YES, afcConnection, backingServiceConnection);
         functions.AMDeviceRelease(device);
         if (error != NULL) {
             NSString *message = [NSString stringWithFormat:@"AFC directory read failed for %@ (%d).", normalizedPath, directoryStatus];
@@ -1286,11 +1521,7 @@ WMMCopyFirstConnectedDeviceAppDirectoryListing(
         }
         return nil;
     }
-    functions.AFCConnectionClose(afcConnection);
-    if (backingServiceConnection != NULL) {
-        functions.AMDServiceConnectionInvalidate(backingServiceConnection);
-    }
-    WMMDisconnectDevice(&functions, device, YES);
+    WMMCloseVendSession(&functions, device, YES, afcConnection, backingServiceConnection);
 
     functions.AMDeviceRelease(device);
 
@@ -1298,7 +1529,7 @@ WMMCopyFirstConnectedDeviceAppDirectoryListing(
         @"bundleIdentifier": bundleIdentifier,
         @"path": normalizedPath,
         @"deviceName": deviceName,
-        @"deviceIdentifier": deviceIdentifier,
+        @"deviceIdentifier": resolvedDeviceIdentifier,
         @"productType": productType,
         @"productVersion": productVersion,
         @"entries": entries
@@ -1306,7 +1537,8 @@ WMMCopyFirstConnectedDeviceAppDirectoryListing(
 }
 
 NSDictionary<NSString *, id> * _Nullable
-WMMCopyFirstConnectedDeviceAppPathProbeResults(
+WMMCopyConnectedDeviceAppPathProbeResults(
+    NSString *deviceIdentifier,
     NSString *bundleIdentifier,
     NSArray<NSString *> *paths,
     NSError **error
@@ -1323,7 +1555,7 @@ WMMCopyFirstConnectedDeviceAppPathProbeResults(
         return nil;
     }
 
-    AMDeviceRef device = WMMCopyFirstConnectedDevice(&functions, error);
+    AMDeviceRef device = WMMCopyConnectedDevice(&functions, deviceIdentifier, error);
     if (device == NULL) {
         return nil;
     }
@@ -1336,10 +1568,7 @@ WMMCopyFirstConnectedDeviceAppPathProbeResults(
     NSString *deviceName = WMMDeviceStringValue(&functions, device, CFSTR("DeviceName")) ?: @"Unknown Device";
     NSString *productType = WMMDeviceStringValue(&functions, device, CFSTR("ProductType")) ?: @"";
     NSString *productVersion = WMMDeviceStringValue(&functions, device, CFSTR("ProductVersion")) ?: @"";
-    NSString *deviceIdentifier =
-        WMMDeviceStringValue(&functions, device, CFSTR("UniqueDeviceID")) ?:
-        WMMDeviceStringValue(&functions, device, CFSTR("SerialNumber")) ?:
-        @"";
+    NSString *resolvedDeviceIdentifier = WMMResolvedDeviceIdentifier(&functions, device);
 
     AMDServiceConnectionRef backingServiceConnection = NULL;
     AFCConnectionRef afcConnection = WMMCreateVendAFCConnection(
@@ -1350,7 +1579,7 @@ WMMCopyFirstConnectedDeviceAppPathProbeResults(
         error
     );
     if (afcConnection == NULL) {
-        WMMDisconnectDevice(&functions, device, YES);
+        WMMCloseVendSession(&functions, device, YES, NULL, backingServiceConnection);
         functions.AMDeviceRelease(device);
         return nil;
     }
@@ -1376,17 +1605,13 @@ WMMCopyFirstConnectedDeviceAppPathProbeResults(
         [results addObject:result];
     }
 
-    functions.AFCConnectionClose(afcConnection);
-    if (backingServiceConnection != NULL) {
-        functions.AMDServiceConnectionInvalidate(backingServiceConnection);
-    }
-    WMMDisconnectDevice(&functions, device, YES);
+    WMMCloseVendSession(&functions, device, YES, afcConnection, backingServiceConnection);
     functions.AMDeviceRelease(device);
 
     return @{
         @"bundleIdentifier": bundleIdentifier,
         @"deviceName": deviceName,
-        @"deviceIdentifier": deviceIdentifier,
+        @"deviceIdentifier": resolvedDeviceIdentifier,
         @"productType": productType,
         @"productVersion": productVersion,
         @"results": results
@@ -1394,13 +1619,16 @@ WMMCopyFirstConnectedDeviceAppPathProbeResults(
 }
 
 NSDictionary<NSString *, id> * _Nullable
-WMMCopyFirstConnectedDeviceApplicationList(NSError **error) {
+WMMCopyConnectedDeviceApplicationList(
+    NSString *deviceIdentifier,
+    NSError **error
+) {
     WMMMobileDeviceFunctions functions;
     if (!WMMLoadFunctions(&functions, error)) {
         return nil;
     }
 
-    AMDeviceRef device = WMMCopyFirstConnectedDevice(&functions, error);
+    AMDeviceRef device = WMMCopyConnectedDevice(&functions, deviceIdentifier, error);
     if (device == NULL) {
         return nil;
     }
@@ -1413,10 +1641,7 @@ WMMCopyFirstConnectedDeviceApplicationList(NSError **error) {
     NSString *deviceName = WMMDeviceStringValue(&functions, device, CFSTR("DeviceName")) ?: @"Unknown Device";
     NSString *productType = WMMDeviceStringValue(&functions, device, CFSTR("ProductType")) ?: @"";
     NSString *productVersion = WMMDeviceStringValue(&functions, device, CFSTR("ProductVersion")) ?: @"";
-    NSString *deviceIdentifier =
-        WMMDeviceStringValue(&functions, device, CFSTR("UniqueDeviceID")) ?:
-        WMMDeviceStringValue(&functions, device, CFSTR("SerialNumber")) ?:
-        @"";
+    NSString *resolvedDeviceIdentifier = WMMResolvedDeviceIdentifier(&functions, device);
 
     CFDictionaryRef appDictionary = NULL;
     const int lookupStatus = functions.AMDeviceLookupApplications(device, NULL, &appDictionary);
@@ -1484,7 +1709,7 @@ WMMCopyFirstConnectedDeviceApplicationList(NSError **error) {
 
     return @{
         @"deviceName": deviceName,
-        @"deviceIdentifier": deviceIdentifier,
+        @"deviceIdentifier": resolvedDeviceIdentifier,
         @"productType": productType,
         @"productVersion": productVersion,
         @"applications": applications
@@ -1492,7 +1717,8 @@ WMMCopyFirstConnectedDeviceApplicationList(NSError **error) {
 }
 
 NSDictionary<NSString *, id> * _Nullable
-WMMCopyFirstConnectedDeviceMinecraftLibrarySnapshot(
+WMMCopyConnectedDeviceMinecraftLibrarySnapshot(
+    NSString *deviceIdentifier,
     NSString *bundleIdentifier,
     NSString *relativePath,
     NSError **error
@@ -1509,7 +1735,7 @@ WMMCopyFirstConnectedDeviceMinecraftLibrarySnapshot(
         return nil;
     }
 
-    AMDeviceRef device = WMMCopyFirstConnectedDevice(&functions, error);
+    AMDeviceRef device = WMMCopyConnectedDevice(&functions, deviceIdentifier, error);
     if (device == NULL) {
         return nil;
     }
@@ -1528,7 +1754,7 @@ WMMCopyFirstConnectedDeviceMinecraftLibrarySnapshot(
         error
     );
     if (afcConnection == NULL) {
-        WMMDisconnectDevice(&functions, device, YES);
+        WMMCloseVendSession(&functions, device, YES, NULL, backingServiceConnection);
         functions.AMDeviceRelease(device);
         return nil;
     }
@@ -1554,11 +1780,7 @@ WMMCopyFirstConnectedDeviceMinecraftLibrarySnapshot(
         );
     }
 
-    functions.AFCConnectionClose(afcConnection);
-    if (backingServiceConnection != NULL) {
-        functions.AMDServiceConnectionInvalidate(backingServiceConnection);
-    }
-    WMMDisconnectDevice(&functions, device, YES);
+    WMMCloseVendSession(&functions, device, YES, afcConnection, backingServiceConnection);
     functions.AMDeviceRelease(device);
 
     return @{
@@ -1568,8 +1790,140 @@ WMMCopyFirstConnectedDeviceMinecraftLibrarySnapshot(
     };
 }
 
+NSDictionary<NSString *, id> * _Nullable
+WMMCopyConnectedDeviceMinecraftMetadataBatch(
+    NSString *deviceIdentifier,
+    NSString *bundleIdentifier,
+    NSString *relativePath,
+    NSArray<NSDictionary<NSString *, id> *> *items,
+    NSError **error
+) {
+    if (bundleIdentifier.length == 0) {
+        if (error != NULL) {
+            *error = WMMMakeError(19, @"A bundle identifier is required.");
+        }
+        return nil;
+    }
+
+    WMMMobileDeviceFunctions functions;
+    if (!WMMLoadFunctions(&functions, error)) {
+        return nil;
+    }
+
+    AMDeviceRef device = WMMCopyConnectedDevice(&functions, deviceIdentifier, error);
+    if (device == NULL) {
+        return nil;
+    }
+
+    if (!WMMConnectAndValidateDevice(&functions, device, YES, error)) {
+        functions.AMDeviceRelease(device);
+        return nil;
+    }
+
+    AMDServiceConnectionRef backingServiceConnection = NULL;
+    AFCConnectionRef afcConnection = WMMCreateVendAFCConnection(
+        &functions,
+        device,
+        bundleIdentifier,
+        &backingServiceConnection,
+        error
+    );
+    if (afcConnection == NULL) {
+        WMMCloseVendSession(&functions, device, YES, NULL, backingServiceConnection);
+        functions.AMDeviceRelease(device);
+        return nil;
+    }
+
+    NSString *normalizedRootPath = WMMNormalizedAFCPath(relativePath);
+    NSMutableArray<NSDictionary<NSString *, id> *> *results = [NSMutableArray array];
+
+    for (NSDictionary<NSString *, id> *item in items) {
+        NSString *contentType = [item[@"contentType"] isKindOfClass:[NSString class]] ? item[@"contentType"] : nil;
+        NSString *relativeItemPath = [item[@"relativePath"] isKindOfClass:[NSString class]] ? item[@"relativePath"] : nil;
+        NSString *folderName = [item[@"folderName"] isKindOfClass:[NSString class]] ? item[@"folderName"] : nil;
+        if (contentType.length == 0 || relativeItemPath.length == 0 || folderName.length == 0) {
+            continue;
+        }
+
+        NSString *itemRemotePath = [normalizedRootPath stringByAppendingPathComponent:relativeItemPath];
+        NSMutableDictionary<NSString *, id> *metadata = [@{
+            @"relativePath": relativeItemPath
+        } mutableCopy];
+
+        if ([contentType isEqualToString:@"World"]) {
+            NSString *levelName = WMMReadUTF8TextFile(
+                &functions,
+                afcConnection,
+                [itemRemotePath stringByAppendingPathComponent:@"levelname.txt"]
+            );
+            metadata[@"displayName"] = levelName.length > 0 ? levelName : folderName;
+
+            NSMutableArray<NSDictionary<NSString *, id> *> *packReferences = [NSMutableArray array];
+            [packReferences addObjectsFromArray:WMMReadPackReferenceSummariesFile(
+                &functions,
+                afcConnection,
+                [itemRemotePath stringByAppendingPathComponent:@"world_behavior_packs.json"],
+                @"Behavior Pack"
+            )];
+            [packReferences addObjectsFromArray:WMMReadPackReferenceSummariesFile(
+                &functions,
+                afcConnection,
+                [itemRemotePath stringByAppendingPathComponent:@"world_resource_packs.json"],
+                @"Resource Pack"
+            )];
+            [packReferences addObjectsFromArray:WMMLoadEmbeddedPackReferenceSummaries(
+                &functions,
+                afcConnection,
+                [itemRemotePath stringByAppendingPathComponent:@"behavior_packs"],
+                @"Behavior Pack"
+            )];
+            [packReferences addObjectsFromArray:WMMLoadEmbeddedPackReferenceSummaries(
+                &functions,
+                afcConnection,
+                [itemRemotePath stringByAppendingPathComponent:@"resource_packs"],
+                @"Resource Pack"
+            )];
+            if (packReferences.count > 0) {
+                metadata[@"packReferences"] = packReferences;
+            }
+        } else {
+            NSDictionary<NSString *, id> *header = WMMReadManifestHeader(
+                &functions,
+                afcConnection,
+                [itemRemotePath stringByAppendingPathComponent:@"manifest.json"]
+            );
+            NSString *manifestName = [header[@"name"] isKindOfClass:[NSString class]] ? header[@"name"] : nil;
+            metadata[@"displayName"] = manifestName.length > 0 ? manifestName : folderName;
+
+            if ([header[@"uuid"] isKindOfClass:[NSString class]]) {
+                metadata[@"packUUID"] = [header[@"uuid"] lowercaseString];
+            }
+            NSString *version = WMMVersionStringFromValue(header[@"version"]);
+            if (version.length > 0) {
+                metadata[@"packVersion"] = version;
+            }
+            NSString *minimumEngineVersion = WMMVersionStringFromValue(header[@"min_engine_version"]);
+            if (minimumEngineVersion.length > 0) {
+                metadata[@"minimumEngineVersion"] = minimumEngineVersion;
+            }
+        }
+
+        [results addObject:metadata];
+    }
+
+    WMMCloseVendSession(&functions, device, YES, afcConnection, backingServiceConnection);
+    functions.AMDeviceRelease(device);
+
+    return @{
+        @"bundleIdentifier": bundleIdentifier,
+        @"path": normalizedRootPath,
+        @"items": results
+    };
+}
+
 NSData * _Nullable
-WMMCopyFirstConnectedDeviceAppFileData(
+WMMCopyConnectedDeviceAppFileData(
+    NSString *deviceIdentifier,
     NSString *bundleIdentifier,
     NSString *relativePath,
     NSError **error
@@ -1586,7 +1940,7 @@ WMMCopyFirstConnectedDeviceAppFileData(
         return nil;
     }
 
-    AMDeviceRef device = WMMCopyFirstConnectedDevice(&functions, error);
+    AMDeviceRef device = WMMCopyConnectedDevice(&functions, deviceIdentifier, error);
     if (device == NULL) {
         return nil;
     }
@@ -1605,7 +1959,7 @@ WMMCopyFirstConnectedDeviceAppFileData(
         error
     );
     if (afcConnection == NULL) {
-        WMMDisconnectDevice(&functions, device, YES);
+        WMMCloseVendSession(&functions, device, YES, NULL, backingServiceConnection);
         functions.AMDeviceRelease(device);
         return nil;
     }
@@ -1613,18 +1967,15 @@ WMMCopyFirstConnectedDeviceAppFileData(
     NSString *normalizedPath = WMMNormalizedAFCPath(relativePath);
     NSData *data = WMMCopyAFCFileData(&functions, afcConnection, normalizedPath, error);
 
-    functions.AFCConnectionClose(afcConnection);
-    if (backingServiceConnection != NULL) {
-        functions.AMDServiceConnectionInvalidate(backingServiceConnection);
-    }
-    WMMDisconnectDevice(&functions, device, YES);
+    WMMCloseVendSession(&functions, device, YES, afcConnection, backingServiceConnection);
     functions.AMDeviceRelease(device);
 
     return data;
 }
 
 NSDictionary<NSString *, id> * _Nullable
-WMMCopyFirstConnectedDeviceAppPathMetrics(
+WMMCopyConnectedDeviceAppPathMetrics(
+    NSString *deviceIdentifier,
     NSString *bundleIdentifier,
     NSString *relativePath,
     NSError **error
@@ -1641,7 +1992,7 @@ WMMCopyFirstConnectedDeviceAppPathMetrics(
         return nil;
     }
 
-    AMDeviceRef device = WMMCopyFirstConnectedDevice(&functions, error);
+    AMDeviceRef device = WMMCopyConnectedDevice(&functions, deviceIdentifier, error);
     if (device == NULL) {
         return nil;
     }
@@ -1660,7 +2011,7 @@ WMMCopyFirstConnectedDeviceAppPathMetrics(
         error
     );
     if (afcConnection == NULL) {
-        WMMDisconnectDevice(&functions, device, YES);
+        WMMCloseVendSession(&functions, device, YES, NULL, backingServiceConnection);
         functions.AMDeviceRelease(device);
         return nil;
     }
@@ -1673,11 +2024,7 @@ WMMCopyFirstConnectedDeviceAppPathMetrics(
         error
     );
 
-    functions.AFCConnectionClose(afcConnection);
-    if (backingServiceConnection != NULL) {
-        functions.AMDServiceConnectionInvalidate(backingServiceConnection);
-    }
-    WMMDisconnectDevice(&functions, device, YES);
+    WMMCloseVendSession(&functions, device, YES, afcConnection, backingServiceConnection);
     functions.AMDeviceRelease(device);
 
     if (metrics == nil) {
@@ -1693,7 +2040,8 @@ WMMCopyFirstConnectedDeviceAppPathMetrics(
 }
 
 NSDictionary<NSString *, id> * _Nullable
-WMMCopyFirstConnectedDeviceApplicationDetails(
+WMMCopyConnectedDeviceApplicationDetails(
+    NSString *deviceIdentifier,
     NSString *bundleIdentifier,
     NSError **error
 ) {
@@ -1709,7 +2057,7 @@ WMMCopyFirstConnectedDeviceApplicationDetails(
         return nil;
     }
 
-    AMDeviceRef device = WMMCopyFirstConnectedDevice(&functions, error);
+    AMDeviceRef device = WMMCopyConnectedDevice(&functions, deviceIdentifier, error);
     if (device == NULL) {
         return nil;
     }
@@ -1722,10 +2070,7 @@ WMMCopyFirstConnectedDeviceApplicationDetails(
     NSString *deviceName = WMMDeviceStringValue(&functions, device, CFSTR("DeviceName")) ?: @"Unknown Device";
     NSString *productType = WMMDeviceStringValue(&functions, device, CFSTR("ProductType")) ?: @"";
     NSString *productVersion = WMMDeviceStringValue(&functions, device, CFSTR("ProductVersion")) ?: @"";
-    NSString *deviceIdentifier =
-        WMMDeviceStringValue(&functions, device, CFSTR("UniqueDeviceID")) ?:
-        WMMDeviceStringValue(&functions, device, CFSTR("SerialNumber")) ?:
-        @"";
+    NSString *resolvedDeviceIdentifier = WMMResolvedDeviceIdentifier(&functions, device);
 
     CFDictionaryRef appDictionary = NULL;
     const int lookupStatus = functions.AMDeviceLookupApplications(device, NULL, &appDictionary);
@@ -1774,7 +2119,7 @@ WMMCopyFirstConnectedDeviceApplicationDetails(
 
     return @{
         @"deviceName": deviceName,
-        @"deviceIdentifier": deviceIdentifier,
+        @"deviceIdentifier": resolvedDeviceIdentifier,
         @"productType": productType,
         @"productVersion": productVersion,
         @"bundleIdentifier": bundleIdentifier,
@@ -1783,7 +2128,8 @@ WMMCopyFirstConnectedDeviceApplicationDetails(
 }
 
 BOOL
-WMMCopyFirstConnectedDeviceAppSubtreeToLocalDirectory(
+WMMCopyConnectedDeviceAppSubtreeToLocalDirectory(
+    NSString *deviceIdentifier,
     NSString *bundleIdentifier,
     NSString *relativePath,
     NSURL *destinationDirectoryURL,
@@ -1808,7 +2154,7 @@ WMMCopyFirstConnectedDeviceAppSubtreeToLocalDirectory(
         return NO;
     }
 
-    AMDeviceRef device = WMMCopyFirstConnectedDevice(&functions, error);
+    AMDeviceRef device = WMMCopyConnectedDevice(&functions, deviceIdentifier, error);
     if (device == NULL) {
         return NO;
     }
@@ -1827,7 +2173,7 @@ WMMCopyFirstConnectedDeviceAppSubtreeToLocalDirectory(
         error
     );
     if (afcConnection == NULL) {
-        WMMDisconnectDevice(&functions, device, YES);
+        WMMCloseVendSession(&functions, device, YES, NULL, backingServiceConnection);
         functions.AMDeviceRelease(device);
         return NO;
     }
@@ -1848,11 +2194,7 @@ WMMCopyFirstConnectedDeviceAppSubtreeToLocalDirectory(
         error
     );
 
-    functions.AFCConnectionClose(afcConnection);
-    if (backingServiceConnection != NULL) {
-        functions.AMDServiceConnectionInvalidate(backingServiceConnection);
-    }
-    WMMDisconnectDevice(&functions, device, YES);
+    WMMCloseVendSession(&functions, device, YES, afcConnection, backingServiceConnection);
     functions.AMDeviceRelease(device);
 
     if (!success) {

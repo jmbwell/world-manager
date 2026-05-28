@@ -254,6 +254,124 @@ struct World_Manager_for_MinecraftTests {
         #expect(enrichedPack.packMetadataDetails?.minimumEngineVersion == "1.19.50")
     }
 
+    @Test func minecraftPackageInspectorReadsMcworldMetadata() async throws {
+        let fileManager = FileManager.default
+        let workingURL = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let sourceDirectoryURL = workingURL.appendingPathComponent("WorldSource", isDirectory: true)
+        let archiveURL = workingURL.appendingPathComponent("WorldA.mcworld", isDirectory: false)
+        defer { try? fileManager.removeItem(at: workingURL) }
+
+        try fileManager.createDirectory(at: sourceDirectoryURL, withIntermediateDirectories: true)
+        try "World A".write(
+            to: sourceDirectoryURL.appendingPathComponent("levelname.txt"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let lastPlayedMilliseconds: Int64 = 1_700_000_000_000
+        let levelDat = makeBedrockLevelDat(
+            root: .compound([
+                "GameType": .int(0),
+                "Difficulty": .int(2),
+                "LastPlayed": .long(lastPlayedMilliseconds)
+            ]),
+            storageVersion: 10
+        )
+        try levelDat.write(to: sourceDirectoryURL.appendingPathComponent("level.dat"))
+        try makeArchive(from: sourceDirectoryURL, to: archiveURL)
+
+        let inspection = try MinecraftPackageInspector.inspectArchive(at: archiveURL)
+        defer { MinecraftPackageInspector.cleanup(inspection) }
+
+        #expect(inspection.contentType == .world)
+        #expect(inspection.displayName == "World A")
+        #expect(inspection.worldMetadata?.gameMode == "Survival")
+        #expect(inspection.worldMetadata?.difficulty == "Normal")
+        #expect(inspection.worldMetadata?.lastPlayedDate == Date(timeIntervalSince1970: 1_700_000_000))
+    }
+
+    @Test func minecraftPackageInspectorInfersMcpackTypeAndManifest() async throws {
+        let fileManager = FileManager.default
+        let workingURL = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let sourceDirectoryURL = workingURL.appendingPathComponent("PackSource", isDirectory: true)
+        let archiveURL = workingURL.appendingPathComponent("PackA.mcpack", isDirectory: false)
+        defer { try? fileManager.removeItem(at: workingURL) }
+
+        try fileManager.createDirectory(at: sourceDirectoryURL, withIntermediateDirectories: true)
+        let manifest = """
+        {
+          "header": {
+            "name": "Resource Pack A",
+            "uuid": "b92836dc-f5a4-4f10-9d29-6a2d2ea3a2f7",
+            "version": [2, 1, 0],
+            "min_engine_version": [1, 21, 0]
+          },
+          "modules": [
+            {
+              "type": "resources",
+              "uuid": "818ac674-bf84-4955-a1db-5bf7acd63488",
+              "version": [2, 1, 0]
+            }
+          ]
+        }
+        """
+        try manifest.write(
+            to: sourceDirectoryURL.appendingPathComponent("manifest.json"),
+            atomically: true,
+            encoding: .utf8
+        )
+        try makeArchive(from: sourceDirectoryURL, to: archiveURL)
+
+        let inspection = try MinecraftPackageInspector.inspectArchive(at: archiveURL)
+        defer { MinecraftPackageInspector.cleanup(inspection) }
+
+        #expect(inspection.contentType == .resourcePack)
+        #expect(inspection.displayName == "Resource Pack A")
+        #expect(inspection.manifestMetadata?.uuid == "b92836dc-f5a4-4f10-9d29-6a2d2ea3a2f7")
+        #expect(inspection.manifestMetadata?.version == "2.1.0")
+        #expect(inspection.manifestMetadata?.minimumEngineVersion == "1.21.0")
+    }
+
+    @Test func minecraftPackageInspectorAcceptsSingleNestedTopLevelFolder() async throws {
+        let fileManager = FileManager.default
+        let workingURL = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let archiveRootURL = workingURL.appendingPathComponent("ArchiveRoot", isDirectory: true)
+        let nestedPackURL = archiveRootURL.appendingPathComponent("Nested Pack", isDirectory: true)
+        let archiveURL = workingURL.appendingPathComponent("Nested.mcpack", isDirectory: false)
+        defer { try? fileManager.removeItem(at: workingURL) }
+
+        try fileManager.createDirectory(at: nestedPackURL, withIntermediateDirectories: true)
+        let manifest = """
+        {
+          "header": {
+            "name": "Nested Behavior Pack",
+            "uuid": "2bcd9b1a-c558-4906-9521-7cccd2f9ca56",
+            "version": [1, 0, 1]
+          },
+          "modules": [
+            {
+              "type": "data",
+              "uuid": "4fbe707b-7cd1-4d10-80a5-b4fb45f79095",
+              "version": [1, 0, 1]
+            }
+          ]
+        }
+        """
+        try manifest.write(
+            to: nestedPackURL.appendingPathComponent("manifest.json"),
+            atomically: true,
+            encoding: .utf8
+        )
+        try makeArchive(from: archiveRootURL, to: archiveURL)
+
+        let inspection = try MinecraftPackageInspector.inspectArchive(at: archiveURL)
+        defer { MinecraftPackageInspector.cleanup(inspection) }
+
+        #expect(inspection.contentRootURL.lastPathComponent == "Nested Pack")
+        #expect(inspection.contentType == .behaviorPack)
+        #expect(inspection.displayName == "Nested Behavior Pack")
+    }
+
     @Test func sourcePersistenceStoreRoundTripsCachedSource() async throws {
         let fileManager = FileManager.default
         let workingURL = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -375,6 +493,20 @@ struct World_Manager_for_MinecraftTests {
         #expect(values["ConnectionType"] == "USB")
     }
 
+    @Test func scanNotificationServiceFormatsCompletionMessage() async throws {
+        #expect(ScanNotificationService.completionMessage(itemCount: 0) == "No worlds or packs were found.")
+        #expect(ScanNotificationService.completionMessage(itemCount: 1) == "Found 1 item.")
+        #expect(ScanNotificationService.completionMessage(itemCount: 42) == "Found 42 items.")
+    }
+
+    @Test func scanNotificationServiceOnlyNotifiesForLongBackgroundScans() async throws {
+        let service = ScanNotificationService()
+
+        #expect(service.shouldNotifyAboutCompletedScan(duration: 2, isAppActive: false) == false)
+        #expect(service.shouldNotifyAboutCompletedScan(duration: 8, isAppActive: true) == false)
+        #expect(service.shouldNotifyAboutCompletedScan(duration: 8, isAppActive: false) == true)
+    }
+
 }
 
 private enum TestNBTTagType: UInt8 {
@@ -468,6 +600,43 @@ private func appendString(_ string: String, to data: inout Data) {
     let utf8 = Data(string.utf8)
     appendLE(UInt16(utf8.count), to: &data)
     data.append(utf8)
+}
+
+private func makeArchive(from sourceDirectoryURL: URL, to archiveURL: URL) throws {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
+    process.currentDirectoryURL = sourceDirectoryURL
+    process.arguments = [
+        "-c",
+        "-k",
+        "--norsrc",
+        ".",
+        archiveURL.path
+    ]
+
+    let outputPipe = Pipe()
+    process.standardOutput = outputPipe
+    process.standardError = outputPipe
+
+    try process.run()
+    process.waitUntilExit()
+
+    guard process.terminationStatus == 0 else {
+        let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
+        let output = String(data: outputData, encoding: .utf8) ?? ""
+        throw ArchiveTestError.failedToCreateArchive(output)
+    }
+}
+
+private enum ArchiveTestError: LocalizedError {
+    case failedToCreateArchive(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .failedToCreateArchive(let output):
+            return output.isEmpty ? "Failed to create test archive." : output
+        }
+    }
 }
 
 private func appendLE<T: FixedWidthInteger>(_ value: T, to data: inout Data) {

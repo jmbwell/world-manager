@@ -6,6 +6,14 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		52C72BCA2FC7314E009928CB /* QuickLookThumbnailing.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 52C72BC92FC7314D009928CB /* QuickLookThumbnailing.framework */; };
+		52C72BCB2FC7314E009928CB /* Quartz.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 52C72BB12FC72940009928CB /* Quartz.framework */; };
+		52C72BD22FC7314E009928CB /* MinecraftPackageThumbnailExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 52C72BC82FC7314D009928CB /* MinecraftPackageThumbnailExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		52C72BDC2FC73171009928CB /* Quartz.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 52C72BB12FC72940009928CB /* Quartz.framework */; };
+		52C72BE82FC73171009928CB /* MinecraftPackagePreviewExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 52C72BDB2FC73171009928CB /* MinecraftPackagePreviewExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
 		5218F9162FC4C9F100CAF7B7 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -21,17 +29,96 @@
 			remoteGlobalIDString = 5218F9052FC4C9EF00CAF7B7;
 			remoteInfo = "World Manager for Minecraft";
 		};
+		52C72BD02FC7314E009928CB /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 5218F8FE2FC4C9EF00CAF7B7 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 52C72BC72FC7314D009928CB;
+			remoteInfo = MinecraftPackageThumbnailExtension;
+		};
+		52C72BE62FC73171009928CB /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 5218F8FE2FC4C9EF00CAF7B7 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 52C72BDA2FC73171009928CB;
+			remoteInfo = MinecraftPackagePreviewExtension;
+		};
 /* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		52C72BC32FC72940009928CB /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				52C72BE82FC73171009928CB /* MinecraftPackagePreviewExtension.appex in Embed Foundation Extensions */,
+				52C72BD22FC7314E009928CB /* MinecraftPackageThumbnailExtension.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
 		5218F9062FC4C9EF00CAF7B7 /* World Manager for Minecraft.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "World Manager for Minecraft.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		5218F9152FC4C9F100CAF7B7 /* World Manager for MinecraftTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "World Manager for MinecraftTests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 		5218F91F2FC4C9F100CAF7B7 /* World Manager for MinecraftUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "World Manager for MinecraftUITests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
+		52C72BB12FC72940009928CB /* Quartz.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Quartz.framework; path = System/Library/Frameworks/Quartz.framework; sourceTree = SDKROOT; };
+		52C72BC82FC7314D009928CB /* MinecraftPackageThumbnailExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = MinecraftPackageThumbnailExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		52C72BC92FC7314D009928CB /* QuickLookThumbnailing.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = QuickLookThumbnailing.framework; path = System/Library/Frameworks/QuickLookThumbnailing.framework; sourceTree = SDKROOT; };
+		52C72BDB2FC73171009928CB /* MinecraftPackagePreviewExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = MinecraftPackagePreviewExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		52C72BD32FC7314E009928CB /* Exceptions for "MinecraftPackageThumbnailExtension" folder in "MinecraftPackageThumbnailExtension" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = 52C72BC72FC7314D009928CB /* MinecraftPackageThumbnailExtension */;
+		};
+		52C72BE92FC73171009928CB /* Exceptions for "MinecraftPackagePreviewExtension" folder in "MinecraftPackagePreviewExtension" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = 52C72BDA2FC73171009928CB /* MinecraftPackagePreviewExtension */;
+		};
+		52C72BEF2FC736C3009928CB /* Exceptions for "World Manager for Minecraft" folder in "MinecraftPackageThumbnailExtension" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Models/MinecraftContentItem.swift,
+				QuickLook/MinecraftPackageTypes.swift,
+				Services/BedrockLevelMetadataDecoder.swift,
+				Services/MinecraftContentMetadataReader.swift,
+				Services/MinecraftPackageInspector.swift,
+				Services/ZipArchiveReader.swift,
+			);
+			target = 52C72BC72FC7314D009928CB /* MinecraftPackageThumbnailExtension */;
+		};
+		52C72BF02FC736C3009928CB /* Exceptions for "World Manager for Minecraft" folder in "MinecraftPackagePreviewExtension" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Models/MinecraftContentItem.swift,
+				QuickLook/MinecraftPackageQuickLookModel.swift,
+				QuickLook/MinecraftPackageTypes.swift,
+				Services/BedrockLevelMetadataDecoder.swift,
+				Services/MinecraftContentMetadataReader.swift,
+				Services/MinecraftPackageInspector.swift,
+				Services/ZipArchiveReader.swift,
+			);
+			target = 52C72BDA2FC73171009928CB /* MinecraftPackagePreviewExtension */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		5218F9082FC4C9EF00CAF7B7 /* World Manager for Minecraft */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				52C72BEF2FC736C3009928CB /* Exceptions for "World Manager for Minecraft" folder in "MinecraftPackageThumbnailExtension" target */,
+				52C72BF02FC736C3009928CB /* Exceptions for "World Manager for Minecraft" folder in "MinecraftPackagePreviewExtension" target */,
+			);
 			path = "World Manager for Minecraft";
 			sourceTree = "<group>";
 		};
@@ -43,6 +130,22 @@
 		5218F9222FC4C9F100CAF7B7 /* World Manager for MinecraftUITests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = "World Manager for MinecraftUITests";
+			sourceTree = "<group>";
+		};
+		52C72BCC2FC7314E009928CB /* MinecraftPackageThumbnailExtension */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				52C72BD32FC7314E009928CB /* Exceptions for "MinecraftPackageThumbnailExtension" folder in "MinecraftPackageThumbnailExtension" target */,
+			);
+			path = MinecraftPackageThumbnailExtension;
+			sourceTree = "<group>";
+		};
+		52C72BDD2FC73171009928CB /* MinecraftPackagePreviewExtension */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				52C72BE92FC73171009928CB /* Exceptions for "MinecraftPackagePreviewExtension" folder in "MinecraftPackagePreviewExtension" target */,
+			);
+			path = MinecraftPackagePreviewExtension;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -69,6 +172,23 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		52C72BC52FC7314D009928CB /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				52C72BCA2FC7314E009928CB /* QuickLookThumbnailing.framework in Frameworks */,
+				52C72BCB2FC7314E009928CB /* Quartz.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		52C72BD82FC73171009928CB /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				52C72BDC2FC73171009928CB /* Quartz.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -78,6 +198,9 @@
 				5218F9082FC4C9EF00CAF7B7 /* World Manager for Minecraft */,
 				5218F9182FC4C9F100CAF7B7 /* World Manager for MinecraftTests */,
 				5218F9222FC4C9F100CAF7B7 /* World Manager for MinecraftUITests */,
+				52C72BCC2FC7314E009928CB /* MinecraftPackageThumbnailExtension */,
+				52C72BDD2FC73171009928CB /* MinecraftPackagePreviewExtension */,
+				52C72BB02FC72940009928CB /* Frameworks */,
 				5218F9072FC4C9EF00CAF7B7 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -88,8 +211,19 @@
 				5218F9062FC4C9EF00CAF7B7 /* World Manager for Minecraft.app */,
 				5218F9152FC4C9F100CAF7B7 /* World Manager for MinecraftTests.xctest */,
 				5218F91F2FC4C9F100CAF7B7 /* World Manager for MinecraftUITests.xctest */,
+				52C72BC82FC7314D009928CB /* MinecraftPackageThumbnailExtension.appex */,
+				52C72BDB2FC73171009928CB /* MinecraftPackagePreviewExtension.appex */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		52C72BB02FC72940009928CB /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				52C72BB12FC72940009928CB /* Quartz.framework */,
+				52C72BC92FC7314D009928CB /* QuickLookThumbnailing.framework */,
+			);
+			name = Frameworks;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -102,10 +236,13 @@
 				5218F9022FC4C9EF00CAF7B7 /* Sources */,
 				5218F9032FC4C9EF00CAF7B7 /* Frameworks */,
 				5218F9042FC4C9EF00CAF7B7 /* Resources */,
+				52C72BC32FC72940009928CB /* Embed Foundation Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				52C72BD12FC7314E009928CB /* PBXTargetDependency */,
+				52C72BE72FC73171009928CB /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				5218F9082FC4C9EF00CAF7B7 /* World Manager for Minecraft */,
@@ -163,6 +300,50 @@
 			productReference = 5218F91F2FC4C9F100CAF7B7 /* World Manager for MinecraftUITests.xctest */;
 			productType = "com.apple.product-type.bundle.ui-testing";
 		};
+		52C72BC72FC7314D009928CB /* MinecraftPackageThumbnailExtension */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 52C72BD42FC7314E009928CB /* Build configuration list for PBXNativeTarget "MinecraftPackageThumbnailExtension" */;
+			buildPhases = (
+				52C72BC42FC7314D009928CB /* Sources */,
+				52C72BC52FC7314D009928CB /* Frameworks */,
+				52C72BC62FC7314D009928CB /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				52C72BCC2FC7314E009928CB /* MinecraftPackageThumbnailExtension */,
+			);
+			name = MinecraftPackageThumbnailExtension;
+			packageProductDependencies = (
+			);
+			productName = MinecraftPackageThumbnailExtension;
+			productReference = 52C72BC82FC7314D009928CB /* MinecraftPackageThumbnailExtension.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
+		52C72BDA2FC73171009928CB /* MinecraftPackagePreviewExtension */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 52C72BEA2FC73171009928CB /* Build configuration list for PBXNativeTarget "MinecraftPackagePreviewExtension" */;
+			buildPhases = (
+				52C72BD72FC73171009928CB /* Sources */,
+				52C72BD82FC73171009928CB /* Frameworks */,
+				52C72BD92FC73171009928CB /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				52C72BDD2FC73171009928CB /* MinecraftPackagePreviewExtension */,
+			);
+			name = MinecraftPackagePreviewExtension;
+			packageProductDependencies = (
+			);
+			productName = MinecraftPackagePreviewExtension;
+			productReference = 52C72BDB2FC73171009928CB /* MinecraftPackagePreviewExtension.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -184,6 +365,12 @@
 						CreatedOnToolsVersion = 26.2;
 						TestTargetID = 5218F9052FC4C9EF00CAF7B7;
 					};
+					52C72BC72FC7314D009928CB = {
+						CreatedOnToolsVersion = 26.2;
+					};
+					52C72BDA2FC73171009928CB = {
+						CreatedOnToolsVersion = 26.2;
+					};
 				};
 			};
 			buildConfigurationList = 5218F9012FC4C9EF00CAF7B7 /* Build configuration list for PBXProject "World Manager for Minecraft" */;
@@ -203,6 +390,8 @@
 				5218F9052FC4C9EF00CAF7B7 /* World Manager for Minecraft */,
 				5218F9142FC4C9F100CAF7B7 /* World Manager for MinecraftTests */,
 				5218F91E2FC4C9F100CAF7B7 /* World Manager for MinecraftUITests */,
+				52C72BC72FC7314D009928CB /* MinecraftPackageThumbnailExtension */,
+				52C72BDA2FC73171009928CB /* MinecraftPackagePreviewExtension */,
 			);
 		};
 /* End PBXProject section */
@@ -223,6 +412,20 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		5218F91D2FC4C9F100CAF7B7 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		52C72BC62FC7314D009928CB /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		52C72BD92FC73171009928CB /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -253,6 +456,20 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		52C72BC42FC7314D009928CB /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		52C72BD72FC73171009928CB /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -265,6 +482,16 @@
 			isa = PBXTargetDependency;
 			target = 5218F9052FC4C9EF00CAF7B7 /* World Manager for Minecraft */;
 			targetProxy = 5218F9202FC4C9F100CAF7B7 /* PBXContainerItemProxy */;
+		};
+		52C72BD12FC7314E009928CB /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 52C72BC72FC7314D009928CB /* MinecraftPackageThumbnailExtension */;
+			targetProxy = 52C72BD02FC7314E009928CB /* PBXContainerItemProxy */;
+		};
+		52C72BE72FC73171009928CB /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 52C72BDA2FC73171009928CB /* MinecraftPackagePreviewExtension */;
+			targetProxy = 52C72BE62FC73171009928CB /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -399,6 +626,7 @@
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readwrite;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "World-Manager-for-Minecraft-Info.plist";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.games";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -431,6 +659,7 @@
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readwrite;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "World-Manager-for-Minecraft-Info.plist";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.games";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -527,6 +756,122 @@
 			};
 			name = Release;
 		};
+		52C72BD52FC7314E009928CB /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_ASSET_PATHS = "";
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_USER_SELECTED_FILES = readonly;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = MinecraftPackageThumbnailExtension/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = MinecraftPackageThumbnailExtension;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@executable_path/../../../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "us.b-wells.World-Manager-for-Minecraft.MinecraftPackageThumbnailExtension";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		52C72BD62FC7314E009928CB /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_ASSET_PATHS = "";
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_USER_SELECTED_FILES = readonly;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = MinecraftPackageThumbnailExtension/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = MinecraftPackageThumbnailExtension;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@executable_path/../../../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "us.b-wells.World-Manager-for-Minecraft.MinecraftPackageThumbnailExtension";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		52C72BEB2FC73171009928CB /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_ASSET_PATHS = "";
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_USER_SELECTED_FILES = readonly;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = MinecraftPackagePreviewExtension/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = MinecraftPackagePreviewExtension;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@executable_path/../../../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "us.b-wells.World-Manager-for-Minecraft.MinecraftPackagePreviewExtension";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		52C72BEC2FC73171009928CB /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_ASSET_PATHS = "";
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_USER_SELECTED_FILES = readonly;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = MinecraftPackagePreviewExtension/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = MinecraftPackagePreviewExtension;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@executable_path/../../../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "us.b-wells.World-Manager-for-Minecraft.MinecraftPackagePreviewExtension";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -562,6 +907,24 @@
 			buildConfigurations = (
 				5218F9302FC4C9F100CAF7B7 /* Debug */,
 				5218F9312FC4C9F100CAF7B7 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		52C72BD42FC7314E009928CB /* Build configuration list for PBXNativeTarget "MinecraftPackageThumbnailExtension" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				52C72BD52FC7314E009928CB /* Debug */,
+				52C72BD62FC7314E009928CB /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		52C72BEA2FC73171009928CB /* Build configuration list for PBXNativeTarget "MinecraftPackagePreviewExtension" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				52C72BEB2FC73171009928CB /* Debug */,
+				52C72BEC2FC73171009928CB /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

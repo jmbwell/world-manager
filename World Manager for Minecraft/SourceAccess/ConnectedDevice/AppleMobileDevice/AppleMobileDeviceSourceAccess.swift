@@ -47,21 +47,29 @@ struct AppleMobileDeviceSourceAccess: ConnectedDeviceSourceAccessMethod {
     }
 
     nonisolated func listConnectedDevices() async throws -> [ConnectedDevice] {
-        let device = try await AppleMobileDeviceAccess.firstConnectedDevice()
-        return [
-            ConnectedDevice(
+        let devices = try await AppleMobileDeviceAccess.connectedDevices()
+        return devices.compactMap { device in
+            let connection: DeviceConnection
+            switch device.connectionType.lowercased() {
+            case "network", "wifi", "wi-fi":
+                connection = .network
+            default:
+                connection = .usb
+            }
+
+            return ConnectedDevice(
                 udid: device.deviceIdentifier,
                 name: device.deviceName,
                 productType: device.productType.isEmpty ? nil : device.productType,
                 osVersion: device.productVersion.isEmpty ? nil : device.productVersion,
-                connection: .usb,
+                connection: connection,
                 trustState: device.trustState
             )
-        ]
+        }
     }
 
     nonisolated func listAccessibleContainers(for device: ConnectedDevice) async throws -> [DeviceAppContainer] {
-        let applications = try await AppleMobileDeviceAccess.listApplications()
+        let applications = try await AppleMobileDeviceAccess.listApplications(deviceIdentifier: device.udid)
 
         return applications
             .filter { application in
@@ -109,12 +117,23 @@ struct AppleMobileDeviceSourceAccess: ConnectedDeviceSourceAccessMethod {
         }
 
         let summaries = try await AppleMobileDeviceAccess.minecraftLibrarySnapshot(
+            deviceIdentifier: container.deviceUDID,
             bundleIdentifier: container.appID,
             relativePath: requestedSubpath
         )
 
+        let metadataByPath = try await metadataByRelativePath(
+            for: summaries,
+            container: container,
+            requestedSubpath: requestedSubpath
+        )
+
         let items = summaries.compactMap { summary in
-            makeItem(from: summary, source: source)
+            makeItem(
+                from: summary,
+                metadata: metadataByPath[summary.relativePath],
+                source: source
+            )
         }
 
         for item in items {
@@ -126,33 +145,37 @@ struct AppleMobileDeviceSourceAccess: ConnectedDeviceSourceAccessMethod {
 
     nonisolated func enrich(_ item: MinecraftContentItem, for source: MinecraftSource) async -> MinecraftContentItem {
         var enrichedItem = item
-        guard case .connectedDevice(_, let container) = source.origin else {
+        guard case .connectedDevice = source.origin else {
             enrichedItem.metadataLoaded = true
+            enrichedItem.previewLoaded = true
             return enrichedItem
         }
 
-        enrichedItem.iconURL = await loadRemoteIcon(for: item, source: source, container: container)
         enrichedItem.modifiedDate = nil
-
-        if item.contentType == .world {
-            if let levelDatPath = remoteItemPath(for: item, in: source, appending: "level.dat"),
-               let levelDatData = try? await AppleMobileDeviceAccess.fileData(
-                    bundleIdentifier: container.appID,
-                    relativePath: levelDatPath
-               ) {
-                enrichedItem.worldMetadata = BedrockLevelMetadataDecoder.decode(fromLevelDatData: levelDatData)
-                enrichedItem.lastPlayedDate = enrichedItem.worldMetadata?.lastPlayedDate
-            }
-
-            enrichedItem.packReferences = await loadWorldPackReferences(for: item, source: source, container: container)
-        } else {
-            enrichedItem.lastPlayedDate = nil
-            enrichedItem.packReferences = []
-        }
-
+        enrichedItem.lastPlayedDate = enrichedItem.worldMetadata?.lastPlayedDate
         enrichedItem.metadataLoaded = true
+        enrichedItem.previewLoaded = !enrichedItem.hasKnownIcon
         enrichedItem.sizeLoaded = false
         return enrichedItem
+    }
+
+    nonisolated func loadPreviewAssets(for item: MinecraftContentItem, in source: MinecraftSource) async -> MinecraftContentItem {
+        var previewItem = item
+        guard case .connectedDevice(_, let container) = source.origin else {
+            previewItem.previewLoaded = true
+            return previewItem
+        }
+
+        if previewItem.hasKnownIcon {
+            previewItem.iconURL = await loadRemoteIcon(
+                for: previewItem,
+                source: source,
+                container: container
+            )
+        }
+
+        previewItem.previewLoaded = true
+        return previewItem
     }
 
     nonisolated func loadSize(for item: MinecraftContentItem, in source: MinecraftSource) async -> MinecraftContentItem {
@@ -164,6 +187,7 @@ struct AppleMobileDeviceSourceAccess: ConnectedDeviceSourceAccessMethod {
 
         if let remoteItemPath = remoteItemPath(for: item, in: source),
            let metrics = try? await AppleMobileDeviceAccess.pathMetrics(
+                deviceIdentifier: container.deviceUDID,
                 bundleIdentifier: container.appID,
                 relativePath: remoteItemPath
            ) {
@@ -187,6 +211,7 @@ struct AppleMobileDeviceSourceAccess: ConnectedDeviceSourceAccessMethod {
         }
 
         let entries = try await AppleMobileDeviceAccess.listDirectory(
+            deviceIdentifier: container.deviceUDID,
             bundleIdentifier: container.appID,
             relativePath: remoteFolderPath
         )
@@ -221,6 +246,7 @@ struct AppleMobileDeviceSourceAccess: ConnectedDeviceSourceAccessMethod {
         try FileManager.default.createDirectory(at: destinationURL, withIntermediateDirectories: true)
         do {
             try await AppleMobileDeviceAccess.mirrorSubtree(
+                deviceIdentifier: container.deviceUDID,
                 bundleIdentifier: container.appID,
                 relativePath: remoteItemPath,
                 destinationDirectoryURL: destinationURL
@@ -242,6 +268,7 @@ struct AppleMobileDeviceSourceAccess: ConnectedDeviceSourceAccessMethod {
 
     nonisolated private func makeItem(
         from summary: AppleMobileMinecraftLibraryItemSummary,
+        metadata: AppleMobileMinecraftItemMetadataSummary?,
         source: MinecraftSource
     ) -> MinecraftContentItem? {
         let contentType: MinecraftContentType
@@ -262,19 +289,90 @@ struct AppleMobileDeviceSourceAccess: ConnectedDeviceSourceAccessMethod {
 
         let collectionRootURL = source.folderURL.appendingPathComponent(summary.collectionFolderName, isDirectory: true)
         let folderURL = source.folderURL.appendingPathComponent(summary.relativePath, isDirectory: true)
+        let displayName = metadata?.displayName ?? summary.displayName
+        let packMetadataDetails: PackMetadataDetails?
+        if let minimumEngineVersion = metadata?.minimumEngineVersion {
+            packMetadataDetails = PackMetadataDetails(minimumEngineVersion: minimumEngineVersion)
+        } else {
+            packMetadataDetails = nil
+        }
+
         return MinecraftContentItem(
             folderURL: folderURL,
             folderName: summary.folderName,
             contentType: contentType,
             collectionRootURL: collectionRootURL,
-            displayName: summary.displayName,
+            displayName: displayName,
             iconURL: nil,
-            packUUID: summary.packUUID,
-            packVersion: summary.packVersion,
-            packMetadataDetails: PackMetadataDetails(minimumEngineVersion: summary.minimumEngineVersion),
+            hasKnownIcon: summary.hasIcon,
+            packUUID: metadata?.packUUID,
+            packVersion: metadata?.packVersion,
+            packMetadataDetails: packMetadataDetails,
+            packReferences: packReferences(from: metadata?.packReferences ?? []),
             metadataLoaded: false,
+            previewLoaded: !summary.hasIcon,
             sizeLoaded: false
         )
+    }
+
+    nonisolated private func metadataByRelativePath(
+        for summaries: [AppleMobileMinecraftLibraryItemSummary],
+        container: DeviceAppContainer,
+        requestedSubpath: String
+    ) async throws -> [String: AppleMobileMinecraftItemMetadataSummary] {
+        guard !summaries.isEmpty else {
+            return [:]
+        }
+
+        let metadata = try await AppleMobileDeviceAccess.minecraftMetadataBatch(
+            deviceIdentifier: container.deviceUDID,
+            bundleIdentifier: container.appID,
+            relativePath: requestedSubpath,
+            items: summaries
+        )
+
+        return Dictionary(uniqueKeysWithValues: metadata.map { ($0.relativePath, $0) })
+    }
+
+    nonisolated private func packReferences(
+        from summaries: [AppleMobilePackReferenceSummary]
+    ) -> [ContentPackReference] {
+        let references = summaries.compactMap { summary -> ContentPackReference? in
+            let contentType: MinecraftContentType
+            switch summary.contentType {
+            case MinecraftContentType.behaviorPack.rawValue:
+                contentType = .behaviorPack
+            case MinecraftContentType.resourcePack.rawValue:
+                contentType = .resourcePack
+            case MinecraftContentType.skinPack.rawValue:
+                contentType = .skinPack
+            case MinecraftContentType.worldTemplate.rawValue:
+                contentType = .worldTemplate
+            default:
+                return nil
+            }
+
+            let source: PackSource
+            switch summary.source {
+            case PackSource.embeddedInWorld.rawValue:
+                source = .embeddedInWorld
+            case PackSource.foundInCollection.rawValue:
+                source = .foundInCollection
+            default:
+                source = .referencedByWorld
+            }
+
+            return ContentPackReference(
+                name: summary.name,
+                type: contentType,
+                iconURL: nil,
+                uuid: summary.uuid,
+                version: summary.version,
+                source: source
+            )
+        }
+
+        return uniquePackReferences(references)
     }
 
     nonisolated private func remoteItemPath(
@@ -326,6 +424,7 @@ struct AppleMobileDeviceSourceAccess: ConnectedDeviceSourceAccessMethod {
                 continue
             }
             guard let data = try? await AppleMobileDeviceAccess.fileData(
+                deviceIdentifier: container.deviceUDID,
                 bundleIdentifier: container.appID,
                 relativePath: remotePath
             ) else {
@@ -358,6 +457,7 @@ struct AppleMobileDeviceSourceAccess: ConnectedDeviceSourceAccessMethod {
 
         if let behaviorRefPath = remoteItemPath(for: item, in: source, appending: "world_behavior_packs.json"),
            let behaviorData = try? await AppleMobileDeviceAccess.fileData(
+                deviceIdentifier: container.deviceUDID,
                 bundleIdentifier: container.appID,
                 relativePath: behaviorRefPath
            ) {
@@ -366,6 +466,7 @@ struct AppleMobileDeviceSourceAccess: ConnectedDeviceSourceAccessMethod {
 
         if let resourceRefPath = remoteItemPath(for: item, in: source, appending: "world_resource_packs.json"),
            let resourceData = try? await AppleMobileDeviceAccess.fileData(
+                deviceIdentifier: container.deviceUDID,
                 bundleIdentifier: container.appID,
                 relativePath: resourceRefPath
            ) {
@@ -402,6 +503,7 @@ struct AppleMobileDeviceSourceAccess: ConnectedDeviceSourceAccessMethod {
         }
 
         guard let childFolders = try? await AppleMobileDeviceAccess.listDirectory(
+            deviceIdentifier: container.deviceUDID,
             bundleIdentifier: container.appID,
             relativePath: remoteFolderPath
         ) else {
@@ -413,6 +515,7 @@ struct AppleMobileDeviceSourceAccess: ConnectedDeviceSourceAccessMethod {
             let childFolderPath = NSString(string: remoteFolderPath).appendingPathComponent(childFolder)
             let manifestPath = NSString(string: childFolderPath).appendingPathComponent("manifest.json")
             guard let manifestData = try? await AppleMobileDeviceAccess.fileData(
+                deviceIdentifier: container.deviceUDID,
                 bundleIdentifier: container.appID,
                 relativePath: manifestPath
             ) else {

@@ -16,6 +16,7 @@ protocol SourceAccessMethod: Sendable {
         onDiscovered: @escaping @Sendable (MinecraftContentItem) -> Void
     ) async throws -> [MinecraftContentItem]
     nonisolated func enrich(_ item: MinecraftContentItem, for source: MinecraftSource) async -> MinecraftContentItem
+    nonisolated func loadPreviewAssets(for item: MinecraftContentItem, in source: MinecraftSource) async -> MinecraftContentItem
     nonisolated func loadSize(for item: MinecraftContentItem, in source: MinecraftSource) async -> MinecraftContentItem
     nonisolated func listItemContents(for item: MinecraftContentItem, in source: MinecraftSource) async throws -> [DirectoryPreviewEntry]
     nonisolated func materializeItem(for item: MinecraftContentItem, in source: MinecraftSource) async throws -> URL
@@ -51,6 +52,11 @@ extension SourceAccessMethod {
     }
 
     nonisolated func enrich(_ item: MinecraftContentItem, for source: MinecraftSource) async -> MinecraftContentItem {
+        _ = source
+        return item
+    }
+
+    nonisolated func loadPreviewAssets(for item: MinecraftContentItem, in source: MinecraftSource) async -> MinecraftContentItem {
         _ = source
         return item
     }
@@ -132,6 +138,10 @@ struct SourceAccessCoordinator: SourceAccessMethod {
 
     nonisolated func enrich(_ item: MinecraftContentItem, for source: MinecraftSource) async -> MinecraftContentItem {
         return await accessMethod(for: source).enrich(item, for: source)
+    }
+
+    nonisolated func loadPreviewAssets(for item: MinecraftContentItem, in source: MinecraftSource) async -> MinecraftContentItem {
+        return await accessMethod(for: source).loadPreviewAssets(for: item, in: source)
     }
 
     nonisolated func loadSize(for item: MinecraftContentItem, in source: MinecraftSource) async -> MinecraftContentItem {

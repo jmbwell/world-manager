@@ -25,6 +25,8 @@ struct MinecraftSource: Identifiable, Hashable, Sendable {
     var isScanning: Bool
     var scanStatus: String
     var scanError: String?
+    var scanDiagnostic: String?
+    var scanProgress: Double?
     var indexedItemCount: Int
     var indexedDetailCount: Int
     var lastScanDate: Date?
@@ -61,6 +63,8 @@ struct MinecraftSource: Identifiable, Hashable, Sendable {
         self.isScanning = false
         self.scanStatus = ""
         self.scanError = nil
+        self.scanDiagnostic = nil
+        self.scanProgress = nil
         self.indexedItemCount = 0
         self.indexedDetailCount = 0
         self.lastScanDate = nil

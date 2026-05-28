@@ -191,17 +191,27 @@ struct ConnectedDeviceSourcePickerView: View {
         isLoadingDevices = true
         availabilityMessage = nil
         errorMessage = nil
+        let previousSelectedDeviceID = selectedDeviceID
 
         do {
             let devices = try await deviceDiscoveryService.listConnectedDevices()
+            let resolvedSelectedDeviceID = devices.contains(where: { $0.id == previousSelectedDeviceID })
+                ? previousSelectedDeviceID
+                : devices.first?.id
+            let shouldReloadContainers = resolvedSelectedDeviceID != nil && resolvedSelectedDeviceID == previousSelectedDeviceID
+
             await MainActor.run {
                 self.devices = devices
-                self.selectedDeviceID = devices.first?.id
+                self.selectedDeviceID = resolvedSelectedDeviceID
                 if devices.isEmpty {
                     self.containers = []
                     self.selectedContainerID = nil
                 }
                 self.isLoadingDevices = false
+            }
+
+            if shouldReloadContainers {
+                await loadContainersForSelectedDevice()
             }
         } catch {
             await MainActor.run {

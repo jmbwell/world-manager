@@ -125,6 +125,7 @@ struct MinecraftContentItem: Identifiable, Hashable, Sendable, Codable {
     let collectionRootURL: URL
     var displayName: String
     var iconURL: URL?
+    var hasKnownIcon: Bool
     var lastPlayedDate: Date?
     var modifiedDate: Date?
     var sizeBytes: Int64?
@@ -134,6 +135,7 @@ struct MinecraftContentItem: Identifiable, Hashable, Sendable, Codable {
     var packReferences: [ContentPackReference]
     var worldMetadata: WorldMetadata?
     var metadataLoaded: Bool
+    var previewLoaded: Bool
     var sizeLoaded: Bool
 
     nonisolated init(
@@ -143,6 +145,7 @@ struct MinecraftContentItem: Identifiable, Hashable, Sendable, Codable {
         collectionRootURL: URL,
         displayName: String? = nil,
         iconURL: URL? = nil,
+        hasKnownIcon: Bool = false,
         lastPlayedDate: Date? = nil,
         modifiedDate: Date? = nil,
         sizeBytes: Int64? = nil,
@@ -152,6 +155,7 @@ struct MinecraftContentItem: Identifiable, Hashable, Sendable, Codable {
         packReferences: [ContentPackReference] = [],
         worldMetadata: WorldMetadata? = nil,
         metadataLoaded: Bool = false,
+        previewLoaded: Bool = false,
         sizeLoaded: Bool = false
     ) {
         self.id = folderURL.standardizedFileURL
@@ -161,6 +165,7 @@ struct MinecraftContentItem: Identifiable, Hashable, Sendable, Codable {
         self.collectionRootURL = collectionRootURL
         self.displayName = displayName ?? folderName
         self.iconURL = iconURL
+        self.hasKnownIcon = hasKnownIcon
         self.lastPlayedDate = lastPlayedDate
         self.modifiedDate = modifiedDate
         self.sizeBytes = sizeBytes
@@ -170,6 +175,7 @@ struct MinecraftContentItem: Identifiable, Hashable, Sendable, Codable {
         self.packReferences = packReferences
         self.worldMetadata = worldMetadata
         self.metadataLoaded = metadataLoaded
+        self.previewLoaded = previewLoaded
         self.sizeLoaded = sizeLoaded
     }
 

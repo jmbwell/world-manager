@@ -5,10 +5,19 @@
 //  Created by John Burwell on 2026-05-25.
 //
 
+import AppKit
 import SwiftUI
 
 @main
 struct World_Manager_for_MinecraftApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+
+    init() {
+        Task {
+            await ScanNotificationService.shared.requestAuthorizationIfNeeded()
+        }
+    }
+
     var body: some Scene {
         WindowGroup {
             ContentView()
@@ -18,6 +27,41 @@ struct World_Manager_for_MinecraftApp: App {
         .defaultSize(width: 1520, height: 980)
         .windowStyle(.hiddenTitleBar)
         .windowToolbarStyle(.unified(showsTitle: false))
+    }
+}
+
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        AppTerminationCoordinator.shared.beginTermination(for: sender)
+    }
+}
+
+@MainActor
+final class AppTerminationCoordinator {
+    static let shared = AppTerminationCoordinator()
+
+    private weak var library: SourceLibrary?
+    private var isTerminationInProgress = false
+
+    func register(library: SourceLibrary) {
+        self.library = library
+    }
+
+    func beginTermination(for application: NSApplication) -> NSApplication.TerminateReply {
+        guard !isTerminationInProgress else {
+            return .terminateLater
+        }
+
+        isTerminationInProgress = true
+
+        Task { @MainActor [weak self] in
+            if let library = self?.library {
+                await library.shutdownGracefully(timeout: 2.0)
+            }
+            application.reply(toApplicationShouldTerminate: true)
+        }
+
+        return .terminateLater
     }
 }
 

@@ -176,6 +176,7 @@ enum ContentPackageExporter {
             }
 
         try await AppleMobileDeviceAccess.mirrorSubtree(
+            deviceIdentifier: container.deviceUDID,
             bundleIdentifier: container.appID,
             relativePath: remoteItemPath,
             destinationDirectoryURL: destinationURL

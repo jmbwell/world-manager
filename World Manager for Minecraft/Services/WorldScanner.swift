@@ -90,13 +90,24 @@ enum WorldScanner {
         let fileManager = FileManager.default
         var enrichedItem = item
 
-        enrichedItem.displayName = displayName(for: item, fileManager: fileManager)
-        let sourceIconURL = iconURL(for: item, fileManager: fileManager)
+        enrichedItem.displayName = MinecraftContentMetadataReader.displayName(
+            for: item.folderURL,
+            contentType: item.contentType,
+            fallbackName: item.folderName,
+            fileManager: fileManager
+        )
+        let sourceIconURL = MinecraftContentMetadataReader.iconURL(
+            for: item.folderURL,
+            contentType: item.contentType,
+            fileManager: fileManager
+        )
         enrichedItem.iconURL = await ImageCacheStore.shared.cachedImageURL(for: sourceIconURL)
-        enrichedItem.worldMetadata = worldMetadata(for: item, fileManager: fileManager)
+        enrichedItem.worldMetadata = item.contentType == .world
+            ? MinecraftContentMetadataReader.worldMetadata(in: item.folderURL, fileManager: fileManager)
+            : nil
         enrichedItem.lastPlayedDate = lastPlayedDate(for: item, fileManager: fileManager, worldMetadata: enrichedItem.worldMetadata)
         enrichedItem.modifiedDate = modifiedDate(for: item.folderURL)
-        if let manifestMetadata = manifestMetadata(in: item.folderURL, fileManager: fileManager) {
+        if let manifestMetadata = MinecraftContentMetadataReader.manifestMetadata(in: item.folderURL, fileManager: fileManager) {
             enrichedItem.packUUID = manifestMetadata.uuid
             enrichedItem.packVersion = manifestMetadata.version
             enrichedItem.packMetadataDetails = PackMetadataDetails(
@@ -108,6 +119,7 @@ enum WorldScanner {
         }
         enrichedItem.packReferences = await packReferences(for: item, fileManager: fileManager)
         enrichedItem.metadataLoaded = true
+        enrichedItem.previewLoaded = true
         enrichedItem.sizeLoaded = false
 
         return enrichedItem
@@ -202,65 +214,6 @@ enum WorldScanner {
         }
 
         return embeddedItems
-    }
-
-    nonisolated private static func displayName(for item: MinecraftContentItem, fileManager: FileManager) -> String {
-        switch item.contentType {
-        case .world:
-            let levelNameURL = item.folderURL.appendingPathComponent("levelname.txt")
-            guard
-                let name = try? String(contentsOf: levelNameURL, encoding: .utf8)
-                    .trimmingCharacters(in: .whitespacesAndNewlines),
-                !name.isEmpty
-            else {
-                return item.folderName
-            }
-
-            return name
-        case .behaviorPack, .resourcePack, .skinPack, .worldTemplate:
-            if let manifestName = manifestName(in: item.folderURL, fileManager: fileManager) {
-                return manifestName
-            }
-
-            return item.folderName
-        }
-    }
-
-    nonisolated private static func manifestName(in directoryURL: URL, fileManager: FileManager) -> String? {
-        manifestMetadata(in: directoryURL, fileManager: fileManager)?.name
-    }
-
-    nonisolated private static func packIconURL(in directoryURL: URL, fileManager: FileManager) -> URL? {
-        let candidateNames = ["pack_icon.png", "pack_icon.jpeg", "pack_icon.jpg"]
-
-        for candidateName in candidateNames {
-            let candidateURL = directoryURL.appendingPathComponent(candidateName)
-            if fileManager.fileExists(atPath: candidateURL.path) {
-                return candidateURL
-            }
-        }
-
-        return nil
-    }
-
-    nonisolated private static func iconURL(for item: MinecraftContentItem, fileManager: FileManager) -> URL? {
-        let candidateNames: [String]
-
-        switch item.contentType {
-        case .world:
-            candidateNames = ["world_icon.jpeg", "world_icon.jpg", "world_icon.png"]
-        case .behaviorPack, .resourcePack, .skinPack, .worldTemplate:
-            candidateNames = ["pack_icon.png", "pack_icon.jpeg", "pack_icon.jpg"]
-        }
-
-        for candidateName in candidateNames {
-            let candidateURL = item.folderURL.appendingPathComponent(candidateName)
-            if fileManager.fileExists(atPath: candidateURL.path) {
-                return candidateURL
-            }
-        }
-
-        return nil
     }
 
     nonisolated private static func lastPlayedDate(
@@ -374,7 +327,7 @@ enum WorldScanner {
 
         for entry in jsonObject {
             let uuid = (entry["pack_id"] as? String)?.lowercased()
-            let version = versionString(from: entry["version"])
+            let version = MinecraftContentMetadataReader.versionString(from: entry["version"])
             let resolvedPack: ContentPackReference?
             if let uuid {
                 resolvedPack = await resolvedPackReference(
@@ -429,31 +382,18 @@ enum WorldScanner {
         source: PackSource,
         fileManager: FileManager
     ) -> ContentPackReference? {
-        guard let metadata = manifestMetadata(in: directoryURL, fileManager: fileManager) else {
+        guard let metadata = MinecraftContentMetadataReader.manifestMetadata(in: directoryURL, fileManager: fileManager) else {
             return nil
         }
 
         return ContentPackReference(
             name: metadata.name,
             type: type,
-            iconURL: packIconURL(in: directoryURL, fileManager: fileManager),
+            iconURL: MinecraftContentMetadataReader.packIconURL(in: directoryURL, fileManager: fileManager),
             uuid: metadata.uuid,
             version: metadata.version,
             source: source
         )
-    }
-
-    nonisolated private static func worldMetadata(for item: MinecraftContentItem, fileManager: FileManager) -> WorldMetadata? {
-        guard item.contentType == .world else {
-            return nil
-        }
-
-        let levelDatURL = item.folderURL.appendingPathComponent("level.dat")
-        guard fileManager.fileExists(atPath: levelDatURL.path) else {
-            return nil
-        }
-
-        return BedrockLevelMetadataDecoder.decode(fromLevelDatAt: levelDatURL)
     }
 
     nonisolated private static func resolvedPackReference(
@@ -469,51 +409,6 @@ enum WorldScanner {
             forUUID: uuid,
             type: type,
             in: siblingCollectionURL
-        )
-    }
-
-    nonisolated private static func versionString(from value: Any?) -> String? {
-        if let versionString = value as? String, !versionString.isEmpty {
-            return versionString
-        }
-
-        if let versionArray = value as? [Any] {
-            let components = versionArray.compactMap { component -> String? in
-                if let intComponent = component as? Int {
-                    return String(intComponent)
-                }
-                if let stringComponent = component as? String {
-                    return stringComponent
-                }
-                return nil
-            }
-
-            return components.isEmpty ? nil : components.joined(separator: ".")
-        }
-
-        return nil
-    }
-
-    nonisolated private static func manifestMetadata(in directoryURL: URL, fileManager: FileManager) -> ManifestMetadata? {
-        let manifestURL = directoryURL.appendingPathComponent("manifest.json")
-        guard
-            fileManager.fileExists(atPath: manifestURL.path),
-            let data = try? Data(contentsOf: manifestURL),
-            let jsonObject = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-            let header = jsonObject["header"] as? [String: Any]
-        else {
-            return nil
-        }
-
-        let name = ((header["name"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)).flatMap {
-            $0.isEmpty ? nil : $0
-        } ?? directoryURL.lastPathComponent
-
-        return ManifestMetadata(
-            name: name,
-            uuid: (header["uuid"] as? String)?.lowercased(),
-            version: versionString(from: header["version"]),
-            minimumEngineVersion: versionString(from: header["min_engine_version"])
         )
     }
 
@@ -539,13 +434,6 @@ enum WorldScanner {
             return lhs.name.localizedStandardCompare(rhs.name) == .orderedAscending
         }
     }
-}
-
-private struct ManifestMetadata {
-    let name: String
-    let uuid: String?
-    let version: String?
-    let minimumEngineVersion: String?
 }
 
 private actor PackReferenceIndexStore {

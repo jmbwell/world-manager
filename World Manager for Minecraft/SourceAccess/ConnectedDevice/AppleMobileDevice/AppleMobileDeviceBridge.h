@@ -12,54 +12,73 @@ NS_ASSUME_NONNULL_BEGIN
 FOUNDATION_EXPORT NSErrorDomain const WMMMobileDeviceErrorDomain;
 
 FOUNDATION_EXPORT NSDictionary<NSString *, id> * _Nullable
-WMMCopyFirstConnectedDeviceSummary(NSError **error);
+WMMCopyConnectedDeviceSummaries(NSError **error);
 
 FOUNDATION_EXPORT NSDictionary<NSString *, id> * _Nullable
-WMMCopyFirstConnectedDeviceApplicationList(NSError **error);
+WMMCopyConnectedDeviceApplicationList(
+    NSString *deviceIdentifier,
+    NSError **error
+);
 
 FOUNDATION_EXPORT NSDictionary<NSString *, id> * _Nullable
-WMMCopyFirstConnectedDeviceApplicationDetails(
+WMMCopyConnectedDeviceApplicationDetails(
+    NSString *deviceIdentifier,
     NSString *bundleIdentifier,
     NSError **error
 );
 
 FOUNDATION_EXPORT NSDictionary<NSString *, id> * _Nullable
-WMMCopyFirstConnectedDeviceAppDirectoryListing(
+WMMCopyConnectedDeviceAppDirectoryListing(
+    NSString *deviceIdentifier,
     NSString *bundleIdentifier,
     NSString *relativePath,
     NSError **error
 );
 
 FOUNDATION_EXPORT NSDictionary<NSString *, id> * _Nullable
-WMMCopyFirstConnectedDeviceAppPathProbeResults(
+WMMCopyConnectedDeviceAppPathProbeResults(
+    NSString *deviceIdentifier,
     NSString *bundleIdentifier,
     NSArray<NSString *> *paths,
     NSError **error
 );
 
 FOUNDATION_EXPORT NSDictionary<NSString *, id> * _Nullable
-WMMCopyFirstConnectedDeviceMinecraftLibrarySnapshot(
-    NSString *bundleIdentifier,
-    NSString *relativePath,
-    NSError **error
-);
-
-FOUNDATION_EXPORT NSData * _Nullable
-WMMCopyFirstConnectedDeviceAppFileData(
+WMMCopyConnectedDeviceMinecraftLibrarySnapshot(
+    NSString *deviceIdentifier,
     NSString *bundleIdentifier,
     NSString *relativePath,
     NSError **error
 );
 
 FOUNDATION_EXPORT NSDictionary<NSString *, id> * _Nullable
-WMMCopyFirstConnectedDeviceAppPathMetrics(
+WMMCopyConnectedDeviceMinecraftMetadataBatch(
+    NSString *deviceIdentifier,
+    NSString *bundleIdentifier,
+    NSString *relativePath,
+    NSArray<NSDictionary<NSString *, id> *> *items,
+    NSError **error
+);
+
+FOUNDATION_EXPORT NSData * _Nullable
+WMMCopyConnectedDeviceAppFileData(
+    NSString *deviceIdentifier,
+    NSString *bundleIdentifier,
+    NSString *relativePath,
+    NSError **error
+);
+
+FOUNDATION_EXPORT NSDictionary<NSString *, id> * _Nullable
+WMMCopyConnectedDeviceAppPathMetrics(
+    NSString *deviceIdentifier,
     NSString *bundleIdentifier,
     NSString *relativePath,
     NSError **error
 );
 
 FOUNDATION_EXPORT BOOL
-WMMCopyFirstConnectedDeviceAppSubtreeToLocalDirectory(
+WMMCopyConnectedDeviceAppSubtreeToLocalDirectory(
+    NSString *deviceIdentifier,
     NSString *bundleIdentifier,
     NSString *relativePath,
     NSURL *destinationDirectoryURL,

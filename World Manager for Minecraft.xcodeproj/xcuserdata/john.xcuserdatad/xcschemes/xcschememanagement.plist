@@ -4,10 +4,58 @@
 <dict>
 	<key>SchemeUserState</key>
 	<dict>
+		<key>MinecraftPackagePreviewExtension.xcscheme_^#shared#^_</key>
+		<dict>
+			<key>orderHint</key>
+			<integer>1</integer>
+		</dict>
+		<key>MinecraftPackageThumbnailExtension.xcscheme_^#shared#^_</key>
+		<dict>
+			<key>orderHint</key>
+			<integer>2</integer>
+		</dict>
 		<key>World Manager for Minecraft.xcscheme_^#shared#^_</key>
 		<dict>
 			<key>orderHint</key>
+			<integer>4</integer>
+		</dict>
+		<key>World Manager for MinecraftTests.xcscheme_^#shared#^_</key>
+		<dict>
+			<key>orderHint</key>
+			<integer>3</integer>
+		</dict>
+		<key>World Manager for MinecraftUITests.xcscheme_^#shared#^_</key>
+		<dict>
+			<key>orderHint</key>
 			<integer>0</integer>
+		</dict>
+	</dict>
+	<key>SuppressBuildableAutocreation</key>
+	<dict>
+		<key>5218F9052FC4C9EF00CAF7B7</key>
+		<dict>
+			<key>primary</key>
+			<true/>
+		</dict>
+		<key>5218F9142FC4C9F100CAF7B7</key>
+		<dict>
+			<key>primary</key>
+			<true/>
+		</dict>
+		<key>52C72BAE2FC72940009928CB</key>
+		<dict>
+			<key>primary</key>
+			<true/>
+		</dict>
+		<key>52C72BC72FC7314D009928CB</key>
+		<dict>
+			<key>primary</key>
+			<true/>
+		</dict>
+		<key>52C72BDA2FC73171009928CB</key>
+		<dict>
+			<key>primary</key>
+			<true/>
 		</dict>
 	</dict>
 </dict>

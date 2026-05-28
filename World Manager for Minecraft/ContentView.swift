@@ -42,7 +42,7 @@ struct ContentView: View {
     var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
             SourcesSidebarView(
-                localSources: library.localSources,
+                sources: library.sidebarSources,
                 connectedDevices: library.connectedDevices,
                 selection: $selectedSidebarSelection,
                 footerState: library.sidebarFooterState,
@@ -58,14 +58,7 @@ struct ContentView: View {
                     removeSource(source.id)
                 },
                 revealFooterURLAction: revealURLInFinder(_:),
-                filters: sidebarFilters(for:),
-                matchedSource: { entry in
-                    guard let sourceID = entry.matchedSourceID else {
-                        return nil
-                    }
-
-                    return library.source(withID: sourceID)
-                }
+                filters: sidebarFilters(for:)
             )
             .navigationSplitViewColumnWidth(min: 280, ideal: 320, max: 380)
         } content: {
@@ -144,7 +137,13 @@ struct ContentView: View {
                 }
             )
         }
+        .task {
+            AppTerminationCoordinator.shared.register(library: library)
+        }
         .disabled(library.isRestoringPersistedSources)
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
+            library.shutdown()
+        }
         .onChange(of: displayedItems.map(\.id)) { _, filteredIDs in
             guard let selectedItemID, !filteredIDs.contains(selectedItemID) else {
                 return
