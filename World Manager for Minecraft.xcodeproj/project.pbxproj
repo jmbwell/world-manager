@@ -89,6 +89,7 @@
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				Models/MinecraftContentItem.swift,
+				QuickLook/MinecraftPackageThumbnailRenderer.swift,
 				QuickLook/MinecraftPackageTypes.swift,
 				Services/BedrockLevelMetadataDecoder.swift,
 				Services/MinecraftContentMetadataReader.swift,
@@ -102,6 +103,7 @@
 			membershipExceptions = (
 				Models/MinecraftContentItem.swift,
 				QuickLook/MinecraftPackageQuickLookModel.swift,
+				QuickLook/MinecraftPackageThumbnailRenderer.swift,
 				QuickLook/MinecraftPackageTypes.swift,
 				Services/BedrockLevelMetadataDecoder.swift,
 				Services/MinecraftContentMetadataReader.swift,
