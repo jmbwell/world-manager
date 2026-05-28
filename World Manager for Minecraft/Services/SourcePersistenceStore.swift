@@ -19,6 +19,7 @@ struct PersistedSourceRecord: Sendable {
     let rawItems: [MinecraftContentItem]
     let snapshot: SourceSnapshot?
     let lastScanDate: Date?
+    let needsRepair: Bool
 }
 
 private struct PersistedItemSnapshotPayload: Codable, Sendable {
@@ -173,6 +174,7 @@ private struct PersistedSourceSnapshotPayload: Codable, Sendable {
 
 actor SourcePersistenceStore {
     static let shared = SourcePersistenceStore()
+    private static let cacheGeneration = "v2026-05-28"
 
     private let databaseURL: URL
 
@@ -181,7 +183,10 @@ actor SourcePersistenceStore {
             ?? fileManager.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support", isDirectory: true)
         let directoryURL = applicationSupportURL
             .appendingPathComponent("World Manager for Minecraft", isDirectory: true)
-        self.databaseURL = directoryURL.appendingPathComponent("LibraryCache.sqlite", isDirectory: false)
+        self.databaseURL = directoryURL.appendingPathComponent(
+            "LibraryCache-\(Self.cacheGeneration).sqlite",
+            isDirectory: false
+        )
     }
 
     init(databaseURL: URL) {
@@ -214,21 +219,17 @@ actor SourcePersistenceStore {
 
             let sourceID = sourceID(from: statement) ?? URL(fileURLWithPath: String(cString: folderPathPointer)).standardizedFileURL
             let folderPath = String(cString: folderPathPointer)
-            let origin = try decodeColumn(MinecraftSourceOrigin.self, statement: statement, columnIndex: 2)
-                ?? .localFolder(bookmarkData: nil)
-            let accessDescriptor = try decodeColumn(SourceAccessDescriptor.self, statement: statement, columnIndex: 3)
-                ?? SourceAccessDescriptor(
-                    accessorIdentifier: origin.defaultAccessorIdentifier,
-                    kind: origin.kind,
-                    capabilities: origin.defaultCapabilities,
-                    refreshStrategy: origin.defaultRefreshStrategy
-                )
-            let availability = decodeAvailability(statement: statement, columnIndex: 4)
             let bookmarkData = decodeDataColumn(statement: statement, columnIndex: 5)
+            let originResult = decodeOrigin(statement: statement, columnIndex: 2, bookmarkData: bookmarkData)
+            let origin = originResult.value
+            let accessDescriptorResult = decodeAccessDescriptor(statement: statement, columnIndex: 3, origin: origin)
+            let accessDescriptor = accessDescriptorResult.value
+            let availability = decodeAvailability(statement: statement, columnIndex: 4)
             let displayName = String(cString: sqlite3_column_text(statement, 6))
-            let rawItems = try decodeColumn([MinecraftContentItem].self, statement: statement, columnIndex: 7) ?? []
-            let snapshotPayload = try decodeColumn(PersistedSourceSnapshotPayload.self, statement: statement, columnIndex: 8)
-            let snapshot = snapshotPayload?.sourceSnapshot
+            let rawItemsResult = decodeRawItems(statement: statement, columnIndex: 7)
+            let snapshotResult = decodeSnapshot(statement: statement, columnIndex: 8)
+            let rawItems = rawItemsResult.value
+            let snapshot = snapshotResult.value
             let lastScanDate = sqlite3_column_type(statement, 9) == SQLITE_NULL
                 ? nil
                 : Date(timeIntervalSince1970: sqlite3_column_double(statement, 9))
@@ -244,7 +245,11 @@ actor SourcePersistenceStore {
                     displayName: displayName,
                     rawItems: rawItems,
                     snapshot: snapshot,
-                    lastScanDate: lastScanDate
+                    lastScanDate: lastScanDate,
+                    needsRepair: originResult.didRepair
+                        || accessDescriptorResult.didRepair
+                        || rawItemsResult.didRepair
+                        || snapshotResult.didRepair
                 )
             )
         }
@@ -256,6 +261,32 @@ actor SourcePersistenceStore {
         let database = try openDatabase()
         defer { sqlite3_close(database) }
 
+        try save(
+            record: PersistedSourceRecord(
+                sourceID: source.id,
+                folderURL: source.folderURL,
+                origin: source.origin,
+                accessDescriptor: source.accessDescriptor,
+                availability: source.availability,
+                bookmarkData: source.bookmarkData,
+                displayName: source.displayName,
+                rawItems: source.rawItems,
+                snapshot: source.snapshot,
+                lastScanDate: source.lastScanDate,
+                needsRepair: false
+            ),
+            on: database
+        )
+    }
+
+    func repair(record: PersistedSourceRecord) throws {
+        let database = try openDatabase()
+        defer { sqlite3_close(database) }
+
+        try save(record: record, on: database)
+    }
+
+    private func save(record: PersistedSourceRecord, on database: OpaquePointer?) throws {
         let sql = """
         INSERT INTO source_cache (
             source_id,
@@ -287,17 +318,17 @@ actor SourcePersistenceStore {
         }
         defer { sqlite3_finalize(statement) }
 
-        try bindText(normalizedIdentifierText(for: source.id), to: statement, at: 1)
-        try bindText(source.folderURL.path, to: statement, at: 2)
-        try bindJSON(source.origin, to: statement, at: 3)
-        try bindJSON(source.accessDescriptor, to: statement, at: 4)
-        try bindText(source.availability.rawValue, to: statement, at: 5)
-        try bindData(source.bookmarkData, to: statement, at: 6)
-        try bindText(source.displayName, to: statement, at: 7)
-        try bindJSON(source.rawItems, to: statement, at: 8)
-        try bindJSON(source.snapshot.map(PersistedSourceSnapshotPayload.init), to: statement, at: 9)
+        try bindText(normalizedIdentifierText(for: record.sourceID), to: statement, at: 1)
+        try bindText(record.folderURL.path, to: statement, at: 2)
+        try bindJSON(record.origin, to: statement, at: 3)
+        try bindJSON(record.accessDescriptor, to: statement, at: 4)
+        try bindText(record.availability.rawValue, to: statement, at: 5)
+        try bindData(record.bookmarkData, to: statement, at: 6)
+        try bindText(record.displayName, to: statement, at: 7)
+        try bindJSON(record.rawItems, to: statement, at: 8)
+        try bindJSON(record.snapshot.map(PersistedSourceSnapshotPayload.init), to: statement, at: 9)
 
-        if let lastScanDate = source.lastScanDate {
+        if let lastScanDate = record.lastScanDate {
             sqlite3_bind_double(statement, 10, lastScanDate.timeIntervalSince1970)
         } else {
             sqlite3_bind_null(statement, 10)
@@ -450,19 +481,10 @@ actor SourcePersistenceStore {
     }
 
     private func decodeColumn<T: Decodable>(_ type: T.Type, statement: OpaquePointer?, columnIndex: Int32) throws -> T? {
-        guard sqlite3_column_type(statement, columnIndex) != SQLITE_NULL else {
+        guard let data = decodeDataColumn(statement: statement, columnIndex: columnIndex) else {
             return nil
         }
 
-        let byteCount = Int(sqlite3_column_bytes(statement, columnIndex))
-        guard
-            byteCount > 0,
-            let bytes = sqlite3_column_blob(statement, columnIndex)
-        else {
-            return nil
-        }
-
-        let data = Data(bytes: bytes, count: byteCount)
         return try JSONDecoder().decode(type, from: data)
     }
 
@@ -480,6 +502,98 @@ actor SourcePersistenceStore {
         }
 
         return Data(bytes: bytes, count: byteCount)
+    }
+
+    private func decodeOrigin(
+        statement: OpaquePointer?,
+        columnIndex: Int32,
+        bookmarkData: Data?
+    ) -> (value: MinecraftSourceOrigin, didRepair: Bool) {
+        do {
+            if let origin = try decodeColumn(MinecraftSourceOrigin.self, statement: statement, columnIndex: columnIndex) {
+                return (origin, false)
+            }
+        } catch {
+        }
+
+        return (.localFolder(bookmarkData: bookmarkData), true)
+    }
+
+    private func decodeAccessDescriptor(
+        statement: OpaquePointer?,
+        columnIndex: Int32,
+        origin: MinecraftSourceOrigin
+    ) -> (value: SourceAccessDescriptor, didRepair: Bool) {
+        do {
+            if let accessDescriptor = try decodeColumn(SourceAccessDescriptor.self, statement: statement, columnIndex: columnIndex) {
+                return (accessDescriptor, false)
+            }
+        } catch {
+        }
+
+        return (
+            SourceAccessDescriptor(
+                accessorIdentifier: origin.defaultAccessorIdentifier,
+                kind: origin.kind,
+                capabilities: origin.defaultCapabilities,
+                refreshStrategy: origin.defaultRefreshStrategy
+            ),
+            true
+        )
+    }
+
+    private func decodeRawItems(statement: OpaquePointer?, columnIndex: Int32) -> (value: [MinecraftContentItem], didRepair: Bool) {
+        do {
+            if let items = try decodeColumn([MinecraftContentItem].self, statement: statement, columnIndex: columnIndex) {
+                return (items, false)
+            }
+
+            return ([], false)
+        } catch {
+            guard let data = decodeDataColumn(statement: statement, columnIndex: columnIndex) else {
+                return ([], true)
+            }
+
+            let items = decodeArrayElementsLeniently(MinecraftContentItem.self, from: data)
+            return (items, true)
+        }
+    }
+
+    private func decodeSnapshot(statement: OpaquePointer?, columnIndex: Int32) -> (value: SourceSnapshot?, didRepair: Bool) {
+        do {
+            let payload = try decodeColumn(PersistedSourceSnapshotPayload.self, statement: statement, columnIndex: columnIndex)
+            return (payload?.sourceSnapshot, false)
+        } catch {
+            return (nil, true)
+        }
+    }
+
+    private func decodeArrayElementsLeniently<Element: Decodable>(_ type: Element.Type, from data: Data) -> [Element] {
+        guard let rawArray = try? JSONSerialization.jsonObject(with: data) as? [Any] else {
+            return []
+        }
+
+        let decoder = JSONDecoder()
+        var decodedElements: [Element] = []
+        decodedElements.reserveCapacity(rawArray.count)
+
+        for rawElement in rawArray {
+            guard JSONSerialization.isValidJSONObject(rawElement) else {
+                continue
+            }
+
+            guard let elementData = try? JSONSerialization.data(withJSONObject: rawElement) else {
+                continue
+            }
+
+            guard let element = try? decoder.decode(Element.self, from: elementData) else {
+                continue
+            }
+
+            decodedElements.append(element)
+        }
+
+        return decodedElements
     }
 
     private func sourceID(from statement: OpaquePointer?) -> URL? {

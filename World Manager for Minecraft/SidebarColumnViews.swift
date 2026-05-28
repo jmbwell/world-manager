@@ -85,7 +85,7 @@ struct SourcesSidebarView: View {
         )
             .tag(SidebarSelection.source(sourceID: source.id) as SidebarSelection?)
             .listRowSeparator(.hidden)
-            .padding(.top, 6)
+            .listRowInsets(EdgeInsets(top: 6, leading: 0, bottom: 0, trailing: 8))
             .contextMenu {
                 Button("Rescan \"\(source.displayName)\"") {
                     rescanSourceAction(source)
@@ -113,7 +113,7 @@ struct SourcesSidebarView: View {
             } : nil
         )
         .listRowSeparator(.hidden)
-        .padding(.top, 6)
+        .listRowInsets(EdgeInsets(top: 6, leading: 8, bottom: 0, trailing: 8))
     }
 }
 
@@ -233,11 +233,7 @@ private struct SourceHeaderRow: View {
     }
 
     private var backgroundStyle: AnyShapeStyle {
-        if isSelected {
-            return AnyShapeStyle(Color.appAccent.opacity(0.14))
-        }
-
-        if isHovering {
+        if isHovering && !isSelected {
             return AnyShapeStyle(.secondary.opacity(0.08))
         }
 

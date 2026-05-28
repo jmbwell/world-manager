@@ -96,6 +96,7 @@ struct ContentView: View {
                 directoryPreviewLimit: directoryPreviewLimit,
                 isEmpty: library.visibleSources.isEmpty && library.connectedDevices.isEmpty,
                 isPerformingItemAction: isPerformingItemAction,
+                areFileActionsEnabled: areCurrentItemFileActionsEnabled,
                 exportTitle: currentSelectedItem.map(primaryActionTitle(for:)),
                 exportAction: {
                     guard let item = currentSelectedItem else {
@@ -122,7 +123,7 @@ struct ContentView: View {
             .frame(minWidth: 450)
         }
         .overlay {
-            if library.isRestoringPersistedSources {
+            if library.isRestoringPersistedSources && library.visibleSources.isEmpty && library.connectedDevices.isEmpty {
                 LaunchRestoreOverlayView()
             }
         }
@@ -141,10 +142,7 @@ struct ContentView: View {
         .task {
             AppTerminationCoordinator.shared.register(library: library)
         }
-        .disabled(library.isRestoringPersistedSources)
-        .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
-            library.shutdown()
-        }
+        .disabled(library.isRestoringPersistedSources && library.visibleSources.isEmpty && library.connectedDevices.isEmpty)
         .onChange(of: displayedItems.map(\.id)) { _, filteredIDs in
             guard let selectedItemID, !filteredIDs.contains(selectedItemID) else {
                 return
@@ -318,6 +316,14 @@ struct ContentView: View {
         return nil
     }
 
+    private var areCurrentItemFileActionsEnabled: Bool {
+        guard currentSelectedItem != nil else {
+            return false
+        }
+
+        return currentSource?.availability == .available
+    }
+
     private var searchScopeTitle: String {
         switch selectedSidebarSelection {
         case .some(.source(let sourceID)):
@@ -438,16 +444,19 @@ struct ContentView: View {
         Button("Share...") {
             shareItem(item, from: nil)
         }
+        .disabled(!areFileActionsEnabled(for: item))
 
         Button(exportMenuTitle(for: item)) {
             saveItem(item)
         }
+        .disabled(!areFileActionsEnabled(for: item))
 
         Divider()
 
         Button("Reveal in Finder") {
             revealInFinder(item)
         }
+        .disabled(!areFileActionsEnabled(for: item))
     }
 
     private func exportMenuTitle(for item: MinecraftContentItem) -> String {
@@ -644,8 +653,16 @@ struct ContentView: View {
         }
     }
 
+    private func areFileActionsEnabled(for item: MinecraftContentItem) -> Bool {
+        guard let source = library.visibleSources.first(where: { $0.items.contains(where: { $0.id == item.id }) }) else {
+            return false
+        }
+
+        return source.availability == .available
+    }
+
     private func saveItem(_ item: MinecraftContentItem) {
-        guard !isPerformingItemAction else {
+        guard !isPerformingItemAction, areFileActionsEnabled(for: item) else {
             return
         }
         let source = currentSource
@@ -653,8 +670,9 @@ struct ContentView: View {
         let panel = NSSavePanel()
         panel.canCreateDirectories = true
         panel.isExtensionHidden = false
-        panel.title = primaryActionTitle(for: item)
-        panel.message = primaryActionSubtitle(for: item)
+        panel.showsTagField = false
+        panel.title = exportMenuTitle(for: item)
+        panel.prompt = "Save"
         panel.nameFieldStringValue = ContentPackageExporter.suggestedBaseFilename(for: item)
         panel.allowedContentTypes = [archiveType(for: item)]
 
@@ -693,7 +711,7 @@ struct ContentView: View {
     }
 
     private func shareItem(_ item: MinecraftContentItem, from anchorView: NSView?) {
-        guard !isPerformingItemAction else {
+        guard !isPerformingItemAction, areFileActionsEnabled(for: item) else {
             return
         }
         let source = currentSource
@@ -742,7 +760,7 @@ struct ContentView: View {
     }
 
     private func revealInFinder(_ item: MinecraftContentItem) {
-        guard let source = currentSource else {
+        guard let source = currentSource, areFileActionsEnabled(for: item) else {
             return
         }
 

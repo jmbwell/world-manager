@@ -86,6 +86,66 @@ enum WorldScanner {
         return discoveredItems
     }
 
+    nonisolated static func discoverItems(
+        inCollectionRootURL collectionRootURL: URL,
+        contentType: MinecraftContentType,
+        onDiscovered: @Sendable (MinecraftContentItem) -> Void = { _ in }
+    ) throws -> [MinecraftContentItem] {
+        let fileManager = FileManager.default
+        guard fileManager.fileExists(atPath: collectionRootURL.path) else {
+            return []
+        }
+
+        let childDirectories = try immediateChildDirectories(of: collectionRootURL, fileManager: fileManager)
+        var discoveredItems: [MinecraftContentItem] = []
+        var seenItemURLs = Set<URL>()
+
+        for childDirectory in childDirectories {
+            let itemURL = childDirectory.standardizedFileURL
+            guard !seenItemURLs.contains(itemURL) else {
+                continue
+            }
+
+            guard isCandidateItem(at: childDirectory, type: contentType, fileManager: fileManager) else {
+                continue
+            }
+
+            let item = MinecraftContentItem(
+                folderURL: childDirectory,
+                folderName: childDirectory.lastPathComponent,
+                contentType: contentType,
+                collectionRootURL: collectionRootURL
+            )
+            seenItemURLs.insert(itemURL)
+            discoveredItems.append(item)
+            onDiscovered(item)
+
+            if contentType == .world {
+                let embeddedPackItems = discoverEmbeddedPackItems(
+                    in: childDirectory,
+                    fileManager: fileManager,
+                    seenItemURLs: &seenItemURLs
+                )
+                discoveredItems.append(contentsOf: embeddedPackItems)
+                embeddedPackItems.forEach(onDiscovered)
+            }
+        }
+
+        discoveredItems.sort(by: sortItems)
+        return discoveredItems
+    }
+
+    nonisolated static func collectionSnapshots(in sourceRootURL: URL) -> [CollectionSnapshot] {
+        let fileManager = FileManager.default
+        return MinecraftContentType.allCases.compactMap { type in
+            collectionSnapshot(
+                for: sourceRootURL.appendingPathComponent(type.collectionFolderName, isDirectory: true),
+                contentType: type,
+                fileManager: fileManager
+            )
+        }
+    }
+
     nonisolated static func enrich(item: MinecraftContentItem) async -> MinecraftContentItem {
         let fileManager = FileManager.default
         var enrichedItem = item
@@ -144,6 +204,52 @@ enum WorldScanner {
         return MinecraftContentType.allCases.first { type in
             type.collectionFolderName.lowercased() == normalizedFolderName
         }
+    }
+
+    nonisolated private static func collectionSnapshot(
+        for collectionURL: URL,
+        contentType: MinecraftContentType,
+        fileManager: FileManager
+    ) -> CollectionSnapshot? {
+        guard fileManager.fileExists(atPath: collectionURL.path) else {
+            return nil
+        }
+
+        let children = (try? fileManager.contentsOfDirectory(
+            at: collectionURL,
+            includingPropertiesForKeys: [.isDirectoryKey, .contentModificationDateKey],
+            options: [.skipsHiddenFiles]
+        )) ?? []
+        let childDirectorySnapshots = children.compactMap { childURL -> (name: String, modifiedDate: Date?)? in
+            guard (try? childURL.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true else {
+                return nil
+            }
+
+            let modifiedDate = try? childURL.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
+            return (childURL.lastPathComponent, modifiedDate)
+        }.sorted {
+            $0.name.localizedStandardCompare($1.name) == .orderedAscending
+        }
+
+        let modifiedDate = try? collectionURL.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
+        let childFingerprint = childDirectorySnapshots.map { child in
+            [
+                child.name,
+                child.modifiedDate?.timeIntervalSince1970.formatted() ?? "nil"
+            ].joined(separator: "@")
+        }.joined(separator: "|")
+
+        return CollectionSnapshot(
+            folderName: contentType.collectionFolderName,
+            modifiedDate: modifiedDate,
+            childDirectoryCount: childDirectorySnapshots.count,
+            fingerprint: [
+                contentType.collectionFolderName,
+                String(childDirectorySnapshots.count),
+                modifiedDate?.timeIntervalSince1970.formatted() ?? "nil",
+                childFingerprint
+            ].joined(separator: "::")
+        )
     }
 
     nonisolated fileprivate static func immediateChildDirectories(of directoryURL: URL, fileManager: FileManager) throws -> [URL] {

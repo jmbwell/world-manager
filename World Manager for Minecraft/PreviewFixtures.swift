@@ -355,6 +355,7 @@ struct ItemDetailColumnPreviewContainer: View {
                 directoryPreviewLimit: 12,
                 isEmpty: false,
                 isPerformingItemAction: false,
+                areFileActionsEnabled: true,
                 exportTitle: PreviewFixtures.featuredWorld.contentType.exportTitle,
                 exportAction: {},
                 revealAction: {},

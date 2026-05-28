@@ -168,6 +168,7 @@ final class SourceLibrary: ObservableObject {
             return
         }
 
+        await persistVisibleSourcesForShutdown()
         shutdown()
         try? await Task.sleep(for: .seconds(timeout))
     }
@@ -183,7 +184,7 @@ final class SourceLibrary: ObservableObject {
                 }
                 source.accessDescriptor = sourceAccessMethod.accessDescriptor(for: source)
             }
-            startScan(for: normalizedURL)
+            startScan(for: normalizedURL, mode: .fullScan)
             return normalizedURL
         }
 
@@ -225,7 +226,7 @@ final class SourceLibrary: ObservableObject {
             persistSourceIfAvailable(withID: source.id)
         }
         if shouldScan {
-            startScan(for: source.id)
+            startScan(for: source.id, mode: .fullScan)
         }
 
         return source.id
@@ -236,7 +237,7 @@ final class SourceLibrary: ObservableObject {
     }
 
     func rescanSource(withID sourceID: URL) {
-        startScan(for: sourceID)
+        startScan(for: sourceID, mode: .fullScan)
     }
 
     func listContents(for item: MinecraftContentItem, in source: MinecraftSource) async throws -> [DirectoryPreviewEntry] {
@@ -305,7 +306,7 @@ final class SourceLibrary: ObservableObject {
         return "Scanning \(scanningSources.count) sources..."
     }
 
-    private func startScan(for sourceID: URL) {
+    private func startScan(for sourceID: URL, mode: SourceDiscoveryMode) {
         guard !isShuttingDown else {
             return
         }
@@ -319,7 +320,7 @@ final class SourceLibrary: ObservableObject {
                 return
             }
 
-            await self.scanSource(withID: sourceID)
+            await self.scanSource(withID: sourceID, mode: mode)
         }
 
         scanTasks[sourceID] = task
@@ -333,7 +334,7 @@ final class SourceLibrary: ObservableObject {
         sources.contains { $0.isScanning && $0.origin.kind == .connectedDevice }
     }
 
-    private func scanSource(withID sourceID: URL) async {
+    private func scanSource(withID sourceID: URL, mode: SourceDiscoveryMode) async {
         var workerTasks: [Task<Void, Never>] = []
         var sizeWorkerTasks: [Task<Void, Never>] = []
         let scanStartTime = Date()
@@ -353,7 +354,7 @@ final class SourceLibrary: ObservableObject {
             source.isScanning = true
             source.scanError = nil
             source.scanDiagnostic = nil
-            source.scanStatus = initialScanStatus(for: source)
+            source.scanStatus = initialScanStatus(for: source, mode: mode)
             source.scanProgress = nil
             source.indexedItemCount = 0
             source.indexedDetailCount = 0
@@ -380,7 +381,7 @@ final class SourceLibrary: ObservableObject {
 
         updateSource(sourceID) { source in
             source.availability = .available
-            source.scanStatus = scanningLibraryStatus(for: source)
+            source.scanStatus = scanningLibraryStatus(for: source, mode: mode)
         }
         refreshSidebarFooterState()
 
@@ -414,7 +415,7 @@ final class SourceLibrary: ObservableObject {
                 let accessMethod = sourceAccessMethod
                 let discoveryTask = Task.detached(priority: .userInitiated) {
                     do {
-                        _ = try await accessMethod.discoverItems(for: source) { item in
+                        _ = try await accessMethod.discoverItems(for: source, mode: mode) { item in
                             continuation.yield(item)
                         }
                         continuation.finish()
@@ -428,7 +429,14 @@ final class SourceLibrary: ObservableObject {
                 }
             }
 
+            let previousItemsByID = Dictionary(uniqueKeysWithValues: previousSource.rawItems.map { ($0.id, $0) })
+            let previousSnapshotByItemID = Dictionary(
+                uniqueKeysWithValues: (previousSource.snapshot?.itemSnapshots ?? []).map { ($0.id, $0) }
+            )
+            let shouldReconcileFromCache = mode == .reconcile && previousSource.hasCachedContent
+
             var discoveredCount = 0
+            var discoveredCollectionNames = Set<String>()
             let discoveryStartTime = Date()
 
             for try await item in discoveryStream {
@@ -437,15 +445,58 @@ final class SourceLibrary: ObservableObject {
                 }
 
                 discoveredCount += 1
+                discoveredCollectionNames.insert(item.collectionRootURL.lastPathComponent)
+                let itemForIndex: MinecraftContentItem
+                if shouldReconcileFromCache,
+                   let cachedItem = previousItemsByID[item.id],
+                   shouldReuseCachedItem(
+                        cachedItem,
+                        forDiscoveredItem: item,
+                        source: source,
+                        previousSnapshot: previousSnapshotByItemID[item.id]
+                   ) {
+                    itemForIndex = cachedItem
+                } else {
+                    itemForIndex = item
+                }
+
                 if let snapshot = await index.addDiscoveredItem(
-                    item,
+                    itemForIndex,
                     discoveredCount: discoveredCount
                 ) {
                     applySnapshot(snapshot, to: sourceID)
                 }
                 scheduleSidebarFooterRefresh()
 
-                await enrichmentQueue.enqueue(item)
+                if itemForIndex.id == item.id, itemForIndex.metadataLoaded == false {
+                    await enrichmentQueue.enqueue(item)
+                }
+            }
+
+            if mode == .reconcile, source.origin.kind == .connectedDevice {
+                let cachedItemsByCollection = Dictionary(grouping: previousSource.rawItems) { item in
+                    item.collectionRootURL.lastPathComponent
+                }
+
+                for (collectionName, cachedItems) in cachedItemsByCollection {
+                    guard !cachedItems.isEmpty else {
+                        continue
+                    }
+
+                    guard !discoveredCollectionNames.contains(collectionName) else {
+                        continue
+                    }
+
+                    for cachedItem in cachedItems {
+                        discoveredCount += 1
+                        if let snapshot = await index.addDiscoveredItem(
+                            cachedItem,
+                            discoveredCount: discoveredCount
+                        ) {
+                            applySnapshot(snapshot, to: sourceID)
+                        }
+                    }
+                }
             }
 
             logScanStage(
@@ -481,8 +532,9 @@ final class SourceLibrary: ObservableObject {
             refreshSidebarFooterState()
 
             let previewStageStartTime = Date()
+            let previewSeedItems = await index.currentItems()
             let previewItems = await sourceAccessMethod.loadPreviewAssets(
-                for: await index.currentItems(),
+                for: previewSeedItems.filter { !$0.previewLoaded },
                 in: source
             )
             for previewItem in previewItems {
@@ -507,8 +559,9 @@ final class SourceLibrary: ObservableObject {
 
             if source.origin.kind == .connectedDevice {
                 let sizeStageStartTime = Date()
+                let sizeSeedItems = await index.currentItems()
                 let sizedItems = await sourceAccessMethod.loadSizeAssets(
-                    for: await index.currentItems(),
+                    for: sizeSeedItems.filter { !$0.sizeLoaded },
                     in: source
                 )
                 for sizedItem in sizedItems {
@@ -582,7 +635,7 @@ final class SourceLibrary: ObservableObject {
                     }
                 }
             }
-            for item in await index.currentItems() {
+            for item in await index.currentItems() where !item.sizeLoaded {
                 await sizeQueue.enqueue(item)
             }
             await sizeQueue.finish()
@@ -1483,7 +1536,7 @@ final class SourceLibrary: ObservableObject {
     ) {
         let nextAvailability = availability(for: device, hasMinecraftContainer: true)
         updateSource(sourceID) { source in
-            guard case .connectedDevice(_, let previousContainer) = source.origin else {
+            guard case .connectedDevice(let previousDevice, let previousContainer) = source.origin else {
                 return
             }
 
@@ -1491,8 +1544,17 @@ final class SourceLibrary: ObservableObject {
                 $0.appID == previousContainer.appID && $0.accessMode == previousContainer.accessMode
             }) ?? previousContainer
 
-            source.origin = .connectedDevice(device: device, container: resolvedContainer)
-            source.displayName = "\(device.name) • \(resolvedContainer.appName)"
+            var resolvedDevice = device
+            resolvedDevice.name = preferredConnectedDeviceName(
+                currentName: device.name,
+                fallbackDeviceName: previousDevice.name,
+                fallbackDisplayName: source.displayName
+            )
+            source.origin = .connectedDevice(device: resolvedDevice, container: resolvedContainer)
+            source.displayName = connectedDeviceSourceFactory.displayName(
+                for: resolvedDevice,
+                container: resolvedContainer
+            )
             source.accessDescriptor = sourceAccessMethod.accessDescriptor(for: source)
         }
         let transition = updateAvailability(for: sourceID, to: nextAvailability)
@@ -1503,12 +1565,14 @@ final class SourceLibrary: ObservableObject {
         }
 
         if transition.becameAvailable {
-            queueAutomaticSync(
-                for: sourceID,
-                reason: source.hasCachedContent
-                    ? "Device available. Refreshing cached library..."
-                    : "Device available. Scanning Minecraft library..."
-            )
+            if shouldRefreshConnectedDeviceOnReconnect(source, device: device) {
+                queueAutomaticSync(
+                    for: sourceID,
+                    reason: source.hasCachedContent
+                        ? "Device available. Refreshing cached library..."
+                        : "Device available. Scanning Minecraft library..."
+                )
+            }
             return
         }
 
@@ -1544,6 +1608,42 @@ final class SourceLibrary: ObservableObject {
         }
     }
 
+    private func preferredConnectedDeviceName(
+        currentName: String,
+        fallbackDeviceName: String,
+        fallbackDisplayName: String
+    ) -> String {
+        if let sanitizedCurrentName = sanitizedConnectedDeviceName(currentName) {
+            return sanitizedCurrentName
+        }
+
+        if let sanitizedFallbackName = sanitizedConnectedDeviceName(fallbackDeviceName) {
+            return sanitizedFallbackName
+        }
+
+        if let displayNamePrefix = fallbackDisplayName.components(separatedBy: " • ").first,
+           let sanitizedDisplayName = sanitizedConnectedDeviceName(displayNamePrefix) {
+            return sanitizedDisplayName
+        }
+
+        return "Unknown Device"
+    }
+
+    private func sanitizedConnectedDeviceName(_ candidate: String) -> String? {
+        let trimmedCandidate = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedCandidate.isEmpty else {
+            return nil
+        }
+
+        let normalizedCandidate = trimmedCandidate.lowercased()
+        guard normalizedCandidate != "unknown device",
+              normalizedCandidate != "unknown device..." else {
+            return nil
+        }
+
+        return trimmedCandidate
+    }
+
     private func restorePersistedSources() async {
         defer {
             isRestoringPersistedSources = false
@@ -1566,29 +1666,64 @@ final class SourceLibrary: ObservableObject {
                 accessDescriptor: record.accessDescriptor,
                 availability: record.availability
             )
-            source.displayName = record.displayName
-            source.rawItems = await restoreCachedImages(in: record.rawItems)
+            if case .connectedDevice(let device, let container) = source.origin {
+                var repairedDevice = device
+                repairedDevice.name = preferredConnectedDeviceName(
+                    currentName: device.name,
+                    fallbackDeviceName: "",
+                    fallbackDisplayName: record.displayName
+                )
+                source.origin = .connectedDevice(device: repairedDevice, container: container)
+                let persistedDeviceName = record.displayName.components(separatedBy: " • ").first ?? record.displayName
+                if sanitizedConnectedDeviceName(persistedDeviceName) == nil {
+                    source.displayName = connectedDeviceSourceFactory.displayName(
+                        for: repairedDevice,
+                        container: container
+                    )
+                } else {
+                    source.displayName = record.displayName
+                }
+            } else {
+                source.displayName = record.displayName
+            }
+            source.rawItems = record.rawItems
             source.indexedItemCount = record.rawItems.count
-            source.indexedDetailCount = source.rawItems.filter(\.metadataLoaded).count
-            source.previewLoadedCount = source.rawItems.filter(\.previewLoaded).count
-            source.sizeLoadedCount = source.rawItems.filter(\.sizeLoaded).count
+            source.indexedDetailCount = record.rawItems.filter(\.metadataLoaded).count
+            source.previewLoadedCount = record.rawItems.filter(\.previewLoaded).count
+            source.sizeLoadedCount = record.rawItems.filter(\.sizeLoaded).count
             source.lastScanDate = record.lastScanDate
             source.snapshot = record.snapshot
+            source.scanStatus = source.indexedItemCount == 0
+                ? "No Minecraft items found."
+                : "Loaded \(source.indexedDetailCount) items."
 
             sources.append(source)
             rebuildNormalizedIndex(for: source.id)
+        }
 
-            updateSource(source.id) { source in
-                source.displayItems = source.displayItems.sorted(by: WorldScanner.sortItems)
-                source.previewLoadedCount = source.rawItems.filter(\.previewLoaded).count
-                source.sizeLoadedCount = source.rawItems.filter(\.sizeLoaded).count
-                source.scanStatus = source.indexedItemCount == 0
-                    ? "No Minecraft items found."
-                    : "Loaded \(source.indexedDetailCount) items."
+        for record in records where record.needsRepair {
+            Task.detached(priority: .utility) { [persistenceStore] in
+                try? await persistenceStore.repair(record: record)
             }
         }
 
         sources.sort { $0.displayName.localizedStandardCompare($1.displayName) == .orderedAscending }
+        refreshSidebarFooterState()
+        await Task.yield()
+
+        for record in records {
+            let restoredItems = await restoreCachedImages(in: record.rawItems)
+            updateSource(record.sourceID) { source in
+                source.rawItems = restoredItems
+                source.indexedItemCount = restoredItems.count
+                source.indexedDetailCount = restoredItems.filter(\.metadataLoaded).count
+                source.previewLoadedCount = restoredItems.filter(\.previewLoaded).count
+                source.sizeLoadedCount = restoredItems.filter(\.sizeLoaded).count
+                source.lastScanDate = record.lastScanDate
+                source.snapshot = record.snapshot
+            }
+            rebuildNormalizedIndex(for: record.sourceID)
+        }
 
         await refreshConnectedDevices()
         await refreshLocalSources()
@@ -1638,10 +1773,9 @@ final class SourceLibrary: ObservableObject {
             return true
         }
 
-        let fileManager = FileManager.default
         let sourceURL = record.folderURL
 
-        guard fileManager.fileExists(atPath: sourceURL.path) else {
+        guard FileManager.default.fileExists(atPath: sourceURL.path) else {
             return true
         }
 
@@ -1653,19 +1787,8 @@ final class SourceLibrary: ObservableObject {
         }
 
         for (folderName, persistedCollection) in persistedCollections {
-            guard let currentCollection = currentCollections[folderName], currentCollection == persistedCollection else {
-                return true
-            }
-        }
-
-        for itemSnapshot in snapshot.itemSnapshots {
-            let itemURL = sourceURL.appendingPathComponent(itemSnapshot.relativePath, isDirectory: true)
-            guard fileManager.fileExists(atPath: itemURL.path) else {
-                return true
-            }
-
-            let modifiedDate = try? itemURL.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
-            if modifiedDate != itemSnapshot.modifiedDate {
+            guard let currentCollection = currentCollections[folderName],
+                  currentCollection.fingerprint == persistedCollection.fingerprint else {
                 return true
             }
         }
@@ -1682,10 +1805,9 @@ final class SourceLibrary: ObservableObject {
             return true
         }
 
-        let fileManager = FileManager.default
         let sourceURL = source.folderURL
 
-        guard fileManager.fileExists(atPath: sourceURL.path) else {
+        guard FileManager.default.fileExists(atPath: sourceURL.path) else {
             return false
         }
 
@@ -1697,19 +1819,8 @@ final class SourceLibrary: ObservableObject {
         }
 
         for (folderName, persistedCollection) in persistedCollections {
-            guard let currentCollection = currentCollections[folderName], currentCollection == persistedCollection else {
-                return true
-            }
-        }
-
-        for itemSnapshot in snapshot.itemSnapshots {
-            let itemURL = sourceURL.appendingPathComponent(itemSnapshot.relativePath, isDirectory: true)
-            guard fileManager.fileExists(atPath: itemURL.path) else {
-                return true
-            }
-
-            let modifiedDate = try? itemURL.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
-            if modifiedDate != itemSnapshot.modifiedDate {
+            guard let currentCollection = currentCollections[folderName],
+                  currentCollection.fingerprint == persistedCollection.fingerprint else {
                 return true
             }
         }
@@ -1749,35 +1860,7 @@ final class SourceLibrary: ObservableObject {
     }
 
     private func currentCollectionSnapshots(for sourceURL: URL) -> [CollectionSnapshot] {
-        let fileManager = FileManager.default
-
-        return MinecraftContentType.allCases.compactMap { type -> CollectionSnapshot? in
-            let collectionURL = sourceURL.appendingPathComponent(type.collectionFolderName, isDirectory: true)
-            guard fileManager.fileExists(atPath: collectionURL.path) else {
-                return nil
-            }
-
-            let children = (try? fileManager.contentsOfDirectory(
-                at: collectionURL,
-                includingPropertiesForKeys: [.isDirectoryKey],
-                options: [.skipsHiddenFiles]
-            )) ?? []
-            let childDirectoryCount = children.filter {
-                (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
-            }.count
-            let modifiedDate = try? collectionURL.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
-
-            return CollectionSnapshot(
-                folderName: type.collectionFolderName,
-                modifiedDate: modifiedDate,
-                childDirectoryCount: childDirectoryCount,
-                fingerprint: [
-                    type.collectionFolderName,
-                    String(childDirectoryCount),
-                    modifiedDate?.timeIntervalSince1970.formatted() ?? "nil"
-                ].joined(separator: "::")
-            )
-        }
+        WorldScanner.collectionSnapshots(in: sourceURL)
     }
 
     private func buildDisplayItems(
@@ -1829,6 +1912,13 @@ final class SourceLibrary: ObservableObject {
         }
     }
 
+    private func persistVisibleSourcesForShutdown() async {
+        let persistedSources = sources
+        for source in persistedSources {
+            try? await persistenceStore.save(source: source)
+        }
+    }
+
     private func deletePersistedSource(withID sourceID: URL) {
         Task {
             try? await persistenceStore.deleteSource(withID: sourceID)
@@ -1864,6 +1954,8 @@ final class SourceLibrary: ObservableObject {
             source.scanProgress = nil
         }
 
+            let mode: SourceDiscoveryMode = source.hasCachedContent ? .reconcile : .fullScan
+
         let task = Task { [weak self] in
             do {
                 try await Task.sleep(for: .seconds(resolvedDebounce))
@@ -1876,7 +1968,7 @@ final class SourceLibrary: ObservableObject {
             }
 
             await MainActor.run {
-                self.startScan(for: sourceID)
+                self.startScan(for: sourceID, mode: mode)
             }
         }
 
@@ -2032,19 +2124,45 @@ final class SourceLibrary: ObservableObject {
             return false
         }
 
+        if connectedDeviceSourceHasRefreshDebt(source) {
+            return true
+        }
+        _ = device
+        return false
+    }
+
+    private func shouldRefreshConnectedDeviceOnReconnect(_ source: MinecraftSource, device: ConnectedDevice) -> Bool {
+        guard !source.isScanning else {
+            return false
+        }
+
+        if connectedDeviceSourceHasRefreshDebt(source) {
+            return true
+        }
+
         guard let lastScanDate = source.lastScanDate else {
             return true
         }
 
-        let refreshInterval: TimeInterval
-        switch device.connection {
-        case .usb:
-            refreshInterval = Self.usbConnectedDeviceAutoRefreshInterval
-        case .network:
-            refreshInterval = Self.networkConnectedDeviceAutoRefreshInterval
+        let reconnectGracePeriod: TimeInterval = 5 * 60
+        if Date().timeIntervalSince(lastScanDate) < reconnectGracePeriod {
+            return false
         }
 
-        return Date().timeIntervalSince(lastScanDate) >= refreshInterval
+        return shouldRefreshConnectedDeviceSource(source, device: device)
+    }
+
+    private func connectedDeviceSourceHasRefreshDebt(_ source: MinecraftSource) -> Bool {
+        guard source.origin.kind == .connectedDevice else {
+            return false
+        }
+
+        guard !source.rawItems.isEmpty else {
+            return true
+        }
+
+        let itemCount = source.rawItems.count
+        return source.previewLoadedCount < itemCount || source.sizeLoadedCount < itemCount
     }
 
     private func cancelFooterReset() {
@@ -2052,21 +2170,64 @@ final class SourceLibrary: ObservableObject {
         footerResetTask = nil
     }
 
-    private func initialScanStatus(for source: MinecraftSource) -> String {
-        switch source.origin {
-        case .localFolder:
+    private func initialScanStatus(for source: MinecraftSource, mode: SourceDiscoveryMode) -> String {
+        switch (source.origin, mode) {
+        case (.localFolder, .fullScan):
             return "Preparing folder scan..."
-        case .connectedDevice:
+        case (.localFolder, .reconcile):
+            return "Preparing cached library refresh..."
+        case (.connectedDevice, .fullScan):
             return "Connecting to device and discovering Minecraft items..."
+        case (.connectedDevice, .reconcile):
+            return "Connecting to device and refreshing cached library..."
         }
     }
 
-    private func scanningLibraryStatus(for source: MinecraftSource) -> String {
-        switch source.origin {
-        case .localFolder:
+    private func scanningLibraryStatus(for source: MinecraftSource, mode: SourceDiscoveryMode) -> String {
+        switch (source.origin, mode) {
+        case (.localFolder, .fullScan):
             return "Scanning Minecraft library..."
-        case .connectedDevice:
+        case (.localFolder, .reconcile):
+            return "Reconciling cached library..."
+        case (.connectedDevice, .fullScan):
             return "Scanning Minecraft library on device..."
+        case (.connectedDevice, .reconcile):
+            return "Reconciling cached device library..."
+        }
+    }
+
+    private func shouldReuseCachedItem(
+        _ cachedItem: MinecraftContentItem,
+        forDiscoveredItem discoveredItem: MinecraftContentItem,
+        source: MinecraftSource,
+        previousSnapshot: ItemSnapshot?
+    ) -> Bool {
+        guard cachedItem.contentType == discoveredItem.contentType else {
+            return false
+        }
+
+        guard cachedItem.metadataLoaded, cachedItem.previewLoaded, cachedItem.sizeLoaded else {
+            return false
+        }
+
+        switch source.origin.kind {
+        case .localFolder:
+            guard let previousSnapshot else {
+                return false
+            }
+
+            let currentModifiedDate = try? discoveredItem.folderURL
+                .resourceValues(forKeys: [.contentModificationDateKey])
+                .contentModificationDate
+            return previousSnapshot.modifiedDate == currentModifiedDate
+        case .connectedDevice:
+            return cachedItem.folderName == discoveredItem.folderName
+                && cachedItem.displayName == discoveredItem.displayName
+                && cachedItem.hasKnownIcon == discoveredItem.hasKnownIcon
+                && cachedItem.packUUID == discoveredItem.packUUID
+                && cachedItem.packVersion == discoveredItem.packVersion
+                && cachedItem.packMetadataDetails == discoveredItem.packMetadataDetails
+                && cachedItem.packReferences == discoveredItem.packReferences
         }
     }
 
@@ -2087,33 +2248,7 @@ final class SourceLibrary: ObservableObject {
         scanRootURL: URL,
         packMetadataByItemID: [URL: PackMetadata]
     ) -> SourceSnapshot {
-        let collectionSnapshots = MinecraftContentType.allCases.compactMap { type -> CollectionSnapshot? in
-            let collectionURL = scanRootURL.appendingPathComponent(type.collectionFolderName, isDirectory: true)
-            guard FileManager.default.fileExists(atPath: collectionURL.path) else {
-                return nil
-            }
-
-            let children = (try? FileManager.default.contentsOfDirectory(
-                at: collectionURL,
-                includingPropertiesForKeys: [.isDirectoryKey],
-                options: [.skipsHiddenFiles]
-            )) ?? []
-            let childDirectoryCount = children.filter {
-                (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
-            }.count
-            let modifiedDate = try? collectionURL.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
-
-            return CollectionSnapshot(
-                folderName: type.collectionFolderName,
-                modifiedDate: modifiedDate,
-                childDirectoryCount: childDirectoryCount,
-                fingerprint: [
-                    type.collectionFolderName,
-                    String(childDirectoryCount),
-                    modifiedDate?.timeIntervalSince1970.formatted() ?? "nil"
-                ].joined(separator: "::")
-            )
-        }
+        let collectionSnapshots = WorldScanner.collectionSnapshots(in: scanRootURL)
 
         let itemSnapshots = source.rawItems.map { item in
             let relativePath = item.folderURL.path.replacingOccurrences(of: scanRootURL.path + "/", with: "")
@@ -2323,6 +2458,15 @@ private actor SourceIndexActor {
         orderedItemIDs.append(item.id)
         itemsByID[item.id] = item
         indexedItemCount = discoveredCount
+        if item.metadataLoaded {
+            indexedDetailCount += 1
+        }
+        if item.previewLoaded {
+            previewLoadedCount += 1
+        }
+        if item.sizeLoaded {
+            sizeLoadedCount += 1
+        }
         return snapshotIfNeeded()
     }
 

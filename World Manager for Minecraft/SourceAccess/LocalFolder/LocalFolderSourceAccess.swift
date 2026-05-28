@@ -46,6 +46,7 @@ struct LocalFolderSourceAccess: SourceAccessMethod {
 
     nonisolated func discoverItems(
         for source: MinecraftSource,
+        mode: SourceDiscoveryMode,
         onDiscovered: @escaping @Sendable (MinecraftContentItem) -> Void
     ) async throws -> [MinecraftContentItem] {
         guard case .localFolder(let bookmarkData) = source.origin else {
@@ -78,6 +79,16 @@ struct LocalFolderSourceAccess: SourceAccessMethod {
             if accessedSecurityScope {
                 resolvedURL.stopAccessingSecurityScopedResource()
             }
+        }
+
+        if case .reconcile = mode,
+           let snapshot = source.snapshot {
+            return try discoverItemsByReconcilingCache(
+                for: source,
+                snapshot: snapshot,
+                resolvedURL: resolvedURL,
+                onDiscovered: onDiscovered
+            )
         }
 
         return try WorldScanner.discoverItems(in: resolvedURL, onDiscovered: onDiscovered)
@@ -119,5 +130,64 @@ struct LocalFolderSourceAccess: SourceAccessMethod {
     nonisolated func materializeItem(for item: MinecraftContentItem, in source: MinecraftSource) async throws -> URL {
         _ = source
         return item.folderURL
+    }
+
+    nonisolated private func discoverItemsByReconcilingCache(
+        for source: MinecraftSource,
+        snapshot: SourceSnapshot,
+        resolvedURL: URL,
+        onDiscovered: @escaping @Sendable (MinecraftContentItem) -> Void
+    ) throws -> [MinecraftContentItem] {
+        let currentCollections = Dictionary(
+            uniqueKeysWithValues: WorldScanner.collectionSnapshots(in: resolvedURL).map { ($0.folderName, $0) }
+        )
+        let previousCollections = Dictionary(
+            uniqueKeysWithValues: snapshot.collectionSnapshots.map { ($0.folderName, $0) }
+        )
+
+        var changedCollectionNames = Set<String>()
+        for type in MinecraftContentType.allCases {
+            let collectionName = type.collectionFolderName
+            let currentFingerprint = currentCollections[collectionName]?.fingerprint
+            let previousFingerprint = previousCollections[collectionName]?.fingerprint
+            if currentFingerprint != previousFingerprint {
+                changedCollectionNames.insert(collectionName)
+            }
+        }
+
+        let unchangedCollectionNames = Set(currentCollections.keys).subtracting(changedCollectionNames)
+        var reconciledItems = source.rawItems.filter { item in
+            guard let collectionName = topLevelCollectionName(for: item, sourceRootURL: resolvedURL) else {
+                return false
+            }
+
+            return unchangedCollectionNames.contains(collectionName)
+        }
+
+        for type in MinecraftContentType.allCases {
+            let collectionName = type.collectionFolderName
+            guard changedCollectionNames.contains(collectionName) else {
+                continue
+            }
+
+            let collectionURL = resolvedURL.appendingPathComponent(collectionName, isDirectory: true)
+            let discoveredItems = try WorldScanner.discoverItems(
+                inCollectionRootURL: collectionURL,
+                contentType: type
+            )
+            reconciledItems.append(contentsOf: discoveredItems)
+        }
+
+        reconciledItems.sort(by: WorldScanner.sortItems)
+        for item in reconciledItems {
+            onDiscovered(item)
+        }
+        return reconciledItems
+    }
+
+    nonisolated private func topLevelCollectionName(for item: MinecraftContentItem, sourceRootURL: URL) -> String? {
+        let relativePath = item.folderURL.path.replacingOccurrences(of: sourceRootURL.path + "/", with: "")
+        let components = relativePath.split(separator: "/")
+        return components.first.map(String.init)
     }
 }

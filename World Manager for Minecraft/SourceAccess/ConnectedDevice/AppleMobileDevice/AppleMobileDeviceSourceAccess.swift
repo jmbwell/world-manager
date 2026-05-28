@@ -101,8 +101,10 @@ struct AppleMobileDeviceSourceAccess: ConnectedDeviceSourceAccessMethod {
 
     nonisolated func discoverItems(
         for source: MinecraftSource,
+        mode: SourceDiscoveryMode,
         onDiscovered: @escaping @Sendable (MinecraftContentItem) -> Void
     ) async throws -> [MinecraftContentItem] {
+        _ = mode
         guard case .connectedDevice(_, let container) = source.origin else {
             throw SourceAccessError.accessFailed(
                 reason: "The selected source is not backed by a connected mobile device."

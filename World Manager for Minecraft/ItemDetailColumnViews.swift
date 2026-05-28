@@ -20,6 +20,7 @@ struct ItemDetailColumnView: View {
     let directoryPreviewLimit: Int
     let isEmpty: Bool
     let isPerformingItemAction: Bool
+    let areFileActionsEnabled: Bool
     let exportTitle: String?
     let exportAction: () -> Void
     let revealAction: () -> Void
@@ -42,6 +43,7 @@ struct ItemDetailColumnView: View {
                     contents: contents,
                     directoryPreviewLimit: directoryPreviewLimit,
                     isPerformingItemAction: isPerformingItemAction,
+                    areFileActionsEnabled: areFileActionsEnabled,
                     exportTitle: exportTitle,
                     exportAction: exportAction,
                     revealAction: revealAction,
@@ -60,7 +62,7 @@ struct ItemDetailColumnView: View {
                     Button(action: exportAction) {
                         Image(systemName: "arrow.down.circle")
                     }
-                    .disabled(isPerformingItemAction)
+                    .disabled(isPerformingItemAction || !areFileActionsEnabled)
                     .help(exportTitle ?? "Export")
                 }
 
@@ -68,14 +70,14 @@ struct ItemDetailColumnView: View {
                     Button(action: revealAction) {
                         Image(systemName: "folder")
                     }
-                    .disabled(isPerformingItemAction)
+                    .disabled(isPerformingItemAction || !areFileActionsEnabled)
                     .help("Reveal in Finder")
                 }
 
                 ToolbarItem {
                     ToolbarShareButton(
                         systemImage: "square.and.arrow.up",
-                        isEnabled: !isPerformingItemAction
+                        isEnabled: !isPerformingItemAction && areFileActionsEnabled
                     ) { anchorView in
                         shareAction(anchorView)
                     }
@@ -626,6 +628,7 @@ struct ItemDetailView: View {
     let contents: [DirectoryPreviewEntry]
     let directoryPreviewLimit: Int
     let isPerformingItemAction: Bool
+    let areFileActionsEnabled: Bool
     let exportTitle: String?
     let exportAction: () -> Void
     let revealAction: () -> Void
@@ -1186,7 +1189,7 @@ struct ItemDetailView: View {
         ActionPillButton(
             title: actionRowExportTitle,
             systemImage: "arrow.down.circle.fill",
-            isDisabled: isPerformingItemAction,
+            isDisabled: isPerformingItemAction || !areFileActionsEnabled,
             prominence: .primary,
             action: exportAction
         )
@@ -1194,7 +1197,7 @@ struct ItemDetailView: View {
         ActionPillButton(
             title: "Reveal",
             systemImage: "folder.fill",
-            isDisabled: isPerformingItemAction,
+            isDisabled: isPerformingItemAction || !areFileActionsEnabled,
             prominence: .secondary,
             action: revealAction
         )
@@ -1202,7 +1205,7 @@ struct ItemDetailView: View {
         SharingPillButton(
             title: "Share",
             systemImage: "square.and.arrow.up",
-            isEnabled: !isPerformingItemAction,
+            isEnabled: !isPerformingItemAction && areFileActionsEnabled,
             action: shareAction
         )
     }

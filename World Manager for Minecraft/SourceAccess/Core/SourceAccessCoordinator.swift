@@ -7,12 +7,18 @@
 
 import Foundation
 
+enum SourceDiscoveryMode: Sendable {
+    case fullScan
+    case reconcile
+}
+
 protocol SourceAccessMethod: Sendable {
     nonisolated var accessorIdentifier: SourceAccessorIdentifier { get }
     nonisolated func accessDescriptor(for source: MinecraftSource) -> SourceAccessDescriptor
     nonisolated func availability(for source: MinecraftSource) async -> SourceAvailability
     nonisolated func discoverItems(
         for source: MinecraftSource,
+        mode: SourceDiscoveryMode,
         onDiscovered: @escaping @Sendable (MinecraftContentItem) -> Void
     ) async throws -> [MinecraftContentItem]
     nonisolated func enrich(_ item: MinecraftContentItem, for source: MinecraftSource) async -> MinecraftContentItem
@@ -46,9 +52,11 @@ extension SourceAccessMethod {
 
     nonisolated func discoverItems(
         for source: MinecraftSource,
+        mode: SourceDiscoveryMode,
         onDiscovered: @escaping @Sendable (MinecraftContentItem) -> Void
     ) async throws -> [MinecraftContentItem] {
         _ = source
+        _ = mode
         _ = onDiscovered
         return []
     }
@@ -147,9 +155,14 @@ struct SourceAccessCoordinator: SourceAccessMethod {
 
     nonisolated func discoverItems(
         for source: MinecraftSource,
+        mode: SourceDiscoveryMode,
         onDiscovered: @escaping @Sendable (MinecraftContentItem) -> Void
     ) async throws -> [MinecraftContentItem] {
-        return try await accessMethod(for: source).discoverItems(for: source, onDiscovered: onDiscovered)
+        return try await accessMethod(for: source).discoverItems(
+            for: source,
+            mode: mode,
+            onDiscovered: onDiscovered
+        )
     }
 
     nonisolated func accessDescriptor(for source: MinecraftSource) -> SourceAccessDescriptor {
