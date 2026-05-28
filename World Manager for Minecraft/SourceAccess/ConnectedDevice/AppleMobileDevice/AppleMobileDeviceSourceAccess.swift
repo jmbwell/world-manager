@@ -103,7 +103,7 @@ struct AppleMobileDeviceSourceAccess: ConnectedDeviceSourceAccessMethod {
         for source: MinecraftSource,
         mode: SourceDiscoveryMode,
         onDiscovered: @escaping @Sendable (MinecraftContentItem) -> Void
-    ) async throws -> [MinecraftContentItem] {
+    ) async throws {
         _ = mode
         guard case .connectedDevice(_, let container) = source.origin else {
             throw SourceAccessError.accessFailed(
@@ -141,8 +141,6 @@ struct AppleMobileDeviceSourceAccess: ConnectedDeviceSourceAccessMethod {
         for item in items {
             onDiscovered(item)
         }
-
-        return items
     }
 
     nonisolated func enrich(_ item: MinecraftContentItem, for source: MinecraftSource) async -> MinecraftContentItem {

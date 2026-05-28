@@ -20,7 +20,7 @@ protocol SourceAccessMethod: Sendable {
         for source: MinecraftSource,
         mode: SourceDiscoveryMode,
         onDiscovered: @escaping @Sendable (MinecraftContentItem) -> Void
-    ) async throws -> [MinecraftContentItem]
+    ) async throws
     nonisolated func enrich(_ item: MinecraftContentItem, for source: MinecraftSource) async -> MinecraftContentItem
     nonisolated func loadPreviewAssets(for item: MinecraftContentItem, in source: MinecraftSource) async -> MinecraftContentItem
     nonisolated func loadPreviewAssets(for items: [MinecraftContentItem], in source: MinecraftSource) async -> [MinecraftContentItem]
@@ -54,11 +54,10 @@ extension SourceAccessMethod {
         for source: MinecraftSource,
         mode: SourceDiscoveryMode,
         onDiscovered: @escaping @Sendable (MinecraftContentItem) -> Void
-    ) async throws -> [MinecraftContentItem] {
+    ) async throws {
         _ = source
         _ = mode
         _ = onDiscovered
-        return []
     }
 
     nonisolated func enrich(_ item: MinecraftContentItem, for source: MinecraftSource) async -> MinecraftContentItem {
@@ -157,8 +156,8 @@ struct SourceAccessCoordinator: SourceAccessMethod {
         for source: MinecraftSource,
         mode: SourceDiscoveryMode,
         onDiscovered: @escaping @Sendable (MinecraftContentItem) -> Void
-    ) async throws -> [MinecraftContentItem] {
-        return try await accessMethod(for: source).discoverItems(
+    ) async throws {
+        try await accessMethod(for: source).discoverItems(
             for: source,
             mode: mode,
             onDiscovered: onDiscovered

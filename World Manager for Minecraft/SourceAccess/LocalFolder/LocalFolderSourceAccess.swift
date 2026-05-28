@@ -48,7 +48,7 @@ struct LocalFolderSourceAccess: SourceAccessMethod {
         for source: MinecraftSource,
         mode: SourceDiscoveryMode,
         onDiscovered: @escaping @Sendable (MinecraftContentItem) -> Void
-    ) async throws -> [MinecraftContentItem] {
+    ) async throws {
         guard case .localFolder(let bookmarkData) = source.origin else {
             throw SourceAccessError.accessFailed(
                 reason: "No local-folder access method is configured for this source type."
@@ -83,15 +83,16 @@ struct LocalFolderSourceAccess: SourceAccessMethod {
 
         if case .reconcile = mode,
            let snapshot = source.snapshot {
-            return try discoverItemsByReconcilingCache(
+            try discoverItemsByReconcilingCache(
                 for: source,
                 snapshot: snapshot,
                 resolvedURL: resolvedURL,
                 onDiscovered: onDiscovered
             )
+            return
         }
 
-        return try WorldScanner.discoverItems(in: resolvedURL, onDiscovered: onDiscovered)
+        _ = try WorldScanner.discoverItems(in: resolvedURL, onDiscovered: onDiscovered)
     }
 
     nonisolated func enrich(_ item: MinecraftContentItem, for source: MinecraftSource) async -> MinecraftContentItem {
@@ -137,7 +138,7 @@ struct LocalFolderSourceAccess: SourceAccessMethod {
         snapshot: SourceSnapshot,
         resolvedURL: URL,
         onDiscovered: @escaping @Sendable (MinecraftContentItem) -> Void
-    ) throws -> [MinecraftContentItem] {
+    ) throws {
         let currentCollections = Dictionary(
             uniqueKeysWithValues: WorldScanner.collectionSnapshots(in: resolvedURL).map { ($0.folderName, $0) }
         )
@@ -182,7 +183,6 @@ struct LocalFolderSourceAccess: SourceAccessMethod {
         for item in reconciledItems {
             onDiscovered(item)
         }
-        return reconciledItems
     }
 
     nonisolated private func topLevelCollectionName(for item: MinecraftContentItem, sourceRootURL: URL) -> String? {

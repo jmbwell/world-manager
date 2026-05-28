@@ -334,7 +334,7 @@ final class SourceLibrary: ObservableObject {
                 let accessMethod = sourceAccessMethod
                 let discoveryTask = Task.detached(priority: .userInitiated) {
                     do {
-                        _ = try await accessMethod.discoverItems(for: source, mode: mode) { item in
+                        try await accessMethod.discoverItems(for: source, mode: mode) { item in
                             continuation.yield(item)
                         }
                         continuation.finish()
@@ -630,46 +630,6 @@ final class SourceLibrary: ObservableObject {
         }
     }
 
-    private func handleEnrichedItem(_ enrichedItem: MinecraftContentItem, for sourceID: URL) {
-        var previousItem: MinecraftContentItem?
-
-        updateSource(sourceID) { source in
-            guard let index = source.rawItems.firstIndex(where: { $0.id == enrichedItem.id }) else {
-                return
-            }
-
-            previousItem = source.rawItems[index]
-            source.rawItems[index] = enrichedItem
-            source.indexedDetailCount += 1
-
-            if source.indexedDetailCount < source.indexedItemCount {
-                source.scanStatus = "Loaded details for \(source.indexedDetailCount) of \(source.indexedItemCount) items..."
-            }
-
-            handleMetadataUpdate(
-                for: enrichedItem,
-                previousItem: previousItem,
-                in: &source,
-                sourceID: sourceID
-            )
-        }
-    }
-
-    private func handleSizedItem(_ sizedItem: MinecraftContentItem, for sourceID: URL) {
-        updateSource(sourceID) { source in
-            guard let index = source.rawItems.firstIndex(where: { $0.id == sizedItem.id }) else {
-                return
-            }
-
-            source.rawItems[index].sizeBytes = sizedItem.sizeBytes
-            source.rawItems[index].sizeLoaded = sizedItem.sizeLoaded
-
-            if source.isScanning {
-                source.scanStatus = "Calculating sizes for \(source.rawItems.filter(\.sizeLoaded).count) of \(source.indexedItemCount) items..."
-            }
-        }
-    }
-
     private func rebuildNormalizedIndex(for sourceID: URL) {
         updateSource(sourceID) { source in
             let rawItems = source.rawItems.sorted(by: WorldScanner.sortItems)
@@ -921,39 +881,6 @@ final class SourceLibrary: ObservableObject {
         return "Failed to scan device library."
     }
 
-    private func handleDiscoveredItem(_ item: MinecraftContentItem, in source: inout MinecraftSource, sourceID: URL) {
-        guard isLogicalPackType(item.contentType) else {
-            return
-        }
-
-        let identity = packMetadata(for: item, sourceRootURL: source.folderURL).identity
-        refreshLogicalPack(identity: identity, in: &source, sourceID: sourceID)
-    }
-
-    private func handleMetadataUpdate(
-        for item: MinecraftContentItem,
-        previousItem: MinecraftContentItem?,
-        in source: inout MinecraftSource,
-        sourceID: URL
-    ) {
-        if isLogicalPackType(item.contentType) {
-            let newIdentity = packMetadata(for: item, sourceRootURL: source.folderURL).identity
-            let previousIdentity = previousItem.map { packMetadata(for: $0, sourceRootURL: source.folderURL).identity }
-
-            if let previousIdentity, previousIdentity != newIdentity {
-                refreshLogicalPack(identity: previousIdentity, in: &source, sourceID: sourceID)
-            }
-
-            refreshLogicalPack(identity: newIdentity, in: &source, sourceID: sourceID)
-            refreshWorldRelationships(in: &source, filteringTo: item.contentType)
-            return
-        }
-
-        if item.contentType == .world {
-            refreshWorldRelationship(for: item, in: &source)
-        }
-    }
-
     private func updateSource(_ sourceID: URL, mutate: (inout MinecraftSource) -> Void) {
         guard let index = sources.firstIndex(where: { $0.id == sourceID }) else {
             return
@@ -984,135 +911,6 @@ final class SourceLibrary: ObservableObject {
             source.sizeStageElapsed = snapshot.sizeStageElapsed
             source.sizeStageDuration = snapshot.sizeStageDuration
             source.lastScanDate = snapshot.lastScanDate
-        }
-    }
-
-    private func refreshLogicalPack(identity: PackIdentity, in source: inout MinecraftSource, sourceID: URL) {
-        let matchingItems = source.rawItems.filter { item in
-            guard isLogicalPackType(item.contentType) else {
-                return false
-            }
-
-            return packMetadata(for: item, sourceRootURL: source.folderURL).identity == identity
-        }
-
-        source.logicalPacks.removeAll { $0.id == identity }
-        source.packInstances.removeAll { $0.logicalPackID == identity }
-
-        guard !matchingItems.isEmpty else {
-            return
-        }
-
-        let representativeItem = matchingItems.reduce(matchingItems[0]) { current, candidate in
-            shouldPreferPackItem(candidate, over: current) ? candidate : current
-        }
-        let representativeMetadata = packMetadata(for: representativeItem, sourceRootURL: source.folderURL)
-
-        source.logicalPacks.append(
-            LogicalPack(
-                id: identity,
-                contentType: identity.type,
-                displayName: representativeItem.displayName,
-                uuid: representativeMetadata.uuid,
-                version: representativeMetadata.version,
-                representativeItemID: representativeItem.id,
-                instanceItemIDs: matchingItems.map(\.id).sorted {
-                    $0.path.localizedStandardCompare($1.path) == .orderedAscending
-                },
-                isSuspicious: identity.isSuspicious
-            )
-        )
-        source.logicalPacks.sort {
-            let nameOrder = $0.displayName.localizedStandardCompare($1.displayName)
-            if nameOrder != .orderedSame {
-                return nameOrder == .orderedAscending
-            }
-
-            return $0.id.id.localizedStandardCompare($1.id.id) == .orderedAscending
-        }
-
-        let rawWorlds = source.rawItems.filter { $0.contentType == .world }
-        source.packInstances.append(
-            contentsOf: matchingItems.map { item in
-                PackInstance(
-                    id: item.id,
-                    itemID: item.id,
-                    sourceID: sourceID,
-                    logicalPackID: identity,
-                    origin: packOrigin(for: item),
-                    hostWorldItemID: hostWorldItemID(for: item, in: rawWorlds)
-                )
-            }
-        )
-        source.packInstances.sort {
-            $0.itemID.path.localizedStandardCompare($1.itemID.path) == .orderedAscending
-        }
-    }
-
-    private func refreshWorldRelationships(in source: inout MinecraftSource, filteringTo type: MinecraftContentType? = nil) {
-        let worlds = source.rawItems.filter { $0.contentType == .world }
-        for world in worlds {
-            guard type == nil || world.packReferences.contains(where: { $0.type == type }) else {
-                continue
-            }
-
-            refreshWorldRelationship(for: world, in: &source)
-        }
-    }
-
-    private func refreshWorldRelationship(for world: MinecraftContentItem, in source: inout MinecraftSource) {
-        source.worldPackRelationships.removeAll { $0.worldItemID == world.id }
-        source.logicalWorlds.removeAll { $0.itemID == world.id }
-
-        let logicalPacksByID = Dictionary(uniqueKeysWithValues: source.logicalPacks.map { ($0.id, $0) })
-        var usedPackIDs = Set<PackIdentity>()
-        var unresolvedReferences: [ContentPackReference] = []
-        var relationships: [WorldPackRelationship] = []
-
-        for reference in world.packReferences {
-            let referenceIdentity = PackIdentity(
-                type: reference.type,
-                uuid: reference.uuid,
-                version: reference.version,
-                fallbackName: reference.name,
-                fallbackLocationHint: world.folderName
-            )
-            let resolvedID = logicalPacksByID[referenceIdentity]?.id
-
-            if let resolvedID {
-                usedPackIDs.insert(resolvedID)
-            } else {
-                unresolvedReferences.append(reference)
-            }
-
-            relationships.append(
-                WorldPackRelationship(
-                    worldItemID: world.id,
-                    logicalPackID: resolvedID,
-                    reference: reference
-                )
-            )
-        }
-
-        source.worldPackRelationships.append(contentsOf: relationships)
-        source.logicalWorlds.append(
-            LogicalWorld(
-                id: world.id,
-                itemID: world.id,
-                usedPackIDs: usedPackIDs.sorted { $0.id.localizedStandardCompare($1.id) == .orderedAscending },
-                unresolvedReferences: unresolvedReferences
-            )
-        )
-        let rawItemsByID = Dictionary(uniqueKeysWithValues: source.rawItems.map { ($0.id, $0) })
-        source.logicalWorlds.sort {
-            guard
-                let lhs = rawItemsByID[$0.itemID],
-                let rhs = rawItemsByID[$1.itemID]
-            else {
-                return $0.itemID.path.localizedStandardCompare($1.itemID.path) == .orderedAscending
-            }
-
-            return WorldScanner.sortItems(lhs, rhs)
         }
     }
 
