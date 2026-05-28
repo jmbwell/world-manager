@@ -464,8 +464,10 @@ private struct ConnectedDeviceTransportIcon: View {
     }
 }
 
+#if DEBUG
 struct SidebarColumnViews_Previews: PreviewProvider {
     static var previews: some View {
         SidebarColumnPreviewContainer()
     }
 }
+#endif

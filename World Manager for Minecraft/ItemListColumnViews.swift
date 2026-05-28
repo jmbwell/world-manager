@@ -184,8 +184,10 @@ private struct ContentRowView: View {
     }
 }
 
+#if DEBUG
 struct ItemListColumnViews_Previews: PreviewProvider {
     static var previews: some View {
         ItemListColumnPreviewContainer()
     }
 }
+#endif

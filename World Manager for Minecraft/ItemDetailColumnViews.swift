@@ -1241,8 +1241,10 @@ struct ItemDetailView: View {
     }
 }
 
+#if DEBUG
 struct ItemDetailColumnViews_Previews: PreviewProvider {
     static var previews: some View {
         ItemDetailColumnPreviewContainer()
     }
 }
+#endif

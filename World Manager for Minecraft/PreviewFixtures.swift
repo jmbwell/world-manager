@@ -1,6 +1,8 @@
 import Foundation
 import SwiftUI
 
+#if DEBUG
+
 enum PreviewFixtures {
     static let baseDate = Date(timeIntervalSinceReferenceDate: 770_000_000)
 
@@ -352,3 +354,4 @@ struct ItemDetailColumnPreviewContainer: View {
         }
     }
 }
+#endif
