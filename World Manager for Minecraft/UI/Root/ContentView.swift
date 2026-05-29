@@ -23,19 +23,16 @@ struct ContentView: View {
 
     private let connectedDeviceAccess: AppleMobileDeviceSourceAccess
     private let deviceSourceFactory: ConnectedDeviceSourceFactory
+    private let itemActionService: ContentItemActionService
     private let directoryPreviewLimit = 12
 
     init() {
-        let connectedDeviceAccess = AppleMobileDeviceSourceAccess()
-        self.connectedDeviceAccess = connectedDeviceAccess
-        self.deviceSourceFactory = ConnectedDeviceSourceFactory()
+        let dependencies = ContentViewDependencies.makeDefault()
+        self.connectedDeviceAccess = dependencies.connectedDeviceAccess
+        self.deviceSourceFactory = dependencies.deviceSourceFactory
+        self.itemActionService = dependencies.itemActionService
         _library = StateObject(
-            wrappedValue: SourceLibrary(
-                sourceAccessMethod: SourceAccessCoordinator(
-                    connectedDeviceAccess: connectedDeviceAccess
-                ),
-                connectedDeviceAccessMethod: connectedDeviceAccess
-            )
+            wrappedValue: dependencies.library
         )
     }
 
@@ -671,7 +668,7 @@ struct ContentView: View {
         panel.showsTagField = false
         panel.title = exportMenuTitle(for: item)
         panel.prompt = "Save"
-        panel.nameFieldStringValue = ContentPackageExporter.suggestedBaseFilename(for: item)
+        panel.nameFieldStringValue = itemActionService.suggestedFilename(for: item)
         panel.allowedContentTypes = [archiveType(for: item)]
 
         guard panel.runModal() == .OK, let destinationURL = panel.url else {
@@ -683,7 +680,7 @@ struct ContentView: View {
         Task {
             do {
                 let finalURL = try await Task.detached(priority: .userInitiated) {
-                    try await ContentPackageExporter.createArchiveFile(
+                    try await itemActionService.createArchiveFile(
                         for: item,
                         source: source,
                         destinationURL: destinationURL
@@ -713,7 +710,7 @@ struct ContentView: View {
         Task {
             do {
                 let shareURL = try await Task.detached(priority: .userInitiated) {
-                    try await ContentPackageExporter.createArchiveFile(
+                    try await itemActionService.createArchiveFile(
                         for: item,
                         source: source
                     )
