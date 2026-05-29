@@ -10,7 +10,7 @@ import Foundation
 import OSLog
 
 @MainActor
-final class SourceLibrary: ObservableObject, SourceScanSessionHosting, SourcePersistenceHosting, ConnectedDeviceRuntimeHosting {
+final class SourceLibrary: ObservableObject, SourceScanSessionHosting, SourcePersistenceHosting, ConnectedDeviceRuntimeHosting, LocalSourceRuntimeHosting {
     private static let enrichmentWorkerCount = 4
     private static let sizeWorkerCount = 2
     private static let minimumVisibleScanDuration: TimeInterval = 0.8
@@ -226,7 +226,7 @@ final class SourceLibrary: ObservableObject, SourceScanSessionHosting, SourcePer
         scanTasks[sourceID] = task
     }
 
-    private var hasActiveScan: Bool {
+    var hasActiveScan: Bool {
         sources.contains(where: \.isScanning)
     }
 
@@ -477,77 +477,15 @@ final class SourceLibrary: ObservableObject, SourceScanSessionHosting, SourcePer
     }
 
     private func runLocalSourceRefreshLoop() async {
-        while !Task.isCancelled && !isShuttingDown {
-            if hasActiveScan {
-                do {
-                    try await Task.sleep(for: .seconds(Self.localSourceRefreshInterval))
-                } catch {
-                    return
-                }
-                continue
-            }
-
-            await refreshLocalSources()
-
-            do {
-                try await Task.sleep(for: .seconds(Self.localSourceRefreshInterval))
-            } catch {
-                return
-            }
-        }
+        await LocalSourceRuntime.runRefreshLoop(
+            on: self,
+            refreshInterval: Self.localSourceRefreshInterval,
+            accessMethod: sourceAccessMethod
+        )
     }
 
     func refreshLocalSources() async {
-        guard !hasActiveScan else {
-            return
-        }
-
-        let localSourceIDs = sources
-            .filter { $0.origin.kind == .localFolder }
-            .map(\.id)
-
-        for sourceID in localSourceIDs {
-            guard !Task.isCancelled, !isShuttingDown else {
-                return
-            }
-
-            guard let currentSource = source(withID: sourceID) else {
-                continue
-            }
-
-            let availability = await sourceAccessMethod.availability(for: currentSource)
-            let transition = updateAvailability(for: sourceID, to: availability)
-
-            guard let refreshedSource = source(withID: sourceID) else {
-                continue
-            }
-
-            if transition.becameAvailable {
-                queueAutomaticSync(
-                    for: sourceID,
-                    reason: refreshedSource.hasCachedContent
-                        ? "Folder available. Refreshing cached library..."
-                        : "Folder available. Scanning Minecraft library..."
-                )
-                continue
-            }
-
-            guard refreshedSource.availability == SourceAvailability.available, !refreshedSource.isScanning else {
-                continue
-            }
-
-            if SourceRestoration.needsReconcile(
-                refreshedSource,
-                currentCollectionSnapshots: currentCollectionSnapshots(for:)
-            ) {
-                queueAutomaticSync(
-                    for: sourceID,
-                    reason: refreshedSource.hasCachedContent
-                        ? "Detected changes. Refreshing cached library..."
-                        : "Scanning Minecraft library..."
-                )
-            }
-        }
+        await LocalSourceRuntime.refreshSources(on: self, using: sourceAccessMethod)
     }
 
     func refreshConnectedDevices() async {
