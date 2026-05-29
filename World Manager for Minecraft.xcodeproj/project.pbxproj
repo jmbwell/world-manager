@@ -88,7 +88,7 @@
 		52C72BEF2FC736C3009928CB /* Exceptions for "World Manager for Minecraft" folder in "MinecraftPackageThumbnailExtension" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
-				Models/MinecraftContentItem.swift,
+				Models/Content/MinecraftContentItem.swift,
 				QuickLook/MinecraftPackageThumbnailRenderer.swift,
 				QuickLook/MinecraftPackageTypes.swift,
 				Services/ArchiveInspection/BedrockLevelMetadataDecoder.swift,
@@ -101,7 +101,7 @@
 		52C72BF02FC736C3009928CB /* Exceptions for "World Manager for Minecraft" folder in "MinecraftPackagePreviewExtension" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
-				Models/MinecraftContentItem.swift,
+				Models/Content/MinecraftContentItem.swift,
 				QuickLook/MinecraftPackageQuickLookModel.swift,
 				QuickLook/MinecraftPackageThumbnailRenderer.swift,
 				QuickLook/MinecraftPackageTypes.swift,
