@@ -269,13 +269,13 @@ final class SourceLibrary: ObservableObject {
             return
         }
         let previousSource = source
-        let performanceContext = performanceContext(for: source)
+        let performanceContext = SourceScanPolicy.performanceContext(for: source)
 
         updateSource(sourceID) { source in
             source.isScanning = true
             source.scanError = nil
             source.scanDiagnostic = nil
-            source.scanStatus = initialScanStatus(for: source, mode: mode)
+            source.scanStatus = SourceScanPolicy.initialStatus(for: source, mode: mode)
             source.scanProgress = nil
             source.indexedItemCount = 0
             source.indexedDetailCount = 0
@@ -301,7 +301,7 @@ final class SourceLibrary: ObservableObject {
 
         updateSource(sourceID) { source in
             source.availability = .available
-            source.scanStatus = scanningLibraryStatus(for: source, mode: mode)
+            source.scanStatus = SourceScanPolicy.scanningLibraryStatus(for: source, mode: mode)
         }
 
         do {
@@ -367,7 +367,7 @@ final class SourceLibrary: ObservableObject {
                 let itemForIndex: MinecraftContentItem
                 if shouldReconcileFromCache,
                    let cachedItem = previousItemsByID[item.id],
-                   shouldReuseCachedItem(
+                   SourceScanPolicy.shouldReuseCachedItem(
                         cachedItem,
                         forDiscoveredItem: item,
                         source: source,
@@ -500,7 +500,7 @@ final class SourceLibrary: ObservableObject {
                 }
                 updateSource(sourceID) { source in
                     if source.origin.kind == .localFolder {
-                        source.snapshot = buildSnapshot(for: source, scanRootURL: scanContextURL, packMetadataByItemID: [:])
+                        source.snapshot = SourceScanPolicy.buildSnapshot(for: source, scanRootURL: scanContextURL)
                     } else {
                         source.snapshot = nil
                     }
@@ -572,7 +572,7 @@ final class SourceLibrary: ObservableObject {
             }
             updateSource(sourceID) { source in
                 if source.origin.kind == .localFolder {
-                    source.snapshot = buildSnapshot(for: source, scanRootURL: scanContextURL, packMetadataByItemID: [:])
+                    source.snapshot = SourceScanPolicy.buildSnapshot(for: source, scanRootURL: scanContextURL)
                 } else {
                     source.snapshot = nil
                 }
@@ -593,7 +593,7 @@ final class SourceLibrary: ObservableObject {
             }
         } catch {
             updateSource(sourceID) { source in
-                if shouldPreservePartialScanContent(currentSource: source, previousSource: previousSource) {
+                if SourceScanRecovery.shouldPreservePartialResults(currentSource: source, previousSource: previousSource) {
                     source.scanStatus = source.indexedItemCount == 0
                         ? previousSource.scanStatus
                         : "Loaded \(source.indexedDetailCount) items."
@@ -601,21 +601,17 @@ final class SourceLibrary: ObservableObject {
                         ? "Showing the most recent partial scan results."
                         : "Showing the most recent partial scan results after the scan stopped early."
                     if source.origin.kind == .localFolder, !source.rawItems.isEmpty {
-                        source.snapshot = buildSnapshot(
-                            for: source,
-                            scanRootURL: scanContextURL,
-                            packMetadataByItemID: [:]
-                        )
+                        source.snapshot = SourceScanPolicy.buildSnapshot(for: source, scanRootURL: scanContextURL)
                     }
                 } else {
-                    restoreScannedContent(from: previousSource, into: &source)
+                    SourceScanRecovery.restoreIndexedState(from: previousSource, into: &source)
                 }
                 source.availability = Task.isCancelled
                     ? previousSource.availability
-                    : availabilityStatus(for: error, defaultingTo: previousSource.availability)
+                    : SourceScanPolicy.availabilityStatus(for: error, defaultingTo: previousSource.availability)
                 source.scanError = Task.isCancelled
                     ? previousSource.scanError
-                    : friendlyScanError(for: error, source: source)
+                    : SourceScanPolicy.friendlyError(for: error, source: source)
                 source.scanDiagnostic = Task.isCancelled
                     ? source.scanDiagnostic
                     : (source.scanDiagnostic ?? error.localizedDescription)
@@ -779,55 +775,6 @@ final class SourceLibrary: ObservableObject {
         }
     }
 
-    private func restoreScannedContent(from previousSource: MinecraftSource, into source: inout MinecraftSource) {
-        source.displayItems = previousSource.displayItems
-        source.rawItems = previousSource.rawItems
-        source.logicalPacks = previousSource.logicalPacks
-        source.logicalWorlds = previousSource.logicalWorlds
-        source.packInstances = previousSource.packInstances
-        source.worldPackRelationships = previousSource.worldPackRelationships
-        source.snapshot = previousSource.snapshot
-        source.indexedItemCount = previousSource.indexedItemCount
-        source.indexedDetailCount = previousSource.indexedDetailCount
-        source.previewLoadedCount = previousSource.previewLoadedCount
-        source.sizeLoadedCount = previousSource.sizeLoadedCount
-        source.scanProgress = previousSource.scanProgress
-        source.lastScanDate = previousSource.lastScanDate
-    }
-
-    private func shouldPreservePartialScanContent(
-        currentSource: MinecraftSource,
-        previousSource: MinecraftSource
-    ) -> Bool {
-        if currentSource.rawItems.count > previousSource.rawItems.count {
-            return true
-        }
-
-        if currentSource.indexedDetailCount > previousSource.indexedDetailCount {
-            return true
-        }
-
-        if currentSource.previewLoadedCount > previousSource.previewLoadedCount {
-            return true
-        }
-
-        if currentSource.sizeLoadedCount > previousSource.sizeLoadedCount {
-            return true
-        }
-
-        return false
-    }
-
-    private func performanceContext(for source: MinecraftSource) -> String {
-        switch source.origin {
-        case .localFolder:
-            return "source=\(source.displayName) kind=local"
-        case .connectedDevice(let device, let container):
-            let transport = device.connection == .usb ? "usb" : "network"
-            return "source=\(source.displayName) kind=connected-device transport=\(transport) udid=\(device.udid) app=\(container.appID)"
-        }
-    }
-
     private func logScanStage(
         _ stage: String,
         elapsed: TimeInterval,
@@ -851,33 +798,6 @@ final class SourceLibrary: ObservableObject {
         Self.performanceLogger.log(
             "\(stage, privacy: .public) device=\(device.name, privacy: .public) transport=\(transport, privacy: .public) udid=\(device.udid, privacy: .public) elapsed=\(elapsed, format: .fixed(precision: 3))s containers=\(containerCount) error=\(errorDescription, privacy: .public)"
         )
-    }
-
-    private func friendlyScanError(for error: Error, source: MinecraftSource) -> String {
-        let description = error.localizedDescription
-
-        guard source.origin.kind == .connectedDevice else {
-            return "Failed to scan folder: \(description)"
-        }
-
-        if description.contains("AMDeviceCreateHouseArrestService returned -402653093")
-            || description.contains("kAMDServiceLimitError") {
-            return "Device is busy. Too many device access sessions were open, so the scan could not start."
-        }
-
-        if description.localizedCaseInsensitiveContains("InstallationLookupFailed") {
-            return "The device refused access to the Minecraft app container."
-        }
-
-        if description.localizedCaseInsensitiveContains("not paired") {
-            return "The device is not paired with this Mac."
-        }
-
-        if description.localizedCaseInsensitiveContains("no longer available") {
-            return "The device disconnected during the scan."
-        }
-
-        return "Failed to scan device library."
     }
 
     private func updateSource(_ sourceID: URL, mutate: (inout MinecraftSource) -> Void) {
@@ -1778,116 +1698,6 @@ final class SourceLibrary: ObservableObject {
 
         let itemCount = source.rawItems.count
         return source.previewLoadedCount < itemCount || source.sizeLoadedCount < itemCount
-    }
-
-    private func initialScanStatus(for source: MinecraftSource, mode: SourceDiscoveryMode) -> String {
-        switch (source.origin, mode) {
-        case (.localFolder, .fullScan):
-            return "Preparing folder scan..."
-        case (.localFolder, .reconcile):
-            return "Preparing cached library refresh..."
-        case (.connectedDevice, .fullScan):
-            return "Connecting to device and discovering Minecraft items..."
-        case (.connectedDevice, .reconcile):
-            return "Connecting to device and refreshing cached library..."
-        }
-    }
-
-    private func scanningLibraryStatus(for source: MinecraftSource, mode: SourceDiscoveryMode) -> String {
-        switch (source.origin, mode) {
-        case (.localFolder, .fullScan):
-            return "Scanning Minecraft library..."
-        case (.localFolder, .reconcile):
-            return "Reconciling cached library..."
-        case (.connectedDevice, .fullScan):
-            return "Scanning Minecraft library on device..."
-        case (.connectedDevice, .reconcile):
-            return "Reconciling cached device library..."
-        }
-    }
-
-    private func shouldReuseCachedItem(
-        _ cachedItem: MinecraftContentItem,
-        forDiscoveredItem discoveredItem: MinecraftContentItem,
-        source: MinecraftSource,
-        previousSnapshot: ItemSnapshot?
-    ) -> Bool {
-        guard cachedItem.contentType == discoveredItem.contentType else {
-            return false
-        }
-
-        guard cachedItem.metadataLoaded, cachedItem.previewLoaded, cachedItem.sizeLoaded else {
-            return false
-        }
-
-        switch source.origin.kind {
-        case .localFolder:
-            guard let previousSnapshot else {
-                return false
-            }
-
-            let currentModifiedDate = try? discoveredItem.folderURL
-                .resourceValues(forKeys: [.contentModificationDateKey])
-                .contentModificationDate
-            return previousSnapshot.modifiedDate == currentModifiedDate
-        case .connectedDevice:
-            return cachedItem.folderName == discoveredItem.folderName
-                && cachedItem.displayName == discoveredItem.displayName
-                && cachedItem.hasKnownIcon == discoveredItem.hasKnownIcon
-                && cachedItem.packUUID == discoveredItem.packUUID
-                && cachedItem.packVersion == discoveredItem.packVersion
-                && cachedItem.packMetadataDetails == discoveredItem.packMetadataDetails
-                && cachedItem.packReferences == discoveredItem.packReferences
-        }
-    }
-
-    private func buildSnapshot(
-        for source: MinecraftSource,
-        scanRootURL: URL,
-        packMetadataByItemID: [URL: PackMetadata]
-    ) -> SourceSnapshot {
-        let collectionSnapshots = WorldScanner.collectionSnapshots(in: scanRootURL)
-
-        let itemSnapshots = source.rawItems.map { item in
-            let relativePath = item.folderURL.path.replacingOccurrences(of: scanRootURL.path + "/", with: "")
-            let metadata = packMetadataByItemID[item.id]
-            return ItemSnapshot(
-                id: item.id,
-                relativePath: relativePath,
-                modifiedDate: item.modifiedDate,
-                sizeBytes: item.sizeBytes,
-                packUUID: metadata?.uuid,
-                packVersion: metadata?.version
-            )
-        }.sorted { (lhs: ItemSnapshot, rhs: ItemSnapshot) in
-            lhs.relativePath.localizedStandardCompare(rhs.relativePath) == .orderedAscending
-        }
-
-        let rootModifiedDate = try? scanRootURL
-            .resourceValues(forKeys: [.contentModificationDateKey])
-            .contentModificationDate
-
-        return SourceSnapshot(
-            sourceID: source.id,
-            rootModifiedDate: rootModifiedDate,
-            collectionSnapshots: collectionSnapshots,
-            itemSnapshots: itemSnapshots
-        )
-    }
-
-    private func availabilityStatus(for error: Error, defaultingTo currentAvailability: SourceAvailability) -> SourceAvailability {
-        if let accessError = error as? SourceAccessError {
-            switch accessError {
-            case .deviceUnavailable:
-                return .disconnected
-            case .deviceNotTrusted:
-                return .limited
-            case .appNotAccessible, .minecraftFolderMissing, .accessFailed:
-                return .unavailable
-            }
-        }
-
-        return currentAvailability
     }
 
     private func shouldPreferPackItem(_ candidate: MinecraftContentItem, over existing: MinecraftContentItem) -> Bool {
