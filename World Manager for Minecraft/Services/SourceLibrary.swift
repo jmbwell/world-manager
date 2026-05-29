@@ -10,7 +10,7 @@ import Foundation
 import OSLog
 
 @MainActor
-final class SourceLibrary: ObservableObject, SourceScanSessionHosting, SourcePersistenceHosting {
+final class SourceLibrary: ObservableObject, SourceScanSessionHosting, SourcePersistenceHosting, ConnectedDeviceRuntimeHosting {
     private static let enrichmentWorkerCount = 4
     private static let sizeWorkerCount = 2
     private static let minimumVisibleScanDuration: TimeInterval = 0.8
@@ -26,7 +26,7 @@ final class SourceLibrary: ObservableObject, SourceScanSessionHosting, SourcePer
     )
 
     @Published var sources: [MinecraftSource] = []
-    @Published private(set) var connectedDevices: [ConnectedDeviceSidebarEntry] = []
+    @Published var connectedDevices: [ConnectedDeviceSidebarEntry] = []
     @Published var isRestoringPersistedSources = true
 
     private var scanTasks: [URL: Task<Void, Never>] = [:]
@@ -38,9 +38,9 @@ final class SourceLibrary: ObservableObject, SourceScanSessionHosting, SourcePer
     private let connectedDeviceAccessMethod: ConnectedDeviceSourceAccessMethod?
     private let notificationService: ScanNotificationServicing
     private let connectedDeviceSourceFactory = ConnectedDeviceSourceFactory()
-    private var lastMatchedConnectedSourceIDs: Set<URL> = []
-    private var cachedDeviceDiscoveryByUDID: [String: CachedConnectedDeviceDiscovery] = [:]
-    private var isShuttingDown = false
+    var lastMatchedConnectedSourceIDs: Set<URL> = []
+    var cachedDeviceDiscoveryByUDID: [String: CachedConnectedDeviceDiscovery] = [:]
+    var isShuttingDown = false
 
     init(
         persistenceStore: SourcePersistenceStore = .shared,
@@ -230,7 +230,7 @@ final class SourceLibrary: ObservableObject, SourceScanSessionHosting, SourcePer
         sources.contains(where: \.isScanning)
     }
 
-    private var hasActiveConnectedDeviceScan: Bool {
+    var hasActiveConnectedDeviceScan: Bool {
         sources.contains { $0.isScanning && $0.origin.kind == .connectedDevice }
     }
 
@@ -464,29 +464,16 @@ final class SourceLibrary: ObservableObject, SourceScanSessionHosting, SourcePer
     }
 
     private func runConnectedDeviceRefreshLoop() async {
-        while !Task.isCancelled && !isShuttingDown {
-            if hasActiveConnectedDeviceScan {
-                do {
-                    try await Task.sleep(for: .seconds(Self.connectedDeviceRefreshIntervalWhileScanning))
-                } catch {
-                    return
-                }
-                continue
-            }
-
-            await refreshConnectedDevices()
-
-            do {
-                let refreshInterval = sources.contains {
-                    $0.isScanning && $0.origin.kind == .connectedDevice
-                }
-                    ? Self.connectedDeviceRefreshIntervalWhileScanning
-                    : Self.connectedDeviceRefreshInterval
-                try await Task.sleep(for: .seconds(refreshInterval))
-            } catch {
-                return
-            }
+        guard let connectedDeviceAccessMethod else {
+            return
         }
+
+        await ConnectedDeviceRuntime.runRefreshLoop(
+            on: self,
+            refreshInterval: Self.connectedDeviceRefreshInterval,
+            refreshIntervalWhileScanning: Self.connectedDeviceRefreshIntervalWhileScanning,
+            accessMethod: connectedDeviceAccessMethod
+        )
     }
 
     private func runLocalSourceRefreshLoop() async {
@@ -564,232 +551,11 @@ final class SourceLibrary: ObservableObject, SourceScanSessionHosting, SourcePer
     }
 
     func refreshConnectedDevices() async {
-        guard !isShuttingDown else {
-            return
-        }
-
-        guard !hasActiveConnectedDeviceScan else {
-            return
-        }
-
         guard let connectedDeviceAccessMethod else {
             return
         }
 
-        let devices: [ConnectedDevice]
-        do {
-            devices = try await connectedDeviceAccessMethod.listConnectedDevices()
-        } catch {
-            markAllConnectedDeviceSourcesDisconnected()
-            connectedDevices = []
-            lastMatchedConnectedSourceIDs = []
-            return
-        }
-
-        var entries: [ConnectedDeviceSidebarEntry] = []
-        var matchedSourceIDs = Set<URL>()
-        let refreshContext = ConnectedDeviceRefreshContext(
-            existingSources: sources,
-            sourceFactory: connectedDeviceSourceFactory
-        )
-        let activeScanningDeviceUDIDs = Set(
-            sources.compactMap { source -> String? in
-                guard source.isScanning, case .connectedDevice(let device, _) = source.origin else {
-                    return nil
-                }
-
-                return device.udid
-            }
-        )
-        let currentDeviceUDIDs = Set(devices.map(\.udid))
-        cachedDeviceDiscoveryByUDID = cachedDeviceDiscoveryByUDID.filter { currentDeviceUDIDs.contains($0.key) }
-
-        for device in devices {
-            let knownSourceIDs = refreshContext.knownSourceIDs(for: device)
-            if !knownSourceIDs.isEmpty {
-                matchedSourceIDs.formUnion(knownSourceIDs)
-                let cachedContainers = cachedDeviceDiscoveryByUDID[device.udid]?.containers ?? []
-                for sourceID in knownSourceIDs {
-                    refreshMatchedConnectedDeviceSource(
-                        sourceID: sourceID,
-                        device: device,
-                        containers: cachedContainers
-                    )
-                }
-
-                continue
-            }
-
-            let containers: [DeviceAppContainer]
-            let discoveryErrorDescription: String?
-            if let cachedDiscovery = ConnectedDeviceDiscoveryCachePolicy.cachedDiscovery(
-                for: device,
-                cache: cachedDeviceDiscoveryByUDID,
-                isActivelyScanning: activeScanningDeviceUDIDs.contains(device.udid)
-            ) {
-                containers = cachedDiscovery.containers
-                discoveryErrorDescription = cachedDiscovery.discoveryErrorDescription
-            } else {
-                let containerDiscoveryStartTime = Date()
-
-                do {
-                    containers = try await connectedDeviceAccessMethod.listAccessibleContainers(for: device)
-                    discoveryErrorDescription = nil
-                    cacheDeviceDiscovery(
-                        device: device,
-                        containers: containers,
-                        discoveryErrorDescription: nil
-                    )
-                    logDeviceRefreshStage(
-                        "Container discovery",
-                        elapsed: Date().timeIntervalSince(containerDiscoveryStartTime),
-                        device: device,
-                        containerCount: containers.count
-                    )
-                } catch {
-                    containers = []
-                    discoveryErrorDescription = error.localizedDescription
-                    cacheDeviceDiscovery(
-                        device: device,
-                        containers: [],
-                        discoveryErrorDescription: error.localizedDescription
-                    )
-                    logDeviceRefreshStage(
-                        "Container discovery failed",
-                        elapsed: Date().timeIntervalSince(containerDiscoveryStartTime),
-                        device: device,
-                        containerCount: 0,
-                        error: error
-                    )
-                }
-            }
-
-            let matchedSourceID = refreshContext.matchingSourceID(for: device, containers: containers)
-
-            if let matchedSourceID {
-                matchedSourceIDs.insert(matchedSourceID)
-                refreshMatchedConnectedDeviceSource(
-                    sourceID: matchedSourceID,
-                    device: device,
-                    containers: containers
-                )
-            }
-
-            let shouldDisplayEntry =
-                matchedSourceID == nil
-                && !refreshContext.hasKnownSource(for: device)
-                && (!containers.isEmpty || device.trustState != .trusted)
-
-            if shouldDisplayEntry {
-                entries.append(
-                    ConnectedDeviceSidebarEntry(
-                        device: device,
-                        containers: containers,
-                        matchedSourceID: matchedSourceID,
-                        discoveryErrorDescription: discoveryErrorDescription
-                    )
-                )
-            }
-        }
-
-        markDisconnectedConnectedDeviceSources(excluding: matchedSourceIDs)
-
-        connectedDevices = entries.sorted {
-            let lhsKnown = $0.matchedSourceID != nil
-            let rhsKnown = $1.matchedSourceID != nil
-            if lhsKnown != rhsKnown {
-                return lhsKnown && !rhsKnown
-            }
-
-            let lhsMinecraft = $0.hasMinecraftContainer
-            let rhsMinecraft = $1.hasMinecraftContainer
-            if lhsMinecraft != rhsMinecraft {
-                return lhsMinecraft && !rhsMinecraft
-            }
-
-            return $0.device.name.localizedStandardCompare($1.device.name) == .orderedAscending
-        }
-
-        lastMatchedConnectedSourceIDs = matchedSourceIDs
-    }
-
-    private func cacheDeviceDiscovery(
-        device: ConnectedDevice,
-        containers: [DeviceAppContainer],
-        discoveryErrorDescription: String?
-    ) {
-        cachedDeviceDiscoveryByUDID[device.udid] = ConnectedDeviceDiscoveryCachePolicy.cacheDiscovery(
-            for: device,
-            containers: containers,
-            discoveryErrorDescription: discoveryErrorDescription
-        )
-    }
-
-    private func refreshMatchedConnectedDeviceSource(
-        sourceID: URL,
-        device: ConnectedDevice,
-        containers: [DeviceAppContainer]
-    ) {
-        let nextAvailability = ConnectedDeviceSourcePolicy.availability(
-            for: device,
-            hasMinecraftContainer: true
-        )
-        updateSource(sourceID) { source in
-            guard case .connectedDevice(let previousDevice, let previousContainer) = source.origin else {
-                return
-            }
-
-            let resolvedContainer = containers.first(where: {
-                $0.appID == previousContainer.appID && $0.accessMode == previousContainer.accessMode
-            }) ?? previousContainer
-
-            var resolvedDevice = device
-            resolvedDevice.name = ConnectedDeviceSourcePolicy.preferredDeviceName(
-                currentName: device.name,
-                fallbackDeviceName: previousDevice.name,
-                fallbackDisplayName: source.displayName
-            )
-            source.origin = .connectedDevice(device: resolvedDevice, container: resolvedContainer)
-            source.displayName = connectedDeviceSourceFactory.displayName(
-                for: resolvedDevice,
-                container: resolvedContainer
-            )
-            source.accessDescriptor = sourceAccessMethod.accessDescriptor(for: source)
-        }
-        let transition = updateAvailability(for: sourceID, to: nextAvailability)
-        persistSourceIfAvailable(withID: sourceID)
-
-        guard let source = source(withID: sourceID), source.availability == .available else {
-            return
-        }
-
-        if transition.becameAvailable {
-            if ConnectedDeviceSourcePolicy.shouldRefreshSourceOnReconnect(source) {
-                queueAutomaticSync(
-                    for: sourceID,
-                    reason: source.hasCachedContent
-                        ? "Device available. Refreshing cached library..."
-                        : "Device available. Scanning Minecraft library..."
-                )
-            }
-            return
-        }
-
-        if ConnectedDeviceSourcePolicy.shouldRefreshSource(source) {
-            queueAutomaticSync(for: sourceID, reason: "Refreshing device library...")
-        }
-    }
-
-    private func markAllConnectedDeviceSourcesDisconnected() {
-        for source in sources where source.origin.kind == .connectedDevice {
-            _ = updateAvailability(for: source.id, to: .disconnected)
-        }
-    }
-
-    private func markDisconnectedConnectedDeviceSources(excluding matchedSourceIDs: Set<URL>) {
-        for source in sources where source.origin.kind == .connectedDevice && !matchedSourceIDs.contains(source.id) {
-            _ = updateAvailability(for: source.id, to: .disconnected)
-        }
+        await ConnectedDeviceRuntime.refreshDevices(on: self, using: connectedDeviceAccessMethod)
     }
 
     func currentCollectionSnapshots(for sourceURL: URL) -> [CollectionSnapshot] {
@@ -798,6 +564,26 @@ final class SourceLibrary: ObservableObject, SourceScanSessionHosting, SourcePer
 
     func connectedDeviceDisplayName(for device: ConnectedDevice, container: DeviceAppContainer) -> String {
         connectedDeviceSourceFactory.displayName(for: device, container: container)
+    }
+
+    func accessDescriptor(for source: MinecraftSource) -> SourceAccessDescriptor {
+        sourceAccessMethod.accessDescriptor(for: source)
+    }
+
+    func logConnectedDeviceRefreshStage(
+        _ stage: String,
+        elapsed: TimeInterval,
+        device: ConnectedDevice,
+        containerCount: Int,
+        error: Error?
+    ) {
+        logDeviceRefreshStage(
+            stage,
+            elapsed: elapsed,
+            device: device,
+            containerCount: containerCount,
+            error: error
+        )
     }
 
     func appendRestoredSource(_ source: MinecraftSource) {
@@ -936,7 +722,7 @@ final class SourceLibrary: ObservableObject, SourceScanSessionHosting, SourcePer
     }
 
     @discardableResult
-    private func updateAvailability(for sourceID: URL, to newAvailability: SourceAvailability) -> (previous: SourceAvailability, becameAvailable: Bool) {
+    func updateAvailability(for sourceID: URL, to newAvailability: SourceAvailability) -> (previous: SourceAvailability, becameAvailable: Bool) {
         let previousAvailability = source(withID: sourceID)?.availability ?? .unknown
         let becameAvailable = previousAvailability != .available && newAvailability == .available
 
