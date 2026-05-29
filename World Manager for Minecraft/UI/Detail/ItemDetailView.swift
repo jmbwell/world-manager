@@ -12,7 +12,7 @@ struct ItemDetailView: View {
     let worldsUsingPack: [MinecraftContentItem]
     let backingPackInstances: [MinecraftContentItem]
     let isSuspiciousPack: Bool
-    let contents: [DirectoryPreviewEntry]
+    let contents: [DirectoryEntry]
     let directoryPreviewLimit: Int
     let isPerformingItemAction: Bool
     let areFileActionsEnabled: Bool

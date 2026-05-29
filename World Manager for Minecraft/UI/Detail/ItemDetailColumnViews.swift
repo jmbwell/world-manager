@@ -1,12 +1,6 @@
 import AppKit
 import SwiftUI
 
-struct DirectoryPreviewEntry: Identifiable {
-    let id = UUID()
-    let name: String
-    let isDirectory: Bool
-}
-
 struct ItemDetailColumnView: View {
     let item: MinecraftContentItem?
     let source: MinecraftSource?
@@ -16,7 +10,7 @@ struct ItemDetailColumnView: View {
     let worldsUsingPack: [MinecraftContentItem]
     let backingPackInstances: [MinecraftContentItem]
     let isSuspiciousPack: Bool
-    let contents: [DirectoryPreviewEntry]
+    let contents: [DirectoryEntry]
     let directoryPreviewLimit: Int
     let isEmpty: Bool
     let isPerformingItemAction: Bool

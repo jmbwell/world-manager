@@ -230,11 +230,11 @@ enum PreviewFixtures {
     static let allSources = [primarySource, secondarySource]
 
     static let directoryEntries = [
-        DirectoryPreviewEntry(name: "db", isDirectory: true),
-        DirectoryPreviewEntry(name: "level.dat", isDirectory: false),
-        DirectoryPreviewEntry(name: "levelname.txt", isDirectory: false),
-        DirectoryPreviewEntry(name: "world_icon.jpeg", isDirectory: false),
-        DirectoryPreviewEntry(name: "resource_packs", isDirectory: true)
+        DirectoryEntry(name: "db", isDirectory: true),
+        DirectoryEntry(name: "level.dat", isDirectory: false),
+        DirectoryEntry(name: "levelname.txt", isDirectory: false),
+        DirectoryEntry(name: "world_icon.jpeg", isDirectory: false),
+        DirectoryEntry(name: "resource_packs", isDirectory: true)
     ]
 }
 

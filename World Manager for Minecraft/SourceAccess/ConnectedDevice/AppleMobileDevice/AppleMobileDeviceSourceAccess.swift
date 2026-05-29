@@ -307,7 +307,7 @@ struct AppleMobileDeviceSourceAccess: ConnectedDeviceSourceAccessMethod {
         }
     }
 
-    nonisolated func listItemContents(for item: MinecraftContentItem, in source: MinecraftSource) async throws -> [DirectoryPreviewEntry] {
+    nonisolated func listItemContents(for item: MinecraftContentItem, in source: MinecraftSource) async throws -> [DirectoryEntry] {
         guard case .connectedDevice(_, let container) = source.origin else {
             return []
         }
@@ -325,7 +325,7 @@ struct AppleMobileDeviceSourceAccess: ConnectedDeviceSourceAccessMethod {
         return entries
             .map { entry in
                 let isDirectory = !NSString(string: entry).pathExtension.isEmpty ? false : true
-                return DirectoryPreviewEntry(name: entry, isDirectory: isDirectory)
+                return DirectoryEntry(name: entry, isDirectory: isDirectory)
             }
             .sorted { lhs, rhs in
                 if lhs.isDirectory != rhs.isDirectory {

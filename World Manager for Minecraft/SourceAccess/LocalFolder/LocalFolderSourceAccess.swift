@@ -104,7 +104,7 @@ struct LocalFolderSourceAccess: SourceAccessMethod {
         return WorldScanner.loadSize(for: item)
     }
 
-    nonisolated func listItemContents(for item: MinecraftContentItem, in source: MinecraftSource) async throws -> [DirectoryPreviewEntry] {
+    nonisolated func listItemContents(for item: MinecraftContentItem, in source: MinecraftSource) async throws -> [DirectoryEntry] {
         _ = source
         let fileManager = FileManager.default
         let urls = try fileManager.contentsOfDirectory(
@@ -116,7 +116,7 @@ struct LocalFolderSourceAccess: SourceAccessMethod {
         return urls
             .map { url in
                 let isDirectory = (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
-                return DirectoryPreviewEntry(name: url.lastPathComponent, isDirectory: isDirectory)
+                return DirectoryEntry(name: url.lastPathComponent, isDirectory: isDirectory)
             }
             .sorted { lhs, rhs in
                 if lhs.isDirectory != rhs.isDirectory {

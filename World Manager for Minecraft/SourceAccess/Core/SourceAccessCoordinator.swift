@@ -26,7 +26,7 @@ protocol SourceAccessMethod: Sendable {
     nonisolated func loadPreviewAssets(for items: [MinecraftContentItem], in source: MinecraftSource) async -> [MinecraftContentItem]
     nonisolated func loadSize(for item: MinecraftContentItem, in source: MinecraftSource) async -> MinecraftContentItem
     nonisolated func loadSizeAssets(for items: [MinecraftContentItem], in source: MinecraftSource) async -> [MinecraftContentItem]
-    nonisolated func listItemContents(for item: MinecraftContentItem, in source: MinecraftSource) async throws -> [DirectoryPreviewEntry]
+    nonisolated func listItemContents(for item: MinecraftContentItem, in source: MinecraftSource) async throws -> [DirectoryEntry]
     nonisolated func materializeItem(for item: MinecraftContentItem, in source: MinecraftSource) async throws -> URL
     nonisolated func purgeCachedArtifacts(for source: MinecraftSource) async
 }
@@ -96,7 +96,7 @@ extension SourceAccessMethod {
         return sizedItems
     }
 
-    nonisolated func listItemContents(for item: MinecraftContentItem, in source: MinecraftSource) async throws -> [DirectoryPreviewEntry] {
+    nonisolated func listItemContents(for item: MinecraftContentItem, in source: MinecraftSource) async throws -> [DirectoryEntry] {
         _ = source
         _ = item
         return []
@@ -191,7 +191,7 @@ struct SourceAccessCoordinator: SourceAccessMethod {
         return await accessMethod(for: source).loadSizeAssets(for: items, in: source)
     }
 
-    nonisolated func listItemContents(for item: MinecraftContentItem, in source: MinecraftSource) async throws -> [DirectoryPreviewEntry] {
+    nonisolated func listItemContents(for item: MinecraftContentItem, in source: MinecraftSource) async throws -> [DirectoryEntry] {
         return try await accessMethod(for: source).listItemContents(for: item, in: source)
     }
 

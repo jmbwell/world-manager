@@ -19,7 +19,7 @@ struct ContentView: View {
     @State private var isPerformingItemAction = false
     @State private var isShowingDeviceSourceSheet = false
     @State private var sortMode: ItemSortMode = .name
-    @State private var directoryPreviewContents: [DirectoryPreviewEntry] = []
+    @State private var directoryPreviewContents: [DirectoryEntry] = []
 
     private let connectedDeviceAccess: AppleMobileDeviceSourceAccess
     private let deviceSourceFactory: ConnectedDeviceSourceFactory

@@ -187,7 +187,7 @@ final class SourceLibrary: ObservableObject, SourceScanSessionHosting, SourcePer
         startScan(for: sourceID, mode: .fullScan)
     }
 
-    func listContents(for item: MinecraftContentItem, in source: MinecraftSource) async throws -> [DirectoryPreviewEntry] {
+    func listContents(for item: MinecraftContentItem, in source: MinecraftSource) async throws -> [DirectoryEntry] {
         try await sourceAccessMethod.listItemContents(for: item, in: source)
     }
 
