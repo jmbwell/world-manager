@@ -7,7 +7,7 @@
 
 import Foundation
 
-enum MinecraftContentType: String, CaseIterable, Hashable, Sendable, Codable {
+nonisolated enum MinecraftContentType: String, CaseIterable, Hashable, Sendable, Codable {
     case world = "World"
     case behaviorPack = "Behavior Pack"
     case resourcePack = "Resource Pack"
@@ -56,13 +56,13 @@ enum MinecraftContentType: String, CaseIterable, Hashable, Sendable, Codable {
     }
 }
 
-enum PackSource: String, Hashable, Sendable, Codable {
+nonisolated enum PackSource: String, Hashable, Sendable, Codable {
     case referencedByWorld
     case embeddedInWorld
     case foundInCollection
 }
 
-struct ContentPackReference: Identifiable, Hashable, Sendable, Codable {
+nonisolated struct ContentPackReference: Identifiable, Hashable, Sendable, Codable {
     let id: String
     let name: String
     let type: MinecraftContentType
@@ -93,7 +93,7 @@ struct ContentPackReference: Identifiable, Hashable, Sendable, Codable {
     }
 }
 
-struct WorldMetadata: Hashable, Sendable, Codable {
+nonisolated struct WorldMetadata: Hashable, Sendable, Codable {
     var gameMode: String?
     var difficulty: String?
     var seed: String?
@@ -113,11 +113,11 @@ struct WorldMetadata: Hashable, Sendable, Codable {
     var networkVersion: String?
 }
 
-struct PackMetadataDetails: Hashable, Sendable, Codable {
+nonisolated struct PackMetadataDetails: Hashable, Sendable, Codable {
     var minimumEngineVersion: String?
 }
 
-struct MinecraftContentItem: Identifiable, Hashable, Sendable, Codable {
+nonisolated struct MinecraftContentItem: Identifiable, Hashable, Sendable, Codable {
     let id: URL
     let folderURL: URL
     let folderName: String

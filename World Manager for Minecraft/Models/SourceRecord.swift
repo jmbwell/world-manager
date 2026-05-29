@@ -9,7 +9,7 @@ import Foundation
 
 typealias SourceAccessorIdentifier = String
 
-enum SourceAvailability: String, Hashable, Sendable, Codable {
+nonisolated enum SourceAvailability: String, Hashable, Sendable, Codable {
     case unknown
     case available
     case disconnected
@@ -17,18 +17,18 @@ enum SourceAvailability: String, Hashable, Sendable, Codable {
     case unavailable
 }
 
-enum SourceRefreshStrategy: String, Hashable, Sendable, Codable {
+nonisolated enum SourceRefreshStrategy: String, Hashable, Sendable, Codable {
     case eagerFullScan
     case staged
 }
 
-struct SourceAccessDescriptor: Hashable, Sendable, Codable {
+nonisolated struct SourceAccessDescriptor: Hashable, Sendable, Codable {
     var accessorIdentifier: SourceAccessorIdentifier
     var kind: MinecraftSourceKind
     var refreshStrategy: SourceRefreshStrategy
 }
 
-struct SourceRecord: Identifiable, Hashable, Sendable, Codable {
+nonisolated struct SourceRecord: Identifiable, Hashable, Sendable, Codable {
     let id: URL
     var displayName: String
     var rootURL: URL

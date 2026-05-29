@@ -8,7 +8,7 @@
 import Foundation
 import zlib
 
-struct ZipArchiveEntry: Sendable, Hashable {
+nonisolated struct ZipArchiveEntry: Sendable, Hashable {
     let path: String
     let compressionMethod: UInt16
     let compressedSize: UInt32
@@ -17,7 +17,7 @@ struct ZipArchiveEntry: Sendable, Hashable {
     let isDirectory: Bool
 }
 
-enum ZipArchiveReaderError: LocalizedError {
+nonisolated enum ZipArchiveReaderError: LocalizedError {
     case invalidArchive
     case unsupportedCompressionMethod(UInt16)
     case unsupportedFeatures(String)
@@ -40,7 +40,7 @@ enum ZipArchiveReaderError: LocalizedError {
     }
 }
 
-struct ZipArchiveReader {
+nonisolated struct ZipArchiveReader {
     private let data: Data
     let entries: [ZipArchiveEntry]
 
@@ -241,7 +241,7 @@ struct ZipArchiveReader {
     }
 }
 
-private extension Data {
+private nonisolated extension Data {
     func readUInt16LE(at offset: Int) -> UInt16 {
         return self.withUnsafeBytes { bytes in
             let base = bytes.baseAddress!.advanced(by: offset)

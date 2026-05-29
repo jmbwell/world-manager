@@ -7,7 +7,7 @@
 
 import Foundation
 
-struct ConnectedDevice: Identifiable, Hashable, Sendable, Codable {
+nonisolated struct ConnectedDevice: Identifiable, Hashable, Sendable, Codable {
     let udid: String
     var name: String
     var productType: String?
@@ -18,19 +18,19 @@ struct ConnectedDevice: Identifiable, Hashable, Sendable, Codable {
     var id: String { udid }
 }
 
-enum DeviceConnection: String, Hashable, Sendable, Codable {
+nonisolated enum DeviceConnection: String, Hashable, Sendable, Codable {
     case usb
     case network
 }
 
-enum DeviceTrustState: String, Hashable, Sendable, Codable {
+nonisolated enum DeviceTrustState: String, Hashable, Sendable, Codable {
     case unavailable
     case locked
     case untrusted
     case trusted
 }
 
-struct DeviceAppContainer: Identifiable, Hashable, Sendable, Codable {
+nonisolated struct DeviceAppContainer: Identifiable, Hashable, Sendable, Codable {
     let deviceUDID: String
     let appID: String
     var appName: String
@@ -42,12 +42,12 @@ struct DeviceAppContainer: Identifiable, Hashable, Sendable, Codable {
     }
 }
 
-enum DeviceContainerAccessMode: String, Hashable, Sendable, Codable {
+nonisolated enum DeviceContainerAccessMode: String, Hashable, Sendable, Codable {
     case documents
     case container
 }
 
-enum MinecraftSourceOrigin: Hashable, Sendable, Codable {
+nonisolated enum MinecraftSourceOrigin: Hashable, Sendable, Codable {
     case localFolder(bookmarkData: Data?)
     case connectedDevice(device: ConnectedDevice, container: DeviceAppContainer)
 
@@ -79,7 +79,7 @@ enum MinecraftSourceOrigin: Hashable, Sendable, Codable {
     }
 }
 
-enum MinecraftSourceKind: String, Hashable, Sendable, Codable {
+nonisolated enum MinecraftSourceKind: String, Hashable, Sendable, Codable {
     case localFolder
     case connectedDevice
 }

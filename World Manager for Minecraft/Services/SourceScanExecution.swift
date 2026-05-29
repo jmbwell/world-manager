@@ -39,7 +39,7 @@ enum SourceScanExecutor {
         let previousSource = source
         let performanceContext = SourceScanPolicy.performanceContext(for: source)
 
-        await host.updateSource(sourceID) { source in
+        host.updateSource(sourceID) { source in
             source.isScanning = true
             source.scanError = nil
             source.scanDiagnostic = nil
@@ -51,11 +51,11 @@ enum SourceScanExecutor {
             source.sizeLoadedCount = 0
         }
 
-        await host.updateSource(sourceID) { source in
+        host.updateSource(sourceID) { source in
             source.accessDescriptor = sourceAccessMethod.accessDescriptor(for: source)
         }
         let currentAvailability = await sourceAccessMethod.availability(for: source)
-        await host.updateSource(sourceID) { source in
+        host.updateSource(sourceID) { source in
             source.availability = currentAvailability
         }
 
@@ -67,7 +67,7 @@ enum SourceScanExecutor {
             }
         }
 
-        await host.updateSource(sourceID) { source in
+        host.updateSource(sourceID) { source in
             source.availability = .available
             source.scanStatus = SourceScanPolicy.scanningLibraryStatus(for: source, mode: mode)
         }
@@ -86,7 +86,9 @@ enum SourceScanExecutor {
 
                         let enrichedItem = await sourceAccessMethod.enrich(item, for: source)
                         if let snapshot = await index.applyEnrichedItem(enrichedItem) {
-                            await host.applySnapshot(snapshot, to: sourceID)
+                            await MainActor.run {
+                                host.applySnapshot(snapshot, to: sourceID)
+                            }
                         }
                     }
                 }
@@ -143,7 +145,7 @@ enum SourceScanExecutor {
                     itemForIndex,
                     discoveredCount: discoveredCount
                 ) {
-                    await host.applySnapshot(snapshot, to: sourceID)
+                    host.applySnapshot(snapshot, to: sourceID)
                 }
                 if itemForIndex.id == item.id, itemForIndex.metadataLoaded == false {
                     await enrichmentQueue.enqueue(item)
@@ -170,13 +172,13 @@ enum SourceScanExecutor {
                             cachedItem,
                             discoveredCount: discoveredCount
                         ) {
-                            await host.applySnapshot(snapshot, to: sourceID)
+                            host.applySnapshot(snapshot, to: sourceID)
                         }
                     }
                 }
             }
 
-            await host.logScanStage(
+            host.logScanStage(
                 "Discovery",
                 elapsed: Date().timeIntervalSince(discoveryStartTime),
                 context: performanceContext,
@@ -184,7 +186,7 @@ enum SourceScanExecutor {
             )
 
             if let snapshot = await index.markDiscoveryFinished() {
-                await host.applySnapshot(snapshot, to: sourceID)
+                host.applySnapshot(snapshot, to: sourceID)
             }
             await enrichmentQueue.finish()
             let enrichmentStartTime = Date()
@@ -193,7 +195,7 @@ enum SourceScanExecutor {
                 await workerTask.value
             }
 
-            await host.logScanStage(
+            host.logScanStage(
                 "Enrichment",
                 elapsed: Date().timeIntervalSince(enrichmentStartTime),
                 context: performanceContext,
@@ -201,9 +203,9 @@ enum SourceScanExecutor {
             )
 
             if let snapshot = await index.markMetadataFinished() {
-                await host.applySnapshot(snapshot, to: sourceID)
+                host.applySnapshot(snapshot, to: sourceID)
             }
-            await host.persistSourceIfAvailable(withID: sourceID)
+            host.persistSourceIfAvailable(withID: sourceID)
 
             let previewStageStartTime = Date()
             let previewSeedItems = await index.currentItems()
@@ -213,11 +215,11 @@ enum SourceScanExecutor {
             )
             for previewItem in previewItems {
                 if let snapshot = await index.applyPreviewItem(previewItem) {
-                    await host.applySnapshot(snapshot, to: sourceID)
+                    host.applySnapshot(snapshot, to: sourceID)
                 }
             }
 
-            await host.logScanStage(
+            host.logScanStage(
                 "Previews",
                 elapsed: Date().timeIntervalSince(previewStageStartTime),
                 context: performanceContext,
@@ -225,9 +227,9 @@ enum SourceScanExecutor {
             )
 
             if let snapshot = await index.markPreviewsFinished() {
-                await host.applySnapshot(snapshot, to: sourceID)
+                host.applySnapshot(snapshot, to: sourceID)
             }
-            await host.persistSourceIfAvailable(withID: sourceID)
+            host.persistSourceIfAvailable(withID: sourceID)
 
             if source.origin.kind == .connectedDevice {
                 try await finishConnectedDeviceScan(
@@ -271,7 +273,7 @@ enum SourceScanExecutor {
                 await sizeWorkerTask.value
             }
 
-            await host.logScanStage(
+            host.logScanStage(
                 "Size",
                 elapsed: Date().timeIntervalSince(sizeStageStartTime),
                 context: performanceContext,
@@ -291,7 +293,7 @@ enum SourceScanExecutor {
                 minimumVisibleScanDuration: minimumVisibleScanDuration
             )
         } catch {
-            await host.updateSource(sourceID) { source in
+            host.updateSource(sourceID) { source in
                 if SourceScanRecovery.shouldPreservePartialResults(currentSource: source, previousSource: previousSource) {
                     source.scanStatus = source.indexedItemCount == 0
                         ? previousSource.scanStatus
@@ -320,7 +322,7 @@ enum SourceScanExecutor {
                 source.scanProgress = nil
                 source.isScanning = false
             }
-            await host.persistSourceIfAvailable(withID: sourceID)
+            host.persistSourceIfAvailable(withID: sourceID)
         }
     }
 
@@ -345,11 +347,11 @@ enum SourceScanExecutor {
         )
         for sizedItem in sizedItems {
             if let snapshot = await index.applySizedItem(sizedItem) {
-                await host.applySnapshot(snapshot, to: sourceID)
+                host.applySnapshot(snapshot, to: sourceID)
             }
         }
 
-        await host.logScanStage(
+        host.logScanStage(
             "Size",
             elapsed: Date().timeIntervalSince(sizeStageStartTime),
             context: performanceContext,
@@ -390,24 +392,24 @@ enum SourceScanExecutor {
         }
 
         if let snapshot = await index.finishScan() {
-            await host.applySnapshot(snapshot, to: sourceID)
+            host.applySnapshot(snapshot, to: sourceID)
         }
-        await host.updateSource(sourceID) { source in
+        host.updateSource(sourceID) { source in
             if source.origin.kind == .localFolder {
                 source.snapshot = SourceScanPolicy.buildSnapshot(for: source, scanRootURL: scanContextURL)
             } else {
                 source.snapshot = nil
             }
         }
-        await host.persistSourceIfAvailable(withID: sourceID)
-        await host.logScanStage(
+        host.persistSourceIfAvailable(withID: sourceID)
+        host.logScanStage(
             "Total",
             elapsed: Date().timeIntervalSince(scanStartTime),
             context: performanceContext,
             itemCount: discoveredCount
         )
 
-        if let completedSource = await host.source(withID: sourceID) {
+        if let completedSource = host.source(withID: sourceID) {
             await notificationService.notifyScanCompleted(
                 for: completedSource,
                 duration: Date().timeIntervalSince(scanStartTime)
