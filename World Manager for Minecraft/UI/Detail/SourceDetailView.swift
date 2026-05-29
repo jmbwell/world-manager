@@ -78,7 +78,7 @@ struct SourceDetailView: View {
 
     private var statusTitle: String {
         if !source.isScanning, source.availability != .available {
-            return source.availabilityDisplayText
+            return SourcePresentation.availabilityDisplayText(for: source)
         }
 
         if let scanError = source.scanError, !scanError.isEmpty {
@@ -86,7 +86,7 @@ struct SourceDetailView: View {
         }
 
         if source.isScanning {
-            return source.liveScanStatusTitle
+            return SourcePresentation.liveScanStatusTitle(for: source)
         }
 
         if !source.scanStatus.isEmpty {
@@ -102,7 +102,7 @@ struct SourceDetailView: View {
                 return scanDiagnostic
             }
 
-            if let cachedAvailabilityDetailText = source.cachedAvailabilityDetailText {
+            if let cachedAvailabilityDetailText = SourcePresentation.cachedAvailabilityDetailText(for: source) {
                 return cachedAvailabilityDetailText
             }
 
@@ -136,7 +136,7 @@ struct SourceDetailView: View {
 
             VStack(alignment: .leading, spacing: 12) {
                 HStack(alignment: .center, spacing: 10) {
-                    if source.showsIndeterminateScanActivityIndicator {
+                    if SourcePresentation.showsIndeterminateScanActivityIndicator(for: source) {
                         ProgressView()
                             .controlSize(.small)
                     } else if !source.isScanning {
@@ -292,7 +292,8 @@ struct SourceDetailView: View {
             && (source.scanProgress ?? 0) < 0.65
 
         let status: StageStatus
-        if previewsAreFullyLoaded || source.scanPhase == .sizing || source.scanPhase == .completed {
+        let scanPhase = SourcePresentation.scanPhase(for: source)
+        if previewsAreFullyLoaded || scanPhase == .sizing || scanPhase == .completed {
             status = .completed
         } else if hasPreviewWorkStarted {
             status = .inProgress
@@ -331,7 +332,7 @@ struct SourceDetailView: View {
         let previewsAreFullyLoaded = total > 0 && source.previewLoadedCount >= total
 
         let status: StageStatus
-        switch source.scanPhase {
+        switch SourcePresentation.scanPhase(for: source) {
         case .sizing:
             status = .inProgress
         case .completed:

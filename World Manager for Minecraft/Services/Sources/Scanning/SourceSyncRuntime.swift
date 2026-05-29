@@ -103,8 +103,8 @@ enum SourceSyncRuntime {
             } else {
                 source.scanError = nil
                 source.scanProgress = nil
-                source.scanStatus = source.availabilityDisplayText
-                source.scanDiagnostic = source.cachedAvailabilityDetailText
+                source.scanStatus = SourcePresentation.availabilityDisplayText(for: source)
+                source.scanDiagnostic = SourcePresentation.cachedAvailabilityDetailText(for: source)
             }
         }
 

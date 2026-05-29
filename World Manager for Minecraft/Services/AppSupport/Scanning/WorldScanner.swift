@@ -186,16 +186,7 @@ enum WorldScanner {
     }
 
     nonisolated static func sortItems(_ lhs: MinecraftContentItem, _ rhs: MinecraftContentItem) -> Bool {
-        if lhs.contentType != rhs.contentType {
-            return lhs.contentType.rawValue.localizedStandardCompare(rhs.contentType.rawValue) == .orderedAscending
-        }
-
-        let displayNameOrder = lhs.displayName.localizedStandardCompare(rhs.displayName)
-        if displayNameOrder != .orderedSame {
-            return displayNameOrder == .orderedAscending
-        }
-
-        return lhs.folderName.localizedStandardCompare(rhs.folderName) == .orderedAscending
+        MinecraftContentItem.displaySort(lhs, rhs)
     }
 
     nonisolated private static func contentType(forCollectionFolderName folderName: String) -> MinecraftContentType? {
