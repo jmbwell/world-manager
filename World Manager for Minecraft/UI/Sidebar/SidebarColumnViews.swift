@@ -74,6 +74,8 @@ struct SourcesSidebarView: View {
 
     @ViewBuilder
     private func sourceSectionRows(for source: MinecraftSource) -> some View {
+        let sourceFilters = filters(source)
+
         SourceHeaderRow(
             source: source,
             isSelected: selection == .source(sourceID: source.id),
@@ -96,7 +98,7 @@ struct SourcesSidebarView: View {
                 }
             }
 
-        ForEach(filters(source)) { filter in
+        ForEach(sourceFilters) { filter in
             SidebarFilterRow(filter: filter, isIndented: true)
                 .tag(filter.selection as SidebarSelection?)
         }
@@ -154,35 +156,37 @@ private struct SourceHeaderRow: View {
     @State private var isHovering = false
 
     var body: some View {
-        HStack(spacing: 8) {
-            Image(systemName: headerSymbolName)
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(titleColor)
+        Button(action: onSelect) {
+            HStack(spacing: 8) {
+                Image(systemName: headerSymbolName)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(titleColor)
 
-            Text(source.displayName)
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(titleColor)
+                Text(source.displayName)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(titleColor)
 
-            Spacer(minLength: 8)
+                Spacer(minLength: 8)
 
-            if let connection {
-                SourceConnectionBadge(connection: connection)
-            }
+                if let connection {
+                    SourceConnectionBadge(connection: connection)
+                }
 
-            if let availabilityBadgeText {
-                SourceAvailabilityBadge(text: availabilityBadgeText, emphasis: availabilityBadgeEmphasis)
-            }
+                if let availabilityBadgeText {
+                    SourceAvailabilityBadge(text: availabilityBadgeText, emphasis: availabilityBadgeEmphasis)
+                }
 
-            if showsStatusIndicator {
-                statusIndicator
-                    .frame(width: 24, height: 24)
+                if showsStatusIndicator {
+                    statusIndicator
+                        .frame(width: 24, height: 24)
+                }
             }
         }
+        .buttonStyle(.plain)
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
         .appSidebarRowSurface(isHighlighted: isHovering && !isSelected)
         .contentShape(Rectangle())
-        .onTapGesture(perform: onSelect)
         .onHover { isHovering = $0 }
     }
 

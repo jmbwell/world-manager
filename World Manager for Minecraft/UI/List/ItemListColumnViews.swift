@@ -50,11 +50,8 @@ struct ItemListColumnView<MenuContent: View>: View {
                 .onDrop(of: [UTType.fileURL.identifier], isTargeted: $isDropTargeted, perform: dropAction)
             } else {
                 List(items, selection: $selectedItemID) { item in
-                    ContentRowView(item: item)
+                    ContentRowView(item: item, dragProvider: dragProvider)
                         .tag(item.id)
-                        .onDrag {
-                            dragProvider(item)
-                        }
                         .contextMenu {
                             itemContextMenu(item)
                         }
@@ -143,10 +140,14 @@ private struct ItemListHeaderView: View {
 
 private struct ContentRowView: View {
     let item: MinecraftContentItem
+    let dragProvider: (MinecraftContentItem) -> NSItemProvider
 
     var body: some View {
         HStack(alignment: .center, spacing: 10) {
             ItemThumbnailView(iconURL: item.iconURL)
+                .onDrag {
+                    dragProvider(item)
+                }
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(item.displayName)
@@ -164,6 +165,14 @@ private struct ContentRowView: View {
                 ProgressView()
                     .controlSize(.small)
             }
+
+            Image(systemName: "square.and.arrow.up")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+                .help("Drag Out as Minecraft Package")
+                .onDrag {
+                    dragProvider(item)
+                }
         }
         .padding(.vertical, 2)
         .contentShape(Rectangle())
