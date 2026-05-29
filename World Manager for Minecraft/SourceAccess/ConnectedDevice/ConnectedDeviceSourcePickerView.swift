@@ -284,7 +284,7 @@ struct ConnectedDeviceSourcePickerView: View {
                 .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .appCardSurface(.placeholder)
     }
 
     private func emptyState(_ title: String) -> some View {
@@ -298,6 +298,6 @@ struct ConnectedDeviceSourcePickerView: View {
                 .multilineTextAlignment(.center)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .appCardSurface(.placeholder)
     }
 }

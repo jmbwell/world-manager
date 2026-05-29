@@ -253,7 +253,7 @@ private struct SourceDetailView: View {
                 }
             }
             .padding(18)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .appCardSurface(.primaryPanel)
         }
     }
 
@@ -609,7 +609,7 @@ private struct SourceDetailView: View {
                 }
             }
             .padding(18)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .appCardSurface(.primaryPanel)
         }
     }
 }
@@ -1083,7 +1083,7 @@ struct ItemDetailView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(18)
-            .background(.quaternary.opacity(0.32), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .appCardSurface(.secondaryPanel)
         }
     }
 

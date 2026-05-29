@@ -1,6 +1,65 @@
 import AppKit
 import SwiftUI
 
+enum AppChrome {
+    static let sidebarRowCornerRadius: CGFloat = 10
+    static let placeholderCardCornerRadius: CGFloat = 16
+    static let panelCardCornerRadius: CGFloat = 18
+}
+
+enum AppCardStyle {
+    case primaryPanel
+    case secondaryPanel
+    case placeholder
+
+    fileprivate var cornerRadius: CGFloat {
+        switch self {
+        case .primaryPanel, .secondaryPanel:
+            return AppChrome.panelCardCornerRadius
+        case .placeholder:
+            return AppChrome.placeholderCardCornerRadius
+        }
+    }
+
+    fileprivate var fillStyle: AnyShapeStyle {
+        switch self {
+        case .primaryPanel:
+            return AnyShapeStyle(.regularMaterial)
+        case .secondaryPanel:
+            return AnyShapeStyle(.quaternary.opacity(0.32))
+        case .placeholder:
+            return AnyShapeStyle(.thinMaterial)
+        }
+    }
+}
+
+private struct AppCardSurfaceModifier: ViewModifier {
+    let style: AppCardStyle
+
+    func body(content: Content) -> some View {
+        content.background(
+            style.fillStyle,
+            in: RoundedRectangle(cornerRadius: style.cornerRadius, style: .continuous)
+        )
+    }
+}
+
+extension View {
+    func appCardSurface(_ style: AppCardStyle) -> some View {
+        modifier(AppCardSurfaceModifier(style: style))
+    }
+
+    func appSidebarRowSurface(isHighlighted: Bool) -> some View {
+        let fillStyle = isHighlighted
+            ? AnyShapeStyle(.secondary.opacity(0.08))
+            : AnyShapeStyle(Color.clear)
+        return background(
+            fillStyle,
+            in: RoundedRectangle(cornerRadius: AppChrome.sidebarRowCornerRadius, style: .continuous)
+        )
+    }
+}
+
 struct ToolbarShareButton: View {
     let systemImage: String
     let isEnabled: Bool

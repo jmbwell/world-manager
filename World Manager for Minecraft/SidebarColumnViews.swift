@@ -180,7 +180,7 @@ private struct SourceHeaderRow: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
-        .background(backgroundStyle, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .appSidebarRowSurface(isHighlighted: isHovering && !isSelected)
         .contentShape(Rectangle())
         .onTapGesture(perform: onSelect)
         .onHover { isHovering = $0 }
@@ -229,15 +229,6 @@ private struct SourceHeaderRow: View {
     private var availabilityBadgeEmphasis: Bool {
         source.availability == .limited
     }
-
-    private var backgroundStyle: AnyShapeStyle {
-        if isHovering && !isSelected {
-            return AnyShapeStyle(.secondary.opacity(0.08))
-        }
-
-        return AnyShapeStyle(.clear)
-    }
-
     @ViewBuilder
     private var statusIndicator: some View {
         if source.isScanning {
