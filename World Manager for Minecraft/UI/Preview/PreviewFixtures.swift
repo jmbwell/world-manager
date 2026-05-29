@@ -321,6 +321,7 @@ struct ItemListColumnPreviewContainer: View {
                 searchPrompt: "Search Worlds",
                 chooseFolderAction: {},
                 dropAction: { _ in false },
+                dragProvider: { _ in NSItemProvider() },
                 itemContextMenu: { item in
                     Button("Reveal \(item.displayName)") {}
                 }

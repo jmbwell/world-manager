@@ -74,6 +74,7 @@ struct ContentView: View {
                 searchPrompt: searchPrompt,
                 chooseFolderAction: pickFolder,
                 dropAction: handleDroppedProviders(_:),
+                dragProvider: dragProvider(for:),
                 itemContextMenu: itemContextMenu(for:)
             )
             .navigationSplitViewColumnWidth(min: 340, ideal: 400, max: 460)
@@ -653,7 +654,13 @@ struct ContentView: View {
             return false
         }
 
-        return source.availability == .available
+        return source.availability == .available && source.capabilities.canExportPortablePackages
+    }
+
+    private func sourceForItem(_ item: MinecraftContentItem) -> MinecraftSource? {
+        library.visibleSources.first(where: { source in
+            source.items.contains(where: { $0.id == item.id })
+        })
     }
 
     private func saveItem(_ item: MinecraftContentItem) {
@@ -790,6 +797,44 @@ struct ContentView: View {
 
     private func archiveType(for item: MinecraftContentItem) -> UTType {
         UTType(filenameExtension: item.contentType.archiveExtension) ?? .data
+    }
+
+    private func dragProvider(for item: MinecraftContentItem) -> NSItemProvider {
+        let provider = NSItemProvider()
+        let contentType = archiveType(for: item)
+        provider.suggestedName = itemActionService.suggestedArchiveFilename(for: item)
+
+        provider.registerFileRepresentation(
+            forTypeIdentifier: contentType.identifier,
+            fileOptions: [],
+            visibility: .all
+        ) { completion in
+            guard let source = sourceForItem(item), areFileActionsEnabled(for: item) else {
+                completion(nil, false, SourceAccessError.accessFailed(reason: "This item is not currently available for export."))
+                return nil
+            }
+
+            let task = Task {
+                do {
+                    let representation = try await library.externalRepresentation(
+                        for: item,
+                        in: source,
+                        preferredKind: .portablePackage
+                    )
+                    completion(representation.url, representation.isTemporary, nil)
+                } catch {
+                    completion(nil, false, error)
+                }
+            }
+
+            let progress = Progress(totalUnitCount: 1)
+            progress.cancellationHandler = {
+                task.cancel()
+            }
+            return progress
+        }
+
+        return provider
     }
 }
 
