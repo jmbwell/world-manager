@@ -660,7 +660,6 @@ struct ContentView: View {
         guard !isPerformingItemAction, areFileActionsEnabled(for: item) else {
             return
         }
-        let source = currentSource
 
         let panel = NSSavePanel()
         panel.canCreateDirectories = true
@@ -679,11 +678,22 @@ struct ContentView: View {
 
         Task {
             do {
+                guard let source = currentSource else {
+                    await MainActor.run {
+                        isPerformingItemAction = false
+                    }
+                    return
+                }
+
                 let finalURL = try await Task.detached(priority: .userInitiated) {
-                    try await itemActionService.createArchiveFile(
+                    let representation = try await library.externalRepresentation(
                         for: item,
-                        source: source,
-                        destinationURL: destinationURL
+                        in: source,
+                        preferredKind: .portablePackage
+                    )
+                    return try itemActionService.persistExternalRepresentation(
+                        representation,
+                        to: destinationURL
                     )
                 }.value
 
@@ -703,17 +713,25 @@ struct ContentView: View {
         guard !isPerformingItemAction, areFileActionsEnabled(for: item) else {
             return
         }
-        let source = currentSource
 
         isPerformingItemAction = true
 
         Task {
             do {
+                guard let source = currentSource else {
+                    await MainActor.run {
+                        isPerformingItemAction = false
+                    }
+                    return
+                }
+
                 let shareURL = try await Task.detached(priority: .userInitiated) {
-                    try await itemActionService.createArchiveFile(
+                    let representation = try await library.externalRepresentation(
                         for: item,
-                        source: source
+                        in: source,
+                        preferredKind: .portablePackage
                     )
+                    return representation.url
                 }.value
 
                 await MainActor.run {
@@ -744,11 +762,6 @@ struct ContentView: View {
             return
         }
 
-        if source.origin.kind == .localFolder {
-            NSWorkspace.shared.activateFileViewerSelecting([item.folderURL])
-            return
-        }
-
         guard !isPerformingItemAction else {
             return
         }
@@ -757,11 +770,15 @@ struct ContentView: View {
 
         Task {
             do {
-                let revealURL = try await library.materializeItem(item, in: source)
+                let representation = try await library.externalRepresentation(
+                    for: item,
+                    in: source,
+                    preferredKind: .nativeFolder
+                )
 
                 await MainActor.run {
                     isPerformingItemAction = false
-                    NSWorkspace.shared.activateFileViewerSelecting([revealURL])
+                    NSWorkspace.shared.activateFileViewerSelecting([representation.url])
                 }
             } catch {
                 await MainActor.run {

@@ -39,6 +39,64 @@ struct World_Manager_for_MinecraftTests {
         #expect(deviceSource.capabilities == .connectedDevice)
     }
 
+    @Test func libraryExternalRepresentationUsesPortablePackageByDefault() async throws {
+        let fileManager = FileManager.default
+        let rootURL = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let itemURL = rootURL.appendingPathComponent("minecraftWorlds/WorldA", isDirectory: true)
+        defer { try? fileManager.removeItem(at: rootURL) }
+
+        try fileManager.createDirectory(at: itemURL, withIntermediateDirectories: true)
+        try "hello".write(
+            to: itemURL.appendingPathComponent("levelname.txt"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let item = MinecraftContentItem(
+            folderURL: itemURL,
+            folderName: "WorldA",
+            contentType: .world,
+            collectionRootURL: rootURL.appendingPathComponent("minecraftWorlds", isDirectory: true),
+            displayName: "World A"
+        )
+        let source = MinecraftSource(folderURL: rootURL)
+        let library = SourceLibrary()
+
+        let representation = try await library.externalRepresentation(for: item, in: source)
+
+        #expect(representation.kind == .portablePackage)
+        #expect(representation.suggestedFilename == "World A.mcworld")
+        #expect(representation.contentType.preferredFilenameExtension == "mcworld")
+        #expect(representation.isTemporary)
+        #expect(fileManager.fileExists(atPath: representation.url.path))
+    }
+
+    @Test func libraryExternalRepresentationUsesNativeFolderWhenRequested() async throws {
+        let rootURL = URL(fileURLWithPath: "/tmp/source-root", isDirectory: true)
+        let itemURL = rootURL.appendingPathComponent("minecraftWorlds/WorldA", isDirectory: true)
+        let item = MinecraftContentItem(
+            folderURL: itemURL,
+            folderName: "WorldA",
+            contentType: .world,
+            collectionRootURL: rootURL.appendingPathComponent("minecraftWorlds", isDirectory: true),
+            displayName: "World A"
+        )
+        let source = MinecraftSource(folderURL: rootURL)
+        let library = SourceLibrary()
+
+        let representation = try await library.externalRepresentation(
+            for: item,
+            in: source,
+            preferredKind: .nativeFolder
+        )
+
+        #expect(representation.kind == .nativeFolder)
+        #expect(representation.url == itemURL)
+        #expect(representation.suggestedFilename == "World A")
+        #expect(representation.contentType == .folder)
+        #expect(representation.isTemporary == false)
+    }
+
     @Test func packIdentityUsesUUIDAndVersion() async throws {
         let first = PackIdentity(
             type: .behaviorPack,

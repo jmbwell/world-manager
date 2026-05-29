@@ -8,6 +8,7 @@
 import Combine
 import Foundation
 import OSLog
+import UniformTypeIdentifiers
 
 @MainActor
 final class SourceLibrary: ObservableObject, SourceScanSessionHosting, SourcePersistenceHosting, ConnectedDeviceRuntimeHosting, LocalSourceRuntimeHosting, SourceSyncRuntimeHosting {
@@ -37,6 +38,7 @@ final class SourceLibrary: ObservableObject, SourceScanSessionHosting, SourcePer
     private let sourceAccessMethod: SourceAccessMethod
     private let connectedDeviceAccessMethod: ConnectedDeviceSourceAccessMethod?
     private let notificationService: ScanNotificationServicing
+    private let itemActionService: ContentItemActionService
     private let connectedDeviceSourceFactory = ConnectedDeviceSourceFactory()
     var lastMatchedConnectedSourceIDs: Set<URL> = []
     var cachedDeviceDiscoveryByUDID: [String: CachedConnectedDeviceDiscovery] = [:]
@@ -46,12 +48,14 @@ final class SourceLibrary: ObservableObject, SourceScanSessionHosting, SourcePer
         persistenceStore: SourcePersistenceStore = .shared,
         sourceAccessMethod: SourceAccessMethod = LocalFolderSourceAccess(),
         connectedDeviceAccessMethod: ConnectedDeviceSourceAccessMethod? = nil,
-        notificationService: ScanNotificationServicing? = nil
+        notificationService: ScanNotificationServicing? = nil,
+        itemActionService: ContentItemActionService = ContentItemActionService()
     ) {
         self.persistenceStore = persistenceStore
         self.sourceAccessMethod = sourceAccessMethod
         self.connectedDeviceAccessMethod = connectedDeviceAccessMethod
         self.notificationService = notificationService ?? ScanNotificationService.shared
+        self.itemActionService = itemActionService
 
         Task { [weak self] in
             guard let self else {
@@ -198,6 +202,38 @@ final class SourceLibrary: ObservableObject, SourceScanSessionHosting, SourcePer
         try await sourceAccessMethod.materializeItem(for: item, in: source)
     }
 
+    func externalRepresentation(
+        for item: MinecraftContentItem,
+        in source: MinecraftSource,
+        preferredKind: ExternalRepresentationKind? = nil
+    ) async throws -> ExternalRepresentation {
+        let kind = resolvedExternalRepresentationKind(
+            for: source,
+            preferredKind: preferredKind
+        )
+
+        switch kind {
+        case .nativeFolder:
+            let url = try await sourceAccessMethod.materializeItem(for: item, in: source)
+            return ExternalRepresentation(
+                url: url,
+                kind: .nativeFolder,
+                suggestedFilename: itemActionService.suggestedFilename(for: item),
+                contentType: .folder,
+                isTemporary: source.origin.kind != .localFolder
+            )
+        case .portablePackage:
+            let url = try await itemActionService.createArchiveFile(for: item, source: source)
+            return ExternalRepresentation(
+                url: url,
+                kind: .portablePackage,
+                suggestedFilename: itemActionService.suggestedArchiveFilename(for: item),
+                contentType: itemActionService.archiveContentType(for: item),
+                isTemporary: true
+            )
+        }
+    }
+
     func removeSource(withID sourceID: URL) {
         let removedSource = source(withID: sourceID)
         scanTasks[sourceID]?.cancel()
@@ -325,6 +361,23 @@ final class SourceLibrary: ObservableObject, SourceScanSessionHosting, SourcePer
             source.sizeStageElapsed = snapshot.sizeStageElapsed
             source.sizeStageDuration = snapshot.sizeStageDuration
             source.lastScanDate = snapshot.lastScanDate
+        }
+    }
+
+    private func resolvedExternalRepresentationKind(
+        for source: MinecraftSource,
+        preferredKind: ExternalRepresentationKind?
+    ) -> ExternalRepresentationKind {
+        switch preferredKind {
+        case .some(.nativeFolder):
+            if source.capabilities.canMaterializeItems {
+                return .nativeFolder
+            }
+            return .portablePackage
+        case .some(.portablePackage):
+            return .portablePackage
+        case .none:
+            return .portablePackage
         }
     }
 
