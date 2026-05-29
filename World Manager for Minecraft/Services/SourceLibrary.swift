@@ -10,7 +10,7 @@ import Foundation
 import OSLog
 
 @MainActor
-final class SourceLibrary: ObservableObject, SourceScanSessionHosting, SourcePersistenceHosting, ConnectedDeviceRuntimeHosting, LocalSourceRuntimeHosting {
+final class SourceLibrary: ObservableObject, SourceScanSessionHosting, SourcePersistenceHosting, ConnectedDeviceRuntimeHosting, LocalSourceRuntimeHosting, SourceSyncRuntimeHosting {
     private static let enrichmentWorkerCount = 4
     private static let sizeWorkerCount = 2
     private static let minimumVisibleScanDuration: TimeInterval = 0.8
@@ -206,7 +206,7 @@ final class SourceLibrary: ObservableObject, SourceScanSessionHosting, SourcePer
         }
     }
 
-    private func startScan(for sourceID: URL, mode: SourceDiscoveryMode) {
+    func startScan(for sourceID: URL, mode: SourceDiscoveryMode) {
         guard !isShuttingDown else {
             return
         }
@@ -416,53 +416,13 @@ final class SourceLibrary: ObservableObject, SourceScanSessionHosting, SourcePer
     }
 
     func queueAutomaticSync(for sourceID: URL, reason: String, debounce: TimeInterval? = nil) {
-        guard !isShuttingDown else {
-            return
-        }
-
-        guard let source = source(withID: sourceID), source.availability == .available else {
-            return
-        }
-
-        if source.isScanning {
-            return
-        }
-
-        let resolvedDebounce = debounce ?? Self.automaticSyncDebounce
-
-        automaticSyncTasks[sourceID]?.cancel()
-        updateSource(sourceID) { source in
-            guard !source.isScanning else {
-                return
-            }
-
-            source.scanError = nil
-            if isCachedAvailabilityDiagnostic(source.scanDiagnostic) {
-                source.scanDiagnostic = nil
-            }
-            source.scanStatus = reason
-            source.scanProgress = nil
-        }
-
-            let mode: SourceDiscoveryMode = source.hasCachedContent ? .reconcile : .fullScan
-
-        let task = Task { [weak self] in
-            do {
-                try await Task.sleep(for: .seconds(resolvedDebounce))
-            } catch {
-                return
-            }
-
-            guard let self, !Task.isCancelled else {
-                return
-            }
-
-            await MainActor.run {
-                self.startScan(for: sourceID, mode: mode)
-            }
-        }
-
-        automaticSyncTasks[sourceID] = task
+        SourceSyncRuntime.queueAutomaticSync(
+            for: sourceID,
+            reason: reason,
+            debounce: debounce,
+            defaultDebounce: Self.automaticSyncDebounce,
+            on: self
+        )
     }
 
     private func purgeCachedArtifacts(for source: MinecraftSource) {
@@ -481,42 +441,15 @@ final class SourceLibrary: ObservableObject, SourceScanSessionHosting, SourcePer
 
     @discardableResult
     func updateAvailability(for sourceID: URL, to newAvailability: SourceAvailability) -> (previous: SourceAvailability, becameAvailable: Bool) {
-        let previousAvailability = source(withID: sourceID)?.availability ?? .unknown
-        let becameAvailable = previousAvailability != .available && newAvailability == .available
-
-        updateSource(sourceID) { source in
-            source.availability = newAvailability
-
-            guard !source.isScanning else {
-                return
-            }
-
-            if newAvailability == .available {
-                source.scanError = nil
-                if isCachedAvailabilityDiagnostic(source.scanDiagnostic) {
-                    source.scanDiagnostic = nil
-                }
-                if becameAvailable || source.scanStatus.isEmpty {
-                    source.scanStatus = source.indexedItemCount == 0
-                        ? "No Minecraft items found."
-                        : "Loaded \(source.indexedDetailCount) items."
-                }
-            } else {
-                source.scanError = nil
-                source.scanProgress = nil
-                source.scanStatus = source.availabilityDisplayText
-                source.scanDiagnostic = source.cachedAvailabilityDetailText
-            }
-        }
-
-        return (previousAvailability, becameAvailable)
+        SourceSyncRuntime.updateAvailability(for: sourceID, to: newAvailability, on: self)
     }
 
-    private func isCachedAvailabilityDiagnostic(_ diagnostic: String?) -> Bool {
-        guard let diagnostic else {
-            return false
-        }
+    func cancelAutomaticSync(for sourceID: URL) {
+        automaticSyncTasks[sourceID]?.cancel()
+        automaticSyncTasks[sourceID] = nil
+    }
 
-        return diagnostic.localizedCaseInsensitiveContains("showing cached results")
+    func storeAutomaticSyncTask(_ task: Task<Void, Never>, for sourceID: URL) {
+        automaticSyncTasks[sourceID] = task
     }
 }
