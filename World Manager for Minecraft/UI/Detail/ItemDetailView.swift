@@ -218,7 +218,7 @@ struct ItemDetailView: View {
             detailRow(title: "Name", value: item.displayName)
             detailValueRow(title: "Size", value: sizeText)
             detailValueRow(title: item.displayDateLabel, value: displayDateText)
-            detailValueRow(title: "Created", value: createdDateText)
+            detailValueRow(title: "Created", value: fileFacts.createdDateText)
 
             if let gameMode = item.worldMetadata?.gameMode {
                 detailValueRow(title: "Game Mode", value: gameMode)
@@ -339,8 +339,8 @@ struct ItemDetailView: View {
     }
 
     private var storageHighlights: [String] {
-        var highlights = [storageFormatLabel]
-        if let approximateAgeText {
+        var highlights = [fileFacts.storageFormatLabel]
+        if let approximateAgeText = fileFacts.approximateAgeText {
             highlights.append(approximateAgeText)
         }
         return highlights
@@ -416,35 +416,8 @@ struct ItemDetailView: View {
         }
     }
 
-    private var storageFormatLabel: String {
-        switch item.contentType {
-        case .world:
-            return FileManager.default.fileExists(atPath: item.folderURL.appendingPathComponent("db", isDirectory: true).path)
-                ? "LevelDB world storage"
-                : "Flat-file world storage"
-        case .behaviorPack, .resourcePack, .skinPack, .worldTemplate:
-            return "Manifest-based package"
-        }
-    }
-
-    private var createdDateText: String {
-        (try? item.folderURL.resourceValues(forKeys: [.creationDateKey]).creationDate)?
-            .formatted(date: .abbreviated, time: .omitted) ?? "Unknown"
-    }
-
-    private var approximateAgeText: String? {
-        guard let createdDate = try? item.folderURL.resourceValues(forKeys: [.creationDateKey]).creationDate else {
-            return nil
-        }
-
-        let components = Calendar.current.dateComponents([.year, .month], from: createdDate, to: .now)
-        if let year = components.year, year > 0 {
-            return year == 1 ? "About 1 year old" : "About \(year) years old"
-        }
-        if let month = components.month, month > 0 {
-            return month == 1 ? "About 1 month old" : "About \(month) months old"
-        }
-        return "Recently created"
+    private var fileFacts: ContentItemFileFacts {
+        ContentItemFileFacts(item: item)
     }
 
     private var visibleContentsCountText: String {
