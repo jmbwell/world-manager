@@ -892,7 +892,10 @@ final class SourceLibrary: ObservableObject {
                 continue
             }
 
-            if sourceNeedsReconcile(refreshedSource) {
+            if SourceRestoration.needsReconcile(
+                refreshedSource,
+                currentCollectionSnapshots: currentCollectionSnapshots(for:)
+            ) {
                 queueAutomaticSync(
                     for: sourceID,
                     reason: refreshedSource.hasCachedContent
@@ -1145,44 +1148,9 @@ final class SourceLibrary: ObservableObject {
         }
 
         for record in records {
-            var source = MinecraftSource(
-                sourceID: record.sourceID,
-                folderURL: record.folderURL,
-                bookmarkData: record.bookmarkData,
-                origin: record.origin,
-                accessDescriptor: record.accessDescriptor,
-                availability: record.availability
-            )
-            if case .connectedDevice(let device, let container) = source.origin {
-                var repairedDevice = device
-                repairedDevice.name = ConnectedDeviceSourcePolicy.preferredDeviceName(
-                    currentName: device.name,
-                    fallbackDeviceName: "",
-                    fallbackDisplayName: record.displayName
-                )
-                source.origin = .connectedDevice(device: repairedDevice, container: container)
-                let persistedDeviceName = record.displayName.components(separatedBy: " • ").first ?? record.displayName
-                if ConnectedDeviceSourcePolicy.sanitizedDeviceName(persistedDeviceName) == nil {
-                    source.displayName = connectedDeviceSourceFactory.displayName(
-                        for: repairedDevice,
-                        container: container
-                    )
-                } else {
-                    source.displayName = record.displayName
-                }
-            } else {
-                source.displayName = record.displayName
+            let source = SourceRestoration.restoredSource(from: record) { [connectedDeviceSourceFactory] device, container in
+                connectedDeviceSourceFactory.displayName(for: device, container: container)
             }
-            source.rawItems = record.rawItems
-            source.indexedItemCount = record.rawItems.count
-            source.indexedDetailCount = record.rawItems.filter(\.metadataLoaded).count
-            source.previewLoadedCount = record.rawItems.filter(\.previewLoaded).count
-            source.sizeLoadedCount = record.rawItems.filter(\.sizeLoaded).count
-            source.lastScanDate = record.lastScanDate
-            source.snapshot = record.snapshot
-            source.scanStatus = source.indexedItemCount == 0
-                ? "No Minecraft items found."
-                : "Loaded \(source.indexedDetailCount) items."
 
             sources.append(source)
             rebuildNormalizedIndex(for: source.id)
@@ -1198,15 +1166,14 @@ final class SourceLibrary: ObservableObject {
         await Task.yield()
 
         for record in records {
-            let restoredItems = await restoreCachedImages(in: record.rawItems)
+            let restoredItems = await SourceRestoration.restoreCachedImages(in: record.rawItems)
             updateSource(record.sourceID) { source in
-                source.rawItems = restoredItems
-                source.indexedItemCount = restoredItems.count
-                source.indexedDetailCount = restoredItems.filter(\.metadataLoaded).count
-                source.previewLoadedCount = restoredItems.filter(\.previewLoaded).count
-                source.sizeLoadedCount = restoredItems.filter(\.sizeLoaded).count
-                source.lastScanDate = record.lastScanDate
-                source.snapshot = record.snapshot
+                SourceRestoration.applyRestoredItemState(
+                    restoredItems,
+                    lastScanDate: record.lastScanDate,
+                    snapshot: record.snapshot,
+                    to: &source
+                )
             }
             rebuildNormalizedIndex(for: record.sourceID)
         }
@@ -1216,131 +1183,16 @@ final class SourceLibrary: ObservableObject {
         scheduleRestoredSourceRefreshes(records: records)
     }
 
-    private func restoreCachedImages(in items: [MinecraftContentItem]) async -> [MinecraftContentItem] {
-        var restoredItems: [MinecraftContentItem] = []
-        restoredItems.reserveCapacity(items.count)
-
-        for var item in items {
-            item.iconURL = await ImageCacheStore.shared.cachedImageURL(for: item.iconURL)
-            item.packReferences = await restoreCachedImages(in: item.packReferences)
-            restoredItems.append(item)
-        }
-
-        return restoredItems
-    }
-
-    private func restoreCachedImages(in references: [ContentPackReference]) async -> [ContentPackReference] {
-        var restoredReferences: [ContentPackReference] = []
-        restoredReferences.reserveCapacity(references.count)
-
-        for reference in references {
-            let cachedIconURL = await ImageCacheStore.shared.cachedImageURL(for: reference.iconURL)
-            restoredReferences.append(
-                ContentPackReference(
-                    name: reference.name,
-                    type: reference.type,
-                    iconURL: cachedIconURL,
-                    uuid: reference.uuid,
-                    version: reference.version,
-                    source: reference.source
-                )
-            )
-        }
-
-        return restoredReferences
-    }
-
-    private func sourceNeedsRescan(_ record: PersistedSourceRecord) -> Bool {
-        guard record.accessDescriptor.refreshStrategy == .eagerFullScan else {
-            return record.rawItems.isEmpty
-        }
-
-        guard let snapshot = record.snapshot else {
-            return true
-        }
-
-        let sourceURL = record.folderURL
-
-        guard FileManager.default.fileExists(atPath: sourceURL.path) else {
-            return true
-        }
-
-        let currentCollections = Dictionary(uniqueKeysWithValues: currentCollectionSnapshots(for: sourceURL).map { ($0.folderName, $0) })
-        let persistedCollections = Dictionary(uniqueKeysWithValues: snapshot.collectionSnapshots.map { ($0.folderName, $0) })
-
-        if currentCollections.count != persistedCollections.count {
-            return true
-        }
-
-        for (folderName, persistedCollection) in persistedCollections {
-            guard let currentCollection = currentCollections[folderName],
-                  currentCollection.fingerprint == persistedCollection.fingerprint else {
-                return true
-            }
-        }
-
-        return false
-    }
-
-    private func sourceNeedsReconcile(_ source: MinecraftSource) -> Bool {
-        guard source.accessDescriptor.refreshStrategy == .eagerFullScan else {
-            return source.rawItems.isEmpty
-        }
-
-        guard let snapshot = source.snapshot else {
-            return true
-        }
-
-        let sourceURL = source.folderURL
-
-        guard FileManager.default.fileExists(atPath: sourceURL.path) else {
-            return false
-        }
-
-        let currentCollections = Dictionary(uniqueKeysWithValues: currentCollectionSnapshots(for: sourceURL).map { ($0.folderName, $0) })
-        let persistedCollections = Dictionary(uniqueKeysWithValues: snapshot.collectionSnapshots.map { ($0.folderName, $0) })
-
-        if currentCollections.count != persistedCollections.count {
-            return true
-        }
-
-        for (folderName, persistedCollection) in persistedCollections {
-            guard let currentCollection = currentCollections[folderName],
-                  currentCollection.fingerprint == persistedCollection.fingerprint else {
-                return true
-            }
-        }
-
-        return false
-    }
-
     private func scheduleRestoredSourceRefreshes(records: [PersistedSourceRecord]) {
         let persistedRecordsByID = Dictionary(uniqueKeysWithValues: records.map { ($0.sourceID, $0) })
 
         for source in sources {
-            guard source.availability == .available else {
-                continue
-            }
-
-            switch source.origin.kind {
-            case .localFolder:
-                if let record = persistedRecordsByID[source.id], sourceNeedsRescan(record) || sourceNeedsReconcile(source) {
-                    queueAutomaticSync(
-                        for: source.id,
-                        reason: source.hasCachedContent
-                            ? "Refreshing cached library..."
-                            : "Scanning Minecraft library..."
-                    )
-                }
-            case .connectedDevice:
-                if source.rawItems.isEmpty || source.lastScanDate == nil {
-                    queueAutomaticSync(
-                        for: source.id,
-                        reason: source.hasCachedContent
-                            ? "Refreshing cached library..."
-                            : "Scanning Minecraft library..."
-                    )
-                }
+            if let refreshReason = SourceRestoration.startupRefreshReason(
+                for: source,
+                persistedRecord: persistedRecordsByID[source.id],
+                currentCollectionSnapshots: currentCollectionSnapshots(for:)
+            ) {
+                queueAutomaticSync(for: source.id, reason: refreshReason)
             }
         }
     }
