@@ -91,10 +91,10 @@
 				Models/MinecraftContentItem.swift,
 				QuickLook/MinecraftPackageThumbnailRenderer.swift,
 				QuickLook/MinecraftPackageTypes.swift,
-				Services/BedrockLevelMetadataDecoder.swift,
-				Services/MinecraftContentMetadataReader.swift,
-				Services/MinecraftPackageInspector.swift,
-				Services/ZipArchiveReader.swift,
+				Services/ArchiveInspection/BedrockLevelMetadataDecoder.swift,
+				Services/ArchiveInspection/MinecraftContentMetadataReader.swift,
+				Services/ArchiveInspection/MinecraftPackageInspector.swift,
+				Services/ArchiveInspection/ZipArchiveReader.swift,
 			);
 			target = 52C72BC72FC7314D009928CB /* MinecraftPackageThumbnailExtension */;
 		};
@@ -105,10 +105,10 @@
 				QuickLook/MinecraftPackageQuickLookModel.swift,
 				QuickLook/MinecraftPackageThumbnailRenderer.swift,
 				QuickLook/MinecraftPackageTypes.swift,
-				Services/BedrockLevelMetadataDecoder.swift,
-				Services/MinecraftContentMetadataReader.swift,
-				Services/MinecraftPackageInspector.swift,
-				Services/ZipArchiveReader.swift,
+				Services/ArchiveInspection/BedrockLevelMetadataDecoder.swift,
+				Services/ArchiveInspection/MinecraftContentMetadataReader.swift,
+				Services/ArchiveInspection/MinecraftPackageInspector.swift,
+				Services/ArchiveInspection/ZipArchiveReader.swift,
 			);
 			target = 52C72BDA2FC73171009928CB /* MinecraftPackagePreviewExtension */;
 		};
