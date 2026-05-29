@@ -12,6 +12,33 @@ import Testing
 @MainActor
 struct World_Manager_for_MinecraftTests {
 
+    @Test func sourceOriginsExposeOutboundCapabilities() async throws {
+        let localSource = MinecraftSource(folderURL: URL(fileURLWithPath: "/tmp/local"))
+        #expect(localSource.capabilities == .localFolder)
+
+        let device = ConnectedDevice(
+            udid: "device",
+            name: "Device",
+            productType: nil,
+            osVersion: nil,
+            connection: .usb,
+            trustState: .trusted
+        )
+        let container = DeviceAppContainer(
+            deviceUDID: device.udid,
+            appID: "com.mojang.minecraftpe",
+            appName: "Minecraft",
+            accessMode: .documents,
+            minecraftFolderRelativePath: "Documents/games/com.mojang"
+        )
+        let deviceSource = MinecraftSource(
+            folderURL: URL(fileURLWithPath: "/tmp/device"),
+            origin: .connectedDevice(device: device, container: container)
+        )
+
+        #expect(deviceSource.capabilities == .connectedDevice)
+    }
+
     @Test func packIdentityUsesUUIDAndVersion() async throws {
         let first = PackIdentity(
             type: .behaviorPack,

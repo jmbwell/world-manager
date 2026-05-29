@@ -43,6 +43,11 @@ struct LocalFolderSourceAccess: SourceAccessMethod {
         return FileManager.default.fileExists(atPath: candidateURL.path) ? .available : .unavailable
     }
 
+    nonisolated func capabilities(for source: MinecraftSource) async -> SourceCapabilities {
+        _ = source
+        return .localFolder
+    }
+
     nonisolated func discoverItems(
         for source: MinecraftSource,
         mode: SourceDiscoveryMode,

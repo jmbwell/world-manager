@@ -13,6 +13,7 @@ struct MinecraftSource: Identifiable, Hashable, Sendable {
     var origin: MinecraftSourceOrigin
     var accessDescriptor: SourceAccessDescriptor
     var availability: SourceAvailability
+    var capabilities: SourceCapabilities
     var bookmarkData: Data?
     var displayName: String
     var displayItems: [MinecraftContentItem]
@@ -56,6 +57,7 @@ struct MinecraftSource: Identifiable, Hashable, Sendable {
             refreshStrategy: resolvedOrigin.defaultRefreshStrategy
         )
         self.availability = availability
+        self.capabilities = resolvedOrigin.defaultCapabilities
         self.bookmarkData = bookmarkData
         self.displayName = normalizedFolderURL.lastPathComponent
         self.displayItems = []

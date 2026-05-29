@@ -77,6 +77,15 @@ nonisolated enum MinecraftSourceOrigin: Hashable, Sendable, Codable {
             return .staged
         }
     }
+
+    nonisolated var defaultCapabilities: SourceCapabilities {
+        switch self {
+        case .localFolder:
+            return .localFolder
+        case .connectedDevice:
+            return .connectedDevice
+        }
+    }
 }
 
 nonisolated enum MinecraftSourceKind: String, Hashable, Sendable, Codable {

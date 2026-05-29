@@ -131,6 +131,7 @@ final class SourceLibrary: ObservableObject, SourceScanSessionHosting, SourcePer
                     source.bookmarkData = bookmarkData
                 }
                 source.accessDescriptor = sourceAccessMethod.accessDescriptor(for: source)
+                source.capabilities = source.origin.defaultCapabilities
             }
             startScan(for: normalizedURL, mode: .fullScan)
             return normalizedURL
@@ -155,6 +156,7 @@ final class SourceLibrary: ObservableObject, SourceScanSessionHosting, SourcePer
                 existingSource.origin = source.origin
                 existingSource.accessDescriptor = source.accessDescriptor
                 existingSource.availability = source.availability
+                existingSource.capabilities = source.capabilities
                 if existingSource.bookmarkData == nil {
                     existingSource.bookmarkData = source.bookmarkData
                 }
@@ -165,6 +167,7 @@ final class SourceLibrary: ObservableObject, SourceScanSessionHosting, SourcePer
         } else {
             var resolvedSource = source
             resolvedSource.accessDescriptor = sourceAccessMethod.accessDescriptor(for: resolvedSource)
+            resolvedSource.capabilities = resolvedSource.origin.defaultCapabilities
             sources.append(resolvedSource)
             sources.sort { $0.displayName.localizedStandardCompare($1.displayName) == .orderedAscending }
         }

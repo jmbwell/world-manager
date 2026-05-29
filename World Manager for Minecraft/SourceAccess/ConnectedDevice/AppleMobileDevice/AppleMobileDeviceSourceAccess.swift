@@ -45,6 +45,11 @@ struct AppleMobileDeviceSourceAccess: ConnectedDeviceSourceAccessMethod {
         }
     }
 
+    nonisolated func capabilities(for source: MinecraftSource) async -> SourceCapabilities {
+        _ = source
+        return .connectedDevice
+    }
+
     nonisolated func listConnectedDevices() async throws -> [ConnectedDevice] {
         let devices = try await AppleMobileDeviceAccess.connectedDevices()
         return devices.compactMap { device in

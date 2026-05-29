@@ -16,6 +16,7 @@ protocol SourceAccessMethod: Sendable {
     nonisolated var accessorIdentifier: SourceAccessorIdentifier { get }
     nonisolated func accessDescriptor(for source: MinecraftSource) -> SourceAccessDescriptor
     nonisolated func availability(for source: MinecraftSource) async -> SourceAvailability
+    nonisolated func capabilities(for source: MinecraftSource) async -> SourceCapabilities
     nonisolated func discoverItems(
         for source: MinecraftSource,
         mode: SourceDiscoveryMode,
@@ -47,6 +48,10 @@ extension SourceAccessMethod {
     nonisolated func availability(for source: MinecraftSource) async -> SourceAvailability {
         _ = source
         return .unknown
+    }
+
+    nonisolated func capabilities(for source: MinecraftSource) async -> SourceCapabilities {
+        source.origin.defaultCapabilities
     }
 
     nonisolated func discoverItems(
@@ -169,6 +174,10 @@ struct SourceAccessCoordinator: SourceAccessMethod {
 
     nonisolated func availability(for source: MinecraftSource) async -> SourceAvailability {
         return await accessMethod(for: source).availability(for: source)
+    }
+
+    nonisolated func capabilities(for source: MinecraftSource) async -> SourceCapabilities {
+        return await accessMethod(for: source).capabilities(for: source)
     }
 
     nonisolated func enrich(_ item: MinecraftContentItem, for source: MinecraftSource) async -> MinecraftContentItem {
