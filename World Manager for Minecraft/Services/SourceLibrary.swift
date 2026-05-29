@@ -10,7 +10,7 @@ import Foundation
 import OSLog
 
 @MainActor
-final class SourceLibrary: ObservableObject, SourceScanSessionHosting {
+final class SourceLibrary: ObservableObject, SourceScanSessionHosting, SourcePersistenceHosting {
     private static let enrichmentWorkerCount = 4
     private static let sizeWorkerCount = 2
     private static let minimumVisibleScanDuration: TimeInterval = 0.8
@@ -27,7 +27,7 @@ final class SourceLibrary: ObservableObject, SourceScanSessionHosting {
 
     @Published var sources: [MinecraftSource] = []
     @Published private(set) var connectedDevices: [ConnectedDeviceSidebarEntry] = []
-    @Published private(set) var isRestoringPersistedSources = true
+    @Published var isRestoringPersistedSources = true
 
     private var scanTasks: [URL: Task<Void, Never>] = [:]
     private var automaticSyncTasks: [URL: Task<Void, Never>] = [:]
@@ -54,7 +54,10 @@ final class SourceLibrary: ObservableObject, SourceScanSessionHosting {
         self.notificationService = notificationService ?? ScanNotificationService.shared
 
         Task { [weak self] in
-            await self?.restorePersistedSources()
+            guard let self else {
+                return
+            }
+            await SourcePersistenceCoordinator.restoreSources(on: self, using: self.persistenceStore)
         }
 
         localSourceRefreshTask = Task { [weak self] in
@@ -110,7 +113,10 @@ final class SourceLibrary: ObservableObject, SourceScanSessionHosting {
             return
         }
 
-        await persistVisibleSourcesForShutdown()
+        await SourcePersistenceCoordinator.persistVisibleSourcesForShutdown(
+            from: visibleSources,
+            using: persistenceStore
+        )
         shutdown()
         try? await Task.sleep(for: .seconds(timeout))
     }
@@ -194,7 +200,7 @@ final class SourceLibrary: ObservableObject, SourceScanSessionHosting {
         scanTasks[sourceID]?.cancel()
         scanTasks[sourceID] = nil
         sources.removeAll { $0.id == sourceID }
-        deletePersistedSource(withID: sourceID)
+        SourcePersistenceCoordinator.deletePersistedSource(withID: sourceID, using: persistenceStore)
         if let removedSource {
             purgeCachedArtifacts(for: removedSource)
         }
@@ -249,7 +255,7 @@ final class SourceLibrary: ObservableObject, SourceScanSessionHosting {
         )
     }
 
-    private func rebuildNormalizedIndex(for sourceID: URL) {
+    func rebuildNormalizedIndex(for sourceID: URL) {
         updateSource(sourceID) { source in
             let rawItems = source.rawItems.sorted(by: WorldScanner.sortItems)
             source.rawItems = rawItems
@@ -504,7 +510,7 @@ final class SourceLibrary: ObservableObject, SourceScanSessionHosting {
         }
     }
 
-    private func refreshLocalSources() async {
+    func refreshLocalSources() async {
         guard !hasActiveScan else {
             return
         }
@@ -557,7 +563,7 @@ final class SourceLibrary: ObservableObject, SourceScanSessionHosting {
         }
     }
 
-    private func refreshConnectedDevices() async {
+    func refreshConnectedDevices() async {
         guard !isShuttingDown else {
             return
         }
@@ -786,70 +792,33 @@ final class SourceLibrary: ObservableObject, SourceScanSessionHosting {
         }
     }
 
-    private func restorePersistedSources() async {
-        defer {
-            isRestoringPersistedSources = false
-        }
-
-        let records: [PersistedSourceRecord]
-        do {
-            records = try await persistenceStore.loadSources()
-        } catch {
-            return
-        }
-
-        for record in records {
-            let source = SourceRestoration.restoredSource(from: record) { [connectedDeviceSourceFactory] device, container in
-                connectedDeviceSourceFactory.displayName(for: device, container: container)
-            }
-
-            sources.append(source)
-            rebuildNormalizedIndex(for: source.id)
-        }
-
-        for record in records where record.needsRepair {
-            Task.detached(priority: .utility) { [persistenceStore] in
-                try? await persistenceStore.repair(record: record)
-            }
-        }
-
-        sources.sort { $0.displayName.localizedStandardCompare($1.displayName) == .orderedAscending }
-        await Task.yield()
-
-        for record in records {
-            let restoredItems = await SourceRestoration.restoreCachedImages(in: record.rawItems)
-            updateSource(record.sourceID) { source in
-                SourceRestoration.applyRestoredItemState(
-                    restoredItems,
-                    lastScanDate: record.lastScanDate,
-                    snapshot: record.snapshot,
-                    to: &source
-                )
-            }
-            rebuildNormalizedIndex(for: record.sourceID)
-        }
-
-        await refreshConnectedDevices()
-        await refreshLocalSources()
-        scheduleRestoredSourceRefreshes(records: records)
-    }
-
-    private func scheduleRestoredSourceRefreshes(records: [PersistedSourceRecord]) {
-        let persistedRecordsByID = Dictionary(uniqueKeysWithValues: records.map { ($0.sourceID, $0) })
-
-        for source in sources {
-            if let refreshReason = SourceRestoration.startupRefreshReason(
-                for: source,
-                persistedRecord: persistedRecordsByID[source.id],
-                currentCollectionSnapshots: currentCollectionSnapshots(for:)
-            ) {
-                queueAutomaticSync(for: source.id, reason: refreshReason)
-            }
-        }
-    }
-
-    private func currentCollectionSnapshots(for sourceURL: URL) -> [CollectionSnapshot] {
+    func currentCollectionSnapshots(for sourceURL: URL) -> [CollectionSnapshot] {
         WorldScanner.collectionSnapshots(in: sourceURL)
+    }
+
+    func connectedDeviceDisplayName(for device: ConnectedDevice, container: DeviceAppContainer) -> String {
+        connectedDeviceSourceFactory.displayName(for: device, container: container)
+    }
+
+    func appendRestoredSource(_ source: MinecraftSource) {
+        sources.append(source)
+        rebuildNormalizedIndex(for: source.id)
+    }
+
+    func applyRestoredItems(_ items: [MinecraftContentItem], from record: PersistedSourceRecord) {
+        updateSource(record.sourceID) { source in
+            SourceRestoration.applyRestoredItemState(
+                items,
+                lastScanDate: record.lastScanDate,
+                snapshot: record.snapshot,
+                to: &source
+            )
+        }
+        rebuildNormalizedIndex(for: record.sourceID)
+    }
+
+    func sortSourcesByDisplayName() {
+        sources.sort { $0.displayName.localizedStandardCompare($1.displayName) == .orderedAscending }
     }
 
     private func buildDisplayItems(
@@ -891,30 +860,14 @@ final class SourceLibrary: ObservableObject, SourceScanSessionHosting {
     }
 
     func persistSourceIfAvailable(withID sourceID: URL) {
-        guard let source = source(withID: sourceID) else {
-            return
-        }
-
-        let persistedSource = source
-        Task {
-            try? await persistenceStore.save(source: persistedSource)
-        }
+        SourcePersistenceCoordinator.persistSourceIfAvailable(
+            withID: sourceID,
+            on: self,
+            using: persistenceStore
+        )
     }
 
-    private func persistVisibleSourcesForShutdown() async {
-        let persistedSources = sources
-        for source in persistedSources {
-            try? await persistenceStore.save(source: source)
-        }
-    }
-
-    private func deletePersistedSource(withID sourceID: URL) {
-        Task {
-            try? await persistenceStore.deleteSource(withID: sourceID)
-        }
-    }
-
-    private func queueAutomaticSync(for sourceID: URL, reason: String, debounce: TimeInterval? = nil) {
+    func queueAutomaticSync(for sourceID: URL, reason: String, debounce: TimeInterval? = nil) {
         guard !isShuttingDown else {
             return
         }
