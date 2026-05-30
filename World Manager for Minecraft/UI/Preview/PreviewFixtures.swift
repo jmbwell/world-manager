@@ -138,6 +138,9 @@ enum PreviewFixtures {
             behaviorPackItem,
             resourcePackItem
         ]
+        source.displayItemCountsByType = source.displayItems.reduce(into: [MinecraftContentType: Int]()) { counts, item in
+            counts[item.contentType, default: 0] += 1
+        }
         source.rawItems = source.displayItems
         source.logicalPacks = [
             LogicalPack(
@@ -220,6 +223,9 @@ enum PreviewFixtures {
         var source = MinecraftSource(folderURL: sourceTwoURL)
         source.displayName = "Downloads"
         source.displayItems = [secondLibraryPack]
+        source.displayItemCountsByType = source.displayItems.reduce(into: [MinecraftContentType: Int]()) { counts, item in
+            counts[item.contentType, default: 0] += 1
+        }
         source.rawItems = source.displayItems
         source.indexedItemCount = source.displayItems.count
         source.indexedDetailCount = source.displayItems.count
@@ -317,11 +323,11 @@ struct ItemListColumnPreviewContainer: View {
                 subtitle: "5 items in Kid iPad Imports",
                 showsSubtitle: false,
                 isRefreshing: false,
+                isUpdatingProjection: false,
                 items: PreviewFixtures.primarySource.displayItems,
                 searchPrompt: "Search Worlds",
                 chooseFolderAction: {},
                 dropAction: { _ in false },
-                dragProvider: { _ in NSItemProvider() },
                 itemContextMenu: { item in
                     Button("Reveal \(item.displayName)") {}
                 }

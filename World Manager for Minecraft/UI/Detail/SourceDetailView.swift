@@ -21,14 +21,8 @@ struct SourceDetailView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text(source.displayName)
-                        .font(.largeTitle.weight(.semibold))
-
-                    Text(sourceSummary)
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                }
+                Text(source.displayName)
+                    .font(.largeTitle.weight(.semibold))
 
                 if showsStatusSection {
                     sourceStatusSection
@@ -44,15 +38,6 @@ struct SourceDetailView: View {
             }
             .frame(maxWidth: 760, alignment: .leading)
             .padding(28)
-        }
-    }
-
-    private var sourceSummary: String {
-        switch source.origin {
-        case .localFolder:
-            return "Local filesystem source"
-        case .connectedDevice(let device, let container):
-            return "\(device.name) • \(container.appName)"
         }
     }
 
@@ -132,25 +117,24 @@ struct SourceDetailView: View {
     private var sourceStatusSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Status")
-                .font(.headline)
+                .appSectionTitleStyle(.section)
 
             VStack(alignment: .leading, spacing: 12) {
                 HStack(alignment: .center, spacing: 10) {
                     if SourcePresentation.showsIndeterminateScanActivityIndicator(for: source) {
                         ProgressView()
-                            .controlSize(.small)
+                            .appActivityIndicatorStyle(.small)
                     } else if !source.isScanning {
                         sourceStatusIcon
                     }
 
                     Text(statusTitle)
-                        .font(.subheadline.weight(.semibold))
+                        .appTextStyle(.rowTitle)
                 }
 
                 if let statusDetail, !statusDetail.isEmpty {
                     Text(statusDetail)
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                        .appTextStyle(.supporting)
                 }
 
                 if source.isScanning {
@@ -164,8 +148,7 @@ struct SourceDetailView: View {
                     }
                 }
             }
-            .padding(18)
-            .appCardSurface(.primaryPanel)
+            .appDetailSectionCard()
         }
     }
 
@@ -378,13 +361,12 @@ struct SourceDetailView: View {
                     .frame(width: 14)
 
                 Text(stage.title)
-                    .font(.subheadline.weight(.semibold))
+                    .appTextStyle(.rowTitle)
 
                 Spacer()
 
                 Text(stage.detail)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .appTextStyle(.fieldLabel)
             }
 
             if stage.status == .completed {
@@ -392,7 +374,7 @@ struct SourceDetailView: View {
             } else if stage.showsIndeterminateProgress {
                 ProgressView()
                     .progressViewStyle(.linear)
-                    .controlSize(.small)
+                    .appActivityIndicatorStyle(.small)
                     .tint(Color.appAccent)
             } else if let progress = stage.progress {
                 ProgressView(value: progress, total: 1)
@@ -502,14 +484,13 @@ struct SourceDetailView: View {
     private func sourceSection(title: String, rows: [(String, String)]) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             Text(title)
-                .font(.headline)
+                .appSectionTitleStyle(.section)
 
             VStack(alignment: .leading, spacing: 12) {
                 ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
                     HStack(alignment: .top, spacing: 16) {
                         Text(row.0)
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(.secondary)
+                            .appTextStyle(.emphasisLabel)
                             .frame(width: 170, alignment: .leading)
 
                         Text(row.1)
@@ -518,8 +499,7 @@ struct SourceDetailView: View {
                     }
                 }
             }
-            .padding(18)
-            .appCardSurface(.primaryPanel)
+            .appDetailSectionCard()
         }
     }
 }

@@ -31,8 +31,8 @@ struct ConnectedDeviceSourceFactory: Sendable {
         return source
     }
 
-    nonisolated func displayName(for device: ConnectedDevice, container: DeviceAppContainer) -> String {
-        "\(device.name) • \(container.appName)"
+    nonisolated func displayName(for device: ConnectedDevice, container _: DeviceAppContainer) -> String {
+        device.name
     }
 
     nonisolated func makeSourceIdentifier(device: ConnectedDevice, container: DeviceAppContainer) -> URL {

@@ -135,7 +135,7 @@ struct ItemDetailView: View {
                             if !contents.isEmpty {
                                 VStack(alignment: .leading, spacing: 8) {
                                     Text("Recent Folder Contents")
-                                        .font(.subheadline.weight(.semibold))
+                                        .appTextStyle(.rowTitle)
 
                                     ForEach(contents) { entry in
                                         HStack(spacing: 10) {
@@ -149,8 +149,7 @@ struct ItemDetailView: View {
 
                                     if contents.count == directoryPreviewLimit {
                                         Text("Showing the first \(directoryPreviewLimit) items")
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
+                                            .appTextStyle(.fieldLabel)
                                     }
                                 }
                             }
@@ -433,17 +432,13 @@ struct ItemDetailView: View {
         @ViewBuilder content: () -> Content
     ) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text(title.uppercased())
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-                .tracking(0.5)
+            Text(title)
+                .appSectionTitleStyle(.section)
 
             VStack(alignment: .leading, spacing: 14) {
                 content()
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(18)
-            .appCardSurface(.secondaryPanel)
+            .appDetailSectionCard()
         }
     }
 
@@ -451,7 +446,7 @@ struct ItemDetailView: View {
     private func packSection(title: String, packs: [ContentPackReference]) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(title)
-                .font(.subheadline.weight(.semibold))
+                .appTextStyle(.rowTitle)
 
             ForEach(packs) { pack in
                 recordListRow(
@@ -466,14 +461,15 @@ struct ItemDetailView: View {
 
     @ViewBuilder
     private func detailRow(title: String, value: String) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
+        HStack(alignment: .top, spacing: 16) {
             Text(title)
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .appTextStyle(.emphasisLabel)
+                .frame(width: 170, alignment: .leading)
 
             Text(value)
-                .fixedSize(horizontal: false, vertical: true)
                 .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -481,7 +477,7 @@ struct ItemDetailView: View {
     private func detailValueRow(title: String, value: String) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 16) {
             Text(title)
-                .foregroundStyle(.secondary)
+                .appTextStyle(.emphasisLabel)
             Spacer()
             Text(value)
                 .fontWeight(.medium)
@@ -538,8 +534,7 @@ struct ItemDetailView: View {
         VStack(alignment: .leading, spacing: 8) {
             ForEach(values, id: \.self) { value in
                 Label(value, systemImage: "checkmark.circle")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                    .appTextStyle(.supporting)
             }
         }
     }
@@ -586,8 +581,7 @@ struct ItemDetailView: View {
 
                 if let subtitle, !subtitle.isEmpty {
                     Text(subtitle)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .appTextStyle(.fieldLabel)
                         .lineLimit(3)
                 }
             }

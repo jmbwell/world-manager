@@ -117,12 +117,14 @@ final class SourceLibrary: ObservableObject, SourceScanSessionHosting, SourcePer
             return
         }
 
-        await SourcePersistenceCoordinator.persistVisibleSourcesForShutdown(
-            from: visibleSources,
-            using: persistenceStore
-        )
+        let sourcesToPersist = visibleSources
         shutdown()
-        try? await Task.sleep(for: .seconds(timeout))
+
+        await SourcePersistenceCoordinator.persistVisibleSourcesForShutdown(
+            from: sourcesToPersist,
+            using: persistenceStore,
+            timeout: timeout
+        )
     }
 
     func addSource(at url: URL) -> URL {
@@ -303,6 +305,7 @@ final class SourceLibrary: ObservableObject, SourceScanSessionHosting, SourcePer
             source.packInstances = index.packInstances
             source.worldPackRelationships = index.worldPackRelationships
             source.displayItems = index.displayItems
+            source.displayItemCountsByType = index.displayItemCountsByType
         }
     }
 
@@ -344,6 +347,7 @@ final class SourceLibrary: ObservableObject, SourceScanSessionHosting, SourcePer
     func applySnapshot(_ snapshot: SourceIndexSnapshot, to sourceID: URL) {
         updateSource(sourceID) { source in
             source.displayItems = snapshot.displayItems
+            source.displayItemCountsByType = snapshot.displayItemCountsByType
             source.rawItems = snapshot.rawItems
             source.logicalPacks = snapshot.logicalPacks
             source.logicalWorlds = snapshot.logicalWorlds

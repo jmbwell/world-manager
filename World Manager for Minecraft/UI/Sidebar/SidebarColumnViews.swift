@@ -1,6 +1,6 @@
 import SwiftUI
 
-enum SidebarSelection: Hashable {
+enum SidebarSelection: Hashable, Sendable {
     case source(sourceID: URL)
     case allContent(sourceID: URL)
     case contentType(sourceID: URL, contentType: MinecraftContentType)
@@ -78,14 +78,13 @@ struct SourcesSidebarView: View {
 
         SourceHeaderRow(
             source: source,
-            isSelected: selection == .source(sourceID: source.id),
             onSelect: {
                 selection = .source(sourceID: source.id)
             }
         )
             .tag(SidebarSelection.source(sourceID: source.id) as SidebarSelection?)
             .listRowSeparator(.hidden)
-            .listRowInsets(EdgeInsets(top: 6, leading: 0, bottom: 0, trailing: 8))
+            .listRowInsets(EdgeInsets(top: 6, leading: 0, bottom: 0, trailing: 0))
             .contextMenu {
                 Button("Rescan \"\(source.displayName)\"") {
                     rescanSourceAction(source)
@@ -143,54 +142,49 @@ private struct SidebarSourcesSectionHeaderView: View {
 
     var body: some View {
         Text(title)
-            .font(.headline)
-            .foregroundStyle(.secondary)
-            .textCase(nil)
     }
 }
 
 private struct SourceHeaderRow: View {
     let source: MinecraftSource
-    let isSelected: Bool
     let onSelect: () -> Void
-    @State private var isHovering = false
 
     var body: some View {
-        Button(action: onSelect) {
+        HStack(spacing: 8) {
+            Image(systemName: headerSymbolName)
+                .foregroundStyle(.secondary)
+
+            Text(source.displayName)
+                .lineLimit(1)
+
+            Spacer(minLength: 8)
+
             HStack(spacing: 8) {
-                Image(systemName: headerSymbolName)
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(titleColor)
-
-                Text(source.displayName)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(titleColor)
-
-                Spacer(minLength: 8)
+                if let availabilityBadgeText {
+                    SourceAvailabilityBadge(text: availabilityBadgeText, emphasis: availabilityBadgeEmphasis)
+                }
 
                 if let connection {
                     SourceConnectionBadge(connection: connection)
                 }
 
-                if let availabilityBadgeText {
-                    SourceAvailabilityBadge(text: availabilityBadgeText, emphasis: availabilityBadgeEmphasis)
-                }
-
-                if showsStatusIndicator {
-                    statusIndicator
-                        .frame(width: 24, height: 24)
+                if showsStatusAccessory {
+                    statusAccessory
                 }
             }
         }
-        .buttonStyle(.plain)
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
-        .appSidebarRowSurface(isHighlighted: isHovering && !isSelected)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.leading, 5)
+        .padding(.vertical, 6)
         .contentShape(Rectangle())
-        .onHover { isHovering = $0 }
+        .onTapGesture(perform: onSelect)
     }
 
     private var connection: DeviceConnection? {
+        guard source.availability == .available else {
+            return nil
+        }
+
         guard case .connectedDevice(let device, _) = source.origin else {
             return nil
         }
@@ -205,14 +199,6 @@ private struct SourceHeaderRow: View {
         case .connectedDevice:
             return "iphone.gen3"
         }
-    }
-
-    private var titleColor: Color {
-        if source.availability != .available && !isSelected {
-            return .secondary
-        }
-
-        return isSelected ? Color.primary : .secondary
     }
 
     private var availabilityBadgeText: String? {
@@ -233,33 +219,22 @@ private struct SourceHeaderRow: View {
     private var availabilityBadgeEmphasis: Bool {
         source.availability == .limited
     }
-    @ViewBuilder
-    private var statusIndicator: some View {
-        if source.isScanning {
-            if let scanProgress = source.scanProgress {
-                CircularScanProgressView(progress: scanProgress)
-            } else {
-                ProgressView()
-                    .controlSize(.small)
-            }
-        } else if source.availability == .limited {
-            Image(systemName: "lock.circle")
-                .foregroundStyle(.secondary)
-        } else if source.availability != .available {
-            Image(systemName: source.isOfflineCached ? "externaldrive.badge.exclamationmark" : "slash.circle")
-                .foregroundStyle(.secondary)
-        } else if source.scanError != nil {
-            Image(systemName: "exclamationmark.circle")
-                .foregroundStyle(.secondary)
-        } else {
-            Image(systemName: "info.circle")
-                .foregroundStyle(.secondary)
-        }
+
+    private var showsStatusAccessory: Bool {
+        source.isScanning
     }
 
-    private var showsStatusIndicator: Bool {
-        source.isScanning || source.scanError != nil || source.availability != .available
-    }
+    @ViewBuilder
+    private var statusAccessory: some View {
+            if source.isScanning {
+                if let scanProgress = source.scanProgress {
+                    CircularScanProgressView(progress: scanProgress)
+                } else {
+                    ProgressView()
+                        .appActivityIndicatorStyle(.small)
+                }
+            }
+        }
 }
 
 private struct SourceConnectionBadge: View {
@@ -267,11 +242,7 @@ private struct SourceConnectionBadge: View {
 
     var body: some View {
         Image(systemName: symbolName)
-            .font(.caption.weight(.semibold))
-            .foregroundStyle(.secondary)
-            .padding(.horizontal, 7)
-            .padding(.vertical, 4)
-            .background(.secondary.opacity(0.12), in: Capsule())
+            .appCapsuleLabelStyle(.sidebarSubtle)
             .help(helpText)
             .accessibilityLabel(helpText)
     }
@@ -301,15 +272,7 @@ private struct SourceAvailabilityBadge: View {
 
     var body: some View {
         Text(text)
-            .font(.caption.weight(.semibold))
-            .foregroundStyle(emphasis ? Color.appAccent : .secondary)
-            .padding(.horizontal, 7)
-            .padding(.vertical, 4)
-            .background(backgroundColor, in: Capsule())
-    }
-
-    private var backgroundColor: Color {
-        emphasis ? Color.appAccent.opacity(0.14) : .secondary.opacity(0.12)
+            .appCapsuleLabelStyle(emphasis ? .sidebarAccent : .sidebarSubtle)
     }
 }
 
@@ -350,12 +313,11 @@ private struct ConnectedDeviceRow: View {
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(entry.device.name)
-                    .font(.subheadline.weight(.semibold))
+                    .appTextStyle(.rowTitle)
                     .foregroundStyle(titleColor)
 
                 Text(statusText)
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
+                    .appTextStyle(.supportingCompact)
             }
 
             Spacer(minLength: 12)
@@ -364,8 +326,7 @@ private struct ConnectedDeviceRow: View {
                 Button("Add") {
                     addAction()
                 }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.small)
+                .appMiniProminentButton()
             }
         }
         .opacity(addAction == nil ? 0.68 : 1)
@@ -429,10 +390,7 @@ private struct ConnectedDeviceTransportIcon: View {
                 .frame(width: 28, height: 28)
 
             Image(systemName: badgeSymbolName)
-                .font(.system(size: 8, weight: .bold))
-                .foregroundStyle(.primary)
-                .padding(4)
-                .background(.thinMaterial, in: Circle())
+                .appTransportBadgeBubble()
                 .offset(x: 4, y: 4)
         }
         .help(helpText)

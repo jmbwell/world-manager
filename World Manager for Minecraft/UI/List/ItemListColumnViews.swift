@@ -1,7 +1,7 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
-enum ItemSortMode: String, CaseIterable, Identifiable {
+enum ItemSortMode: String, CaseIterable, Identifiable, Hashable, Sendable {
     case name
     case modifiedDate
     case size
@@ -33,11 +33,11 @@ struct ItemListColumnView<MenuContent: View>: View {
     let subtitle: String
     let showsSubtitle: Bool
     let isRefreshing: Bool
+    let isUpdatingProjection: Bool
     let items: [MinecraftContentItem]
     let searchPrompt: String
     let chooseFolderAction: () -> Void
     let dropAction: ([NSItemProvider]) -> Bool
-    let dragProvider: (MinecraftContentItem) -> NSItemProvider
     let itemContextMenu: (MinecraftContentItem) -> MenuContent
 
     var body: some View {
@@ -50,13 +50,18 @@ struct ItemListColumnView<MenuContent: View>: View {
                 .onDrop(of: [UTType.fileURL.identifier], isTargeted: $isDropTargeted, perform: dropAction)
             } else {
                 List(items, selection: $selectedItemID) { item in
-                    ContentRowView(item: item, dragProvider: dragProvider)
+                    ContentRowView(item: item)
                         .tag(item.id)
                         .contextMenu {
                             itemContextMenu(item)
                         }
                 }
                 .listStyle(.inset)
+                .overlay {
+                    if isUpdatingProjection && items.isEmpty {
+                        ItemListLoadingOverlay()
+                    }
+                }
             }
         }
         .safeAreaInset(edge: .top, spacing: 0) {
@@ -67,7 +72,8 @@ struct ItemListColumnView<MenuContent: View>: View {
                     title: title,
                     subtitle: subtitle,
                     showsSubtitle: showsSubtitle,
-                    isRefreshing: isRefreshing
+                    isRefreshing: isRefreshing,
+                    isUpdatingProjection: isUpdatingProjection
                 )
             }
         }
@@ -100,13 +106,13 @@ private struct ItemListHeaderView: View {
     let subtitle: String
     let showsSubtitle: Bool
     let isRefreshing: Bool
+    let isUpdatingProjection: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             if showsSourceName {
                 Text(sourceName)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
+                    .appSectionTitleStyle(.overline)
                     .textCase(.uppercase)
             }
 
@@ -115,47 +121,61 @@ private struct ItemListHeaderView: View {
                     .font(.title2.weight(.semibold))
                     .lineLimit(2)
 
-                if isRefreshing {
+                if isRefreshing || isUpdatingProjection {
                     ProgressView()
-                        .controlSize(.small)
+                        .appActivityIndicatorStyle(.small)
                 }
             }
 
-            if showsSubtitle {
-                Text(subtitle)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
+            if showsSubtitle || isUpdatingProjection {
+                Text(displaySubtitle)
+                    .appTextStyle(.supporting)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 16)
         .padding(.top, 10)
         .padding(.bottom, 12)
-        .background(.regularMaterial)
-        .overlay(alignment: .bottom) {
-            Divider()
+        .appListHeaderSurface()
+    }
+
+    private var displaySubtitle: String {
+        if isUpdatingProjection {
+            return "Loading items..."
         }
+
+        return subtitle
+    }
+}
+
+private struct ItemListLoadingOverlay: View {
+    var body: some View {
+        VStack(spacing: 10) {
+            ProgressView()
+                .appActivityIndicatorStyle(.small)
+
+            Text("Loading items...")
+                .appTextStyle(.supporting)
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 14)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 }
 
 private struct ContentRowView: View {
     let item: MinecraftContentItem
-    let dragProvider: (MinecraftContentItem) -> NSItemProvider
 
     var body: some View {
         HStack(alignment: .center, spacing: 10) {
             ItemThumbnailView(iconURL: item.iconURL)
-                .onDrag {
-                    dragProvider(item)
-                }
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(item.displayName)
                     .lineLimit(1)
 
                 Text(metadataLine)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .appTextStyle(.fieldLabel)
                     .lineLimit(1)
             }
 
@@ -163,16 +183,8 @@ private struct ContentRowView: View {
 
             if !item.metadataLoaded || !item.sizeLoaded {
                 ProgressView()
-                    .controlSize(.small)
+                    .appActivityIndicatorStyle(.small)
             }
-
-            Image(systemName: "square.and.arrow.up")
-                .font(.caption)
-                .foregroundStyle(.tertiary)
-                .help("Drag Out as Minecraft Package")
-                .onDrag {
-                    dragProvider(item)
-                }
         }
         .padding(.vertical, 2)
         .contentShape(Rectangle())

@@ -17,6 +17,7 @@ struct MinecraftSource: Identifiable, Hashable, Sendable {
     var bookmarkData: Data?
     var displayName: String
     var displayItems: [MinecraftContentItem]
+    var displayItemCountsByType: [MinecraftContentType: Int]
     var rawItems: [MinecraftContentItem]
     var logicalPacks: [LogicalPack]
     var logicalWorlds: [LogicalWorld]
@@ -61,6 +62,7 @@ struct MinecraftSource: Identifiable, Hashable, Sendable {
         self.bookmarkData = bookmarkData
         self.displayName = normalizedFolderURL.lastPathComponent
         self.displayItems = []
+        self.displayItemCountsByType = [:]
         self.rawItems = []
         self.logicalPacks = []
         self.logicalWorlds = []
@@ -97,6 +99,29 @@ struct MinecraftSource: Identifiable, Hashable, Sendable {
 
     var items: [MinecraftContentItem] {
         displayItems
+    }
+
+    func items(for contentType: MinecraftContentType) -> [MinecraftContentItem] {
+        displayItems.filter { $0.contentType == contentType }
+    }
+
+    func items(matching selection: SidebarSelection?) -> [MinecraftContentItem] {
+        guard let selection else {
+            return []
+        }
+
+        switch selection {
+        case .source(let sourceID), .allContent(let sourceID):
+            guard sourceID == id else {
+                return []
+            }
+            return displayItems
+        case .contentType(let sourceID, let contentType):
+            guard sourceID == id else {
+                return []
+            }
+            return items(for: contentType)
+        }
     }
 
     func rawItem(withID itemID: URL) -> MinecraftContentItem? {

@@ -467,6 +467,7 @@ private actor EnrichmentWorkQueue {
 
 struct SourceIndexSnapshot {
     let displayItems: [MinecraftContentItem]
+    let displayItemCountsByType: [MinecraftContentType: Int]
     let rawItems: [MinecraftContentItem]
     let logicalPacks: [LogicalPack]
     let logicalWorlds: [LogicalWorld]
@@ -631,6 +632,9 @@ private actor SourceIndexActor {
             logicalPacks: logicalPacks,
             rawItemsByID: rawItemsByID
         )
+        let displayItemCountsByType = dedupedDisplayItems.reduce(into: [MinecraftContentType: Int]()) { counts, item in
+            counts[item.contentType, default: 0] += 1
+        }
         let metadataFraction = progressFraction(completed: indexedDetailCount, total: indexedItemCount)
         let previewFraction = progressFraction(completed: previewLoadedCount, total: indexedItemCount)
         let sizeFraction = progressFraction(completed: sizeLoadedCount, total: indexedItemCount)
@@ -651,6 +655,7 @@ private actor SourceIndexActor {
 
             return SourceIndexSnapshot(
                 displayItems: dedupedDisplayItems,
+                displayItemCountsByType: displayItemCountsByType,
                 rawItems: rawItems,
                 logicalPacks: logicalPacks,
                 logicalWorlds: [],
@@ -678,6 +683,7 @@ private actor SourceIndexActor {
 
             return SourceIndexSnapshot(
                 displayItems: dedupedDisplayItems,
+                displayItemCountsByType: displayItemCountsByType,
                 rawItems: rawItems,
                 logicalPacks: logicalPacks,
                 logicalWorlds: [],
@@ -709,6 +715,7 @@ private actor SourceIndexActor {
 
             return SourceIndexSnapshot(
                 displayItems: dedupedDisplayItems,
+                displayItemCountsByType: displayItemCountsByType,
                 rawItems: rawItems,
                 logicalPacks: logicalPacks,
                 logicalWorlds: [],
@@ -820,6 +827,7 @@ private actor SourceIndexActor {
 
         return SourceIndexSnapshot(
             displayItems: dedupedDisplayItems,
+            displayItemCountsByType: displayItemCountsByType,
             rawItems: rawItems,
             logicalPacks: logicalPacks,
             logicalWorlds: logicalWorlds,

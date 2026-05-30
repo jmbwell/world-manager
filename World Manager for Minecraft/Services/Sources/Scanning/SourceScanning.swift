@@ -156,6 +156,7 @@ enum SourceScanPolicy {
 enum SourceScanRecovery {
     static func restoreIndexedState(from previousSource: MinecraftSource, into source: inout MinecraftSource) {
         source.displayItems = previousSource.displayItems
+        source.displayItemCountsByType = previousSource.displayItemCountsByType
         source.rawItems = previousSource.rawItems
         source.logicalPacks = previousSource.logicalPacks
         source.logicalWorlds = previousSource.logicalWorlds

@@ -57,6 +57,9 @@ enum SourceRestoration {
         to source: inout MinecraftSource
     ) {
         source.rawItems = items
+        source.displayItemCountsByType = items.reduce(into: [MinecraftContentType: Int]()) { counts, item in
+            counts[item.contentType, default: 0] += 1
+        }
         source.indexedItemCount = items.count
         source.indexedDetailCount = items.filter(\.metadataLoaded).count
         source.previewLoadedCount = items.filter(\.previewLoaded).count

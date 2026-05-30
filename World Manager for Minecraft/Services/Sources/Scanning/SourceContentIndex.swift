@@ -14,6 +14,7 @@ struct SourceContentIndex {
     let packInstances: [PackInstance]
     let worldPackRelationships: [WorldPackRelationship]
     let displayItems: [MinecraftContentItem]
+    let displayItemCountsByType: [MinecraftContentType: Int]
 }
 
 enum SourceContentIndexer {
@@ -161,17 +162,20 @@ enum SourceContentIndexer {
             $0.itemID.path.localizedStandardCompare($1.itemID.path) == .orderedAscending
         }
 
+        let displayItems = buildDisplayItems(
+            from: rawItems,
+            logicalPacks: logicalPacks,
+            rawItemsByID: rawItemsByID
+        )
+
         return SourceContentIndex(
             rawItems: rawItems,
             logicalPacks: logicalPacks,
             logicalWorlds: sortedLogicalWorlds,
             packInstances: sortedPackInstances,
             worldPackRelationships: worldRelationships,
-            displayItems: buildDisplayItems(
-                from: rawItems,
-                logicalPacks: logicalPacks,
-                rawItemsByID: rawItemsByID
-            )
+            displayItems: displayItems,
+            displayItemCountsByType: displayItemCounts(for: displayItems)
         )
     }
 
@@ -211,6 +215,12 @@ enum SourceContentIndexer {
         }
 
         return normalizedItems
+    }
+
+    private static func displayItemCounts(for items: [MinecraftContentItem]) -> [MinecraftContentType: Int] {
+        items.reduce(into: [MinecraftContentType: Int]()) { counts, item in
+            counts[item.contentType, default: 0] += 1
+        }
     }
 
     private static func shouldPreferPackItem(_ candidate: MinecraftContentItem, over existing: MinecraftContentItem) -> Bool {

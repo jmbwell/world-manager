@@ -83,10 +83,30 @@ enum SourcePersistenceCoordinator {
 
     static func persistVisibleSourcesForShutdown(
         from sources: [MinecraftSource],
-        using persistenceStore: SourcePersistenceStore
+        using persistenceStore: SourcePersistenceStore,
+        timeout: TimeInterval
     ) async {
-        for source in sources {
-            try? await persistenceStore.save(source: source)
+        guard !sources.isEmpty else {
+            return
+        }
+
+        await withTaskGroup(of: Void.self) { group in
+            group.addTask {
+                for source in sources {
+                    guard !Task.isCancelled else {
+                        return
+                    }
+
+                    try? await persistenceStore.save(source: source)
+                }
+            }
+
+            group.addTask {
+                try? await Task.sleep(for: .seconds(timeout))
+            }
+
+            await group.next()
+            group.cancelAll()
         }
     }
 

@@ -2,19 +2,18 @@ import AppKit
 import SwiftUI
 
 enum AppChrome {
-    static let sidebarRowCornerRadius: CGFloat = 10
     static let placeholderCardCornerRadius: CGFloat = 16
     static let panelCardCornerRadius: CGFloat = 18
+    static let detailSectionCardPadding: CGFloat = 18
 }
 
 enum AppCardStyle {
-    case primaryPanel
-    case secondaryPanel
+    case detailPanel
     case placeholder
 
     fileprivate var cornerRadius: CGFloat {
         switch self {
-        case .primaryPanel, .secondaryPanel:
+        case .detailPanel:
             return AppChrome.panelCardCornerRadius
         case .placeholder:
             return AppChrome.placeholderCardCornerRadius
@@ -23,9 +22,7 @@ enum AppCardStyle {
 
     fileprivate var fillStyle: AnyShapeStyle {
         switch self {
-        case .primaryPanel:
-            return AnyShapeStyle(.regularMaterial)
-        case .secondaryPanel:
+        case .detailPanel:
             return AnyShapeStyle(.quaternary.opacity(0.32))
         case .placeholder:
             return AnyShapeStyle(.thinMaterial)
@@ -44,19 +41,213 @@ private struct AppCardSurfaceModifier: ViewModifier {
     }
 }
 
+enum AppSectionTitleStyle {
+    case section
+    case overline
+}
+
+enum AppTextStyle {
+    case rowTitle
+    case supporting
+    case supportingCompact
+    case fieldLabel
+    case emphasisLabel
+}
+
+enum AppActivityIndicatorStyle {
+    case small
+    case large
+}
+
+private struct AppSectionTitleModifier: ViewModifier {
+    let style: AppSectionTitleStyle
+
+    func body(content: Content) -> some View {
+        switch style {
+        case .section:
+            content
+                .font(.headline)
+        case .overline:
+            content
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .tracking(0.5)
+        }
+    }
+}
+
+private struct AppTextStyleModifier: ViewModifier {
+    let style: AppTextStyle
+
+    func body(content: Content) -> some View {
+        switch style {
+        case .rowTitle:
+            content
+                .font(.subheadline.weight(.semibold))
+        case .supporting:
+            content
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+        case .supportingCompact:
+            content
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+        case .fieldLabel:
+            content
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        case .emphasisLabel:
+            content
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.secondary)
+        }
+    }
+}
+
+private struct AppDetailSectionCardModifier: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(AppChrome.detailSectionCardPadding)
+            .appCardSurface(.detailPanel)
+    }
+}
+
+private struct AppActivityIndicatorModifier: ViewModifier {
+    let style: AppActivityIndicatorStyle
+
+    func body(content: Content) -> some View {
+        switch style {
+        case .small:
+            content.controlSize(.small)
+        case .large:
+            content.controlSize(.large)
+        }
+    }
+}
+
+private struct AppListHeaderSurfaceModifier: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .background(.regularMaterial)
+            .overlay(alignment: .bottom) {
+                Divider()
+            }
+    }
+}
+
+private struct AppMiniProminentButtonModifier: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .buttonStyle(.borderedProminent)
+            .controlSize(.small)
+    }
+}
+
+private struct AppTransportBadgeBubbleModifier: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .font(.system(size: 8, weight: .bold))
+            .foregroundStyle(.primary)
+            .padding(4)
+            .background(.thinMaterial, in: Circle())
+    }
+}
+
+enum AppCapsuleLabelStyle {
+    case sidebarSubtle
+    case sidebarAccent
+    case heroMetadata
+}
+
+private struct AppCapsuleLabelModifier: ViewModifier {
+    let style: AppCapsuleLabelStyle
+
+    func body(content: Content) -> some View {
+        content
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(foregroundStyle)
+            .padding(.horizontal, horizontalPadding)
+            .padding(.vertical, verticalPadding)
+            .background(backgroundStyle, in: Capsule())
+    }
+
+    private var foregroundStyle: AnyShapeStyle {
+        switch style {
+        case .sidebarSubtle:
+            return AnyShapeStyle(.secondary)
+        case .sidebarAccent:
+            return AnyShapeStyle(Color.appAccent)
+        case .heroMetadata:
+            return AnyShapeStyle(.white.opacity(0.95))
+        }
+    }
+
+    private var backgroundStyle: AnyShapeStyle {
+        switch style {
+        case .sidebarSubtle:
+            return AnyShapeStyle(.secondary.opacity(0.12))
+        case .sidebarAccent:
+            return AnyShapeStyle(Color.appAccent.opacity(0.14))
+        case .heroMetadata:
+            return AnyShapeStyle(.white.opacity(0.14))
+        }
+    }
+
+    private var horizontalPadding: CGFloat {
+        switch style {
+        case .heroMetadata:
+            return 10
+        case .sidebarSubtle, .sidebarAccent:
+            return 7
+        }
+    }
+
+    private var verticalPadding: CGFloat {
+        switch style {
+        case .heroMetadata:
+            return 7
+        case .sidebarSubtle, .sidebarAccent:
+            return 4
+        }
+    }
+}
+
 extension View {
     func appCardSurface(_ style: AppCardStyle) -> some View {
         modifier(AppCardSurfaceModifier(style: style))
     }
 
-    func appSidebarRowSurface(isHighlighted: Bool) -> some View {
-        let fillStyle = isHighlighted
-            ? AnyShapeStyle(.secondary.opacity(0.08))
-            : AnyShapeStyle(Color.clear)
-        return background(
-            fillStyle,
-            in: RoundedRectangle(cornerRadius: AppChrome.sidebarRowCornerRadius, style: .continuous)
-        )
+    func appSectionTitleStyle(_ style: AppSectionTitleStyle) -> some View {
+        modifier(AppSectionTitleModifier(style: style))
+    }
+
+    func appTextStyle(_ style: AppTextStyle) -> some View {
+        modifier(AppTextStyleModifier(style: style))
+    }
+
+    func appActivityIndicatorStyle(_ style: AppActivityIndicatorStyle) -> some View {
+        modifier(AppActivityIndicatorModifier(style: style))
+    }
+
+    func appDetailSectionCard() -> some View {
+        modifier(AppDetailSectionCardModifier())
+    }
+
+    func appCapsuleLabelStyle(_ style: AppCapsuleLabelStyle) -> some View {
+        modifier(AppCapsuleLabelModifier(style: style))
+    }
+
+    func appListHeaderSurface() -> some View {
+        modifier(AppListHeaderSurfaceModifier())
+    }
+
+    func appMiniProminentButton() -> some View {
+        modifier(AppMiniProminentButtonModifier())
+    }
+
+    func appTransportBadgeBubble() -> some View {
+        modifier(AppTransportBadgeBubbleModifier())
     }
 }
 
@@ -297,11 +488,7 @@ struct RecordHeroView: View {
     private var recordHeroChips: some View {
         FlexibleTagLayout(spacing: 8, rowSpacing: 8, items: metadataChips) { chip in
             Text(chip)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.white.opacity(0.95))
-                .padding(.horizontal, 10)
-                .padding(.vertical, 7)
-                .background(.white.opacity(0.14), in: Capsule())
+                .appCapsuleLabelStyle(.heroMetadata)
         }
     }
 
@@ -391,7 +578,7 @@ struct LaunchRestoreOverlayView: View {
 
             VStack(spacing: 14) {
                 ProgressView()
-                    .controlSize(.large)
+                    .appActivityIndicatorStyle(.large)
 
                 Text("Opening Library…")
                     .font(.title3.weight(.semibold))

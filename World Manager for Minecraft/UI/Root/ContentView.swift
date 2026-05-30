@@ -20,6 +20,14 @@ struct ContentView: View {
     @State private var isShowingDeviceSourceSheet = false
     @State private var sortMode: ItemSortMode = .name
     @State private var directoryPreviewContents: [DirectoryEntry] = []
+    @State private var itemListProjection = ItemCollectionProjection.placeholder(
+        for: ItemCollectionProjectionRequest(
+            selection: nil,
+            searchText: "",
+            sortMode: .name,
+            source: nil
+        )
+    )
 
     private let connectedDeviceAccess: AppleMobileDeviceSourceAccess
     private let deviceSourceFactory: ConnectedDeviceSourceFactory
@@ -37,11 +45,29 @@ struct ContentView: View {
     }
 
     var body: some View {
+        let isEmptyLibrary = library.visibleSources.isEmpty && library.connectedDevices.isEmpty
+        let resolvedCurrentSource = currentSource
+        let currentProjectionRequest = ItemCollectionProjectionRequest(
+            selection: selectedSidebarSelection,
+            searchText: searchText,
+            sortMode: sortMode,
+            source: resolvedCurrentSource
+        )
+        let reusesCurrentProjectedItems =
+            itemListProjection.request.selection == currentProjectionRequest.selection &&
+            itemListProjection.request.source?.id == currentProjectionRequest.source?.id
+        let isUpdatingItemListProjection = itemListProjection.request != currentProjectionRequest
+        let resolvedItemListProjection = itemListProjection.request == currentProjectionRequest
+            ? itemListProjection
+            : ItemCollectionProjection.placeholder(for: currentProjectionRequest)
+        let resolvedCurrentSelectedItem = currentSelectedItem(in: resolvedCurrentSource)
+        let resolvedDisplayedItems = reusesCurrentProjectedItems ? itemListProjection.items : []
+
         NavigationSplitView(columnVisibility: $columnVisibility) {
             SourcesSidebarView(
                 sources: library.sidebarSources,
                 connectedDevices: library.connectedDevices,
-                selection: $selectedSidebarSelection,
+                selection: sidebarSelectionBinding,
                 addSourceAction: pickFolder,
                 addDeviceSourceAction: { isShowingDeviceSourceSheet = true },
                 addConnectedDeviceAction: addConnectedDeviceSource(from:),
@@ -58,58 +84,58 @@ struct ContentView: View {
             .navigationSplitViewColumnWidth(min: 280, ideal: 320, max: 380)
         } content: {
             ItemListColumnView(
-                isEmpty: library.visibleSources.isEmpty && library.connectedDevices.isEmpty,
+                isEmpty: isEmptyLibrary,
                 isDropTargeted: $isDropTargeted,
                 selectedItemID: $selectedItemID,
                 searchText: $searchText,
                 sortMode: $sortMode,
                 showsHeader: shouldShowItemListHeader,
-                sourceName: currentSourceDisplayName,
+                sourceName: resolvedItemListProjection.sourceName,
                 showsSourceName: !isSidebarVisible,
-                title: collectionHeaderTitle,
-                subtitle: collectionHeaderSubtitle,
-                showsSubtitle: isSearching,
-                isRefreshing: currentSource?.isScanning == true,
-                items: displayedItems,
-                searchPrompt: searchPrompt,
+                title: resolvedItemListProjection.title,
+                subtitle: resolvedItemListProjection.subtitle,
+                showsSubtitle: isSearching || isUpdatingItemListProjection,
+                isRefreshing: resolvedCurrentSource?.isScanning == true,
+                isUpdatingProjection: isUpdatingItemListProjection,
+                items: resolvedDisplayedItems,
+                searchPrompt: resolvedItemListProjection.searchPrompt,
                 chooseFolderAction: pickFolder,
                 dropAction: handleDroppedProviders(_:),
-                dragProvider: dragProvider(for:),
                 itemContextMenu: itemContextMenu(for:)
             )
             .navigationSplitViewColumnWidth(min: 340, ideal: 400, max: 460)
         } detail: {
             ItemDetailColumnView(
-                item: currentSelectedItem,
-                source: currentSource,
-                showsSourceDetails: currentSelectedItem == nil && isSourceOverviewSelection,
-                behaviorPacks: currentSelectedItem.map { logicalPackReferences(for: $0, type: .behaviorPack) } ?? [],
-                resourcePacks: currentSelectedItem.map { logicalPackReferences(for: $0, type: .resourcePack) } ?? [],
-                worldsUsingPack: currentSelectedItem.map(worldsUsingPack(for:)) ?? [],
-                backingPackInstances: currentSelectedItem.map(backingPackInstances(for:)) ?? [],
-                isSuspiciousPack: currentSelectedItem.map(isSuspiciousPack(_:)) ?? false,
+                item: resolvedCurrentSelectedItem,
+                source: resolvedCurrentSource,
+                showsSourceDetails: resolvedCurrentSelectedItem == nil && isSourceOverviewSelection,
+                behaviorPacks: resolvedCurrentSelectedItem.map { logicalPackReferences(for: $0, type: .behaviorPack) } ?? [],
+                resourcePacks: resolvedCurrentSelectedItem.map { logicalPackReferences(for: $0, type: .resourcePack) } ?? [],
+                worldsUsingPack: resolvedCurrentSelectedItem.map(worldsUsingPack(for:)) ?? [],
+                backingPackInstances: resolvedCurrentSelectedItem.map(backingPackInstances(for:)) ?? [],
+                isSuspiciousPack: resolvedCurrentSelectedItem.map(isSuspiciousPack(_:)) ?? false,
                 contents: directoryPreviewContents,
                 directoryPreviewLimit: directoryPreviewLimit,
-                isEmpty: library.visibleSources.isEmpty && library.connectedDevices.isEmpty,
+                isEmpty: isEmptyLibrary,
                 isPerformingItemAction: isPerformingItemAction,
                 areFileActionsEnabled: areCurrentItemFileActionsEnabled,
-                exportTitle: currentSelectedItem.map(primaryActionTitle(for:)),
+                exportTitle: resolvedCurrentSelectedItem.map(primaryActionTitle(for:)),
                 exportAction: {
-                    guard let item = currentSelectedItem else {
+                    guard let item = resolvedCurrentSelectedItem else {
                         return
                     }
 
                     saveItem(item)
                 },
                 revealAction: {
-                    guard let item = currentSelectedItem else {
+                    guard let item = resolvedCurrentSelectedItem else {
                         return
                     }
 
                     revealInFinder(item)
                 },
                 shareAction: { anchorView in
-                    guard let item = currentSelectedItem else {
+                    guard let item = resolvedCurrentSelectedItem else {
                         return
                     }
 
@@ -119,7 +145,7 @@ struct ContentView: View {
             .frame(minWidth: 450)
         }
         .overlay {
-            if library.isRestoringPersistedSources && library.visibleSources.isEmpty && library.connectedDevices.isEmpty {
+            if library.isRestoringPersistedSources && isEmptyLibrary {
                 LaunchRestoreOverlayView()
             }
         }
@@ -138,22 +164,13 @@ struct ContentView: View {
         .task {
             AppTerminationCoordinator.shared.register(library: library)
         }
-        .disabled(library.isRestoringPersistedSources && library.visibleSources.isEmpty && library.connectedDevices.isEmpty)
-        .onChange(of: displayedItems.map(\.id)) { _, filteredIDs in
+        .disabled(library.isRestoringPersistedSources && isEmptyLibrary)
+        .onChange(of: resolvedDisplayedItems.map(\.id)) { _, filteredIDs in
             guard let selectedItemID, !filteredIDs.contains(selectedItemID) else {
                 return
             }
 
             self.selectedItemID = nil
-        }
-        .onChange(of: selectedSidebarSelection) { _, selection in
-            guard let selection else {
-                return
-            }
-
-            if case .source = selection {
-                selectedItemID = nil
-            }
         }
         .onChange(of: library.sources.map(\.id)) { _, _ in
             syncSelection(with: library.visibleSources.map(\.id))
@@ -161,37 +178,32 @@ struct ContentView: View {
         .onChange(of: library.connectedDevices.map { "\($0.id)::\($0.matchedSourceID?.absoluteString ?? "nil")" }) { _, _ in
             syncSelection(with: library.visibleSources.map(\.id))
         }
-        .task(id: currentSelectedItem?.id) {
+        .task(id: currentProjectionRequest) {
+            let request = currentProjectionRequest
+            let projection = await Task.detached(priority: .userInitiated) {
+                ItemCollectionProjector.makeProjection(for: request)
+            }.value
+            guard !Task.isCancelled else {
+                return
+            }
+            itemListProjection = projection
+        }
+        .task(id: resolvedCurrentSelectedItem?.id) {
             await refreshDirectoryPreviewContents()
         }
     }
 
-    private var scopedItems: [MinecraftContentItem] {
-        guard let selectedSidebarSelection else {
-            return []
-        }
+    private var sidebarSelectionBinding: Binding<SidebarSelection?> {
+        Binding(
+            get: { selectedSidebarSelection },
+            set: { newSelection in
+                if newSelection != selectedSidebarSelection {
+                    selectedItemID = nil
+                }
 
-        switch selectedSidebarSelection {
-        case .source(let sourceID), .allContent(let sourceID):
-            return library.source(withID: sourceID)?.items ?? []
-        case .contentType(let sourceID, let contentType):
-            return library.source(withID: sourceID)?.items.filter { $0.contentType == contentType } ?? []
-        }
-    }
-
-    private var filteredItems: [MinecraftContentItem] {
-        let trimmedSearchText = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedSearchText.isEmpty else {
-            return scopedItems
-        }
-
-        return scopedItems.filter { item in
-            item.searchText.localizedCaseInsensitiveContains(trimmedSearchText)
-        }
-    }
-
-    private var displayedItems: [MinecraftContentItem] {
-        filteredItems.sorted(by: sortComparator)
+                selectedSidebarSelection = newSelection
+            }
+        )
     }
 
     private var currentSource: MinecraftSource? {
@@ -202,14 +214,23 @@ struct ContentView: View {
         return library.source(withID: sourceID)
     }
 
-    private var currentSelectedItem: MinecraftContentItem? {
+    private func currentSelectedItem(in source: MinecraftSource?) -> MinecraftContentItem? {
         guard let selectedItemID else {
             return nil
         }
 
-        return library.visibleSources
-            .flatMap(\.items)
-            .first(where: { $0.id == selectedItemID })
+        if let source,
+           let item = source.items.first(where: { $0.id == selectedItemID }) {
+            return item
+        }
+
+        for source in library.visibleSources {
+            if let item = source.items.first(where: { $0.id == selectedItemID }) {
+                return item
+            }
+        }
+
+        return nil
     }
 
     private var sortComparator: (MinecraftContentItem, MinecraftContentItem) -> Bool {
@@ -255,82 +276,12 @@ struct ContentView: View {
         }
     }
 
-    private var collectionHeaderTitle: String {
-        if isSearching {
-            return "Searching “\(searchScopeTitle)”"
-        }
-
-        guard let selectedSidebarSelection else {
-            return "Library"
-        }
-
-        switch selectedSidebarSelection {
-        case .source, .allContent:
-            return "All Items"
-        case .contentType(_, let contentType):
-            return sidebarTitle(for: contentType)
-        }
-    }
-
-    private var collectionHeaderSubtitle: String {
-        let totalCount = scopedItems.count
-        let filteredCount = filteredItems.count
-        let noun = collectionCountNoun
-
-        if !isSearching {
-            return "\(totalCount.formatted(.number)) \(noun)"
-        }
-
-        return "\(filteredCount.formatted(.number)) of \(totalCount.formatted(.number)) \(noun)"
-    }
-
-    private var currentSourceDisplayName: String {
-        currentSource?.displayName ?? "Library"
-    }
-
-    private var currentCollectionStatus: String? {
-        guard let currentSource else {
-            return nil
-        }
-
-        if currentSource.isScanning {
-            return currentSource.scanStatus
-        }
-
-        if let scanError = currentSource.scanError, !scanError.isEmpty {
-            return scanError
-        }
-
-        if !currentSource.scanStatus.isEmpty {
-            return currentSource.scanStatus
-        }
-
-        if let lastScanDate = currentSource.lastScanDate {
-            return "Last scanned \(lastScanDate.formatted(date: .abbreviated, time: .shortened))"
-        }
-
-        return nil
-    }
-
     private var areCurrentItemFileActionsEnabled: Bool {
-        guard currentSelectedItem != nil else {
+        guard currentSelectedItem(in: currentSource) != nil else {
             return false
         }
 
         return currentSource?.availability == .available
-    }
-
-    private var searchScopeTitle: String {
-        switch selectedSidebarSelection {
-        case .some(.source(let sourceID)):
-            return library.source(withID: sourceID)?.displayName ?? "Library"
-        case .some(.allContent):
-            return "All"
-        case .some(.contentType(_, let contentType)):
-            return sidebarTitle(for: contentType)
-        case .none:
-            return "Library"
-        }
     }
 
     private var isSearching: Bool {
@@ -345,42 +296,9 @@ struct ContentView: View {
         isSearching || !isSidebarVisible
     }
 
-    private var collectionCountNoun: String {
-        guard let selectedSidebarSelection else {
-            return "items"
-        }
-
-        switch selectedSidebarSelection {
-        case .source, .allContent:
-            return scopedItems.count == 1 ? "item" : "items"
-        case .contentType(_, let contentType):
-            switch contentType {
-            case .world:
-                return scopedItems.count == 1 ? "world" : "worlds"
-            case .behaviorPack, .resourcePack, .skinPack, .worldTemplate:
-                return scopedItems.count == 1 ? "pack" : "packs"
-            }
-        }
-    }
-
-    private var searchPrompt: String {
-        switch selectedSidebarSelection {
-        case .some(.source(let sourceID)):
-            let sourceName = library.source(withID: sourceID)?.displayName ?? "Library"
-            return "Search \(sourceName)"
-        case .some(.allContent):
-            return "Search All Items"
-        case .some(.contentType(_, let contentType)):
-            return "Search \(sidebarTitle(for: contentType))"
-        case .none:
-            return "Search Library"
-        }
-    }
-
     private func sidebarFilters(for source: MinecraftSource) -> [SidebarFilter] {
-        MinecraftContentType.allCases.compactMap { contentType in
-            let count = source.items.filter { $0.contentType == contentType }.count
-            guard count > 0 else {
+        return MinecraftContentType.allCases.compactMap { contentType in
+            guard let count = source.displayItemCountsByType[contentType], count > 0 else {
                 return nil
             }
 
@@ -539,7 +457,8 @@ struct ContentView: View {
     }
 
     private func refreshDirectoryPreviewContents() async {
-        guard let item = currentSelectedItem, let source = currentSource else {
+        guard let source = currentSource,
+              let item = currentSelectedItem(in: source) else {
             await MainActor.run {
                 directoryPreviewContents = []
             }
@@ -615,7 +534,7 @@ struct ContentView: View {
             selectedSidebarSelection = fallbackSourceID.map { .source(sourceID: $0) }
         }
 
-        if let selectedItemID, currentSelectedItem?.id != selectedItemID {
+        if let selectedItemID, currentSelectedItem(in: currentSource)?.id != selectedItemID {
             self.selectedItemID = nil
         }
     }
