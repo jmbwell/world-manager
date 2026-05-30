@@ -6,7 +6,9 @@
 //
 
 import Foundation
+import SQLite3
 import Testing
+import UniformTypeIdentifiers
 @testable import World_Manager_for_Minecraft
 
 @MainActor
@@ -125,7 +127,7 @@ struct World_Manager_for_MinecraftTests {
         #expect(first.isSuspicious == false)
     }
 
-    @Test func minecraftSourceItemsUseLogicalPackRepresentative() async throws {
+    @Test func minecraftSourceResolvedPackReferencesUseLogicalPackRepresentative() async throws {
         let sourceURL = URL(fileURLWithPath: "/tmp/source")
         let worldURL = sourceURL.appendingPathComponent("minecraftWorlds/WorldA", isDirectory: true)
         let topLevelPackURL = sourceURL.appendingPathComponent("behavior_packs/PackA", isDirectory: true)
@@ -161,14 +163,6 @@ struct World_Manager_for_MinecraftTests {
 
         var source = MinecraftSource(folderURL: sourceURL)
         source.rawItems = [world, topLevelPack, embeddedPack]
-        source.logicalWorlds = [
-            LogicalWorld(
-                id: world.id,
-                itemID: world.id,
-                usedPackIDs: [packID],
-                unresolvedReferences: []
-            )
-        ]
         source.logicalPacks = [
             LogicalPack(
                 id: packID,
@@ -181,13 +175,133 @@ struct World_Manager_for_MinecraftTests {
                 isSuspicious: false
             )
         ]
+        source.worldPackRelationships = [
+            WorldPackRelationship(
+                worldItemID: world.id,
+                logicalPackID: packID,
+                reference: ContentPackReference(
+                    name: "Embedded Copy",
+                    type: .behaviorPack,
+                    uuid: "pack-a",
+                    version: "1.0.0",
+                    source: .embeddedInWorld
+                )
+            )
+        ]
 
-        let displayedItems = source.items
+        let references = source.resolvedPackReferences(for: world.id, type: .behaviorPack)
 
-        #expect(displayedItems.count == 2)
-        #expect(displayedItems.contains(where: { $0.id == world.id }))
-        #expect(displayedItems.contains(where: { $0.id == topLevelPack.id }))
-        #expect(displayedItems.contains(where: { $0.id == embeddedPack.id }) == false)
+        #expect(references.count == 1)
+        #expect(references.first?.name == "Pack A")
+        #expect(references.first?.uuid == "pack-a")
+        #expect(references.first?.version == "1.0.0")
+        #expect(references.first?.iconURL == topLevelPack.iconURL)
+    }
+
+    @Test func minecraftSourceRelationshipHelpersAndCacheStateReflectCurrentData() async throws {
+        let sourceURL = URL(fileURLWithPath: "/tmp/source")
+        let worldA = MinecraftContentItem(
+            folderURL: sourceURL.appendingPathComponent("minecraftWorlds/WorldA", isDirectory: true),
+            folderName: "WorldA",
+            contentType: .world,
+            collectionRootURL: sourceURL.appendingPathComponent("minecraftWorlds", isDirectory: true),
+            displayName: "Alpha"
+        )
+        let worldB = MinecraftContentItem(
+            folderURL: sourceURL.appendingPathComponent("minecraftWorlds/WorldB", isDirectory: true),
+            folderName: "WorldB",
+            contentType: .world,
+            collectionRootURL: sourceURL.appendingPathComponent("minecraftWorlds", isDirectory: true),
+            displayName: "Beta"
+        )
+        let packID = PackIdentity(
+            type: .behaviorPack,
+            uuid: "pack-a",
+            version: "1.0.0",
+            fallbackName: "Pack A",
+            fallbackLocationHint: "behavior_packs/PackA"
+        )
+        let packItem = MinecraftContentItem(
+            folderURL: sourceURL.appendingPathComponent("behavior_packs/PackA", isDirectory: true),
+            folderName: "PackA",
+            contentType: .behaviorPack,
+            collectionRootURL: sourceURL.appendingPathComponent("behavior_packs", isDirectory: true),
+            displayName: "Pack A"
+        )
+
+        var source = MinecraftSource(folderURL: sourceURL, availability: .disconnected)
+        source.displayName = "Source"
+        source.displayItems = [worldA]
+        source.rawItems = [worldB, packItem, worldA]
+        source.logicalPacks = [
+            LogicalPack(
+                id: packID,
+                contentType: .behaviorPack,
+                displayName: "Pack A",
+                uuid: "pack-a",
+                version: "1.0.0",
+                representativeItemID: packItem.id,
+                instanceItemIDs: [packItem.id],
+                isSuspicious: false
+            )
+        ]
+        source.logicalWorlds = [
+            LogicalWorld(
+                id: worldA.id,
+                itemID: worldA.id,
+                usedPackIDs: [packID],
+                unresolvedReferences: []
+            )
+        ]
+        source.packInstances = [
+            PackInstance(
+                id: packItem.id,
+                itemID: packItem.id,
+                sourceID: source.id,
+                logicalPackID: packID,
+                origin: .foundInCollection,
+                hostWorldItemID: nil
+            )
+        ]
+        source.worldPackRelationships = [
+            WorldPackRelationship(
+                worldItemID: worldB.id,
+                logicalPackID: packID,
+                reference: ContentPackReference(name: "Pack A", type: .behaviorPack, uuid: "pack-a", version: "1.0.0", source: .foundInCollection)
+            ),
+            WorldPackRelationship(
+                worldItemID: worldA.id,
+                logicalPackID: packID,
+                reference: ContentPackReference(name: "Pack A", type: .behaviorPack, uuid: "pack-a", version: "1.0.0", source: .foundInCollection)
+            ),
+            WorldPackRelationship(
+                worldItemID: worldA.id,
+                logicalPackID: packID,
+                reference: ContentPackReference(name: "Pack A", type: .behaviorPack, uuid: "pack-a", version: "1.0.0", source: .foundInCollection)
+            )
+        ]
+        source.lastScanDate = Date(timeIntervalSince1970: 123)
+
+        #expect(source.itemCount == 1)
+        #expect(source.hasCachedContent)
+        #expect(source.isOfflineCached)
+        #expect(source.items == [worldA])
+        #expect(source.rawItem(withID: worldA.id) == worldA)
+        #expect(source.logicalPack(forRepresentativeItemID: packItem.id)?.id == packID)
+        #expect(source.logicalWorld(forItemID: worldA.id)?.id == worldA.id)
+        #expect(source.packInstances(for: packID).count == 1)
+
+        let worldsUsingPack = source.worldsUsingPack(packID)
+        #expect(worldsUsingPack == [worldA, worldB])
+
+        let sourceRecord = source.sourceRecord
+        #expect(sourceRecord.id == source.id)
+        #expect(sourceRecord.displayName == "Source")
+        #expect(sourceRecord.rootURL == source.folderURL)
+        #expect(sourceRecord.origin == source.origin)
+        #expect(sourceRecord.accessDescriptor == source.accessDescriptor)
+        #expect(sourceRecord.availability == .disconnected)
+        #expect(sourceRecord.lastRefreshDate == source.lastScanDate)
     }
 
     @Test func worldScannerResolvesReferencedPackFromIndexedCollection() async throws {
@@ -241,6 +355,83 @@ struct World_Manager_for_MinecraftTests {
         #expect(enrichedWorld.packReferences.first?.name == "Pack A")
         #expect(enrichedWorld.packReferences.first?.uuid == "pack-a")
         #expect(enrichedWorld.packReferences.first?.version == "1.0.0")
+    }
+
+    @Test func worldScannerDiscoversItemsAcrossCollectionsAndEmbeddedPacks() async throws {
+        let fileManager = FileManager.default
+        let sourceURL = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let worldURL = sourceURL.appendingPathComponent("minecraftWorlds/WorldA", isDirectory: true)
+        let invalidWorldURL = sourceURL.appendingPathComponent("minecraftWorlds/NotAWorld", isDirectory: true)
+        let embeddedBehaviorPackURL = worldURL.appendingPathComponent("behavior_packs/EmbeddedBehavior", isDirectory: true)
+        let embeddedResourcePackURL = worldURL.appendingPathComponent("resource_packs/EmbeddedResource", isDirectory: true)
+        let topLevelBehaviorPackURL = sourceURL.appendingPathComponent("behavior_packs/TopBehavior", isDirectory: true)
+        let topLevelResourcePackURL = sourceURL.appendingPathComponent("RESOURCE_PACKS/TopResource", isDirectory: true)
+        defer { try? fileManager.removeItem(at: sourceURL) }
+
+        try fileManager.createDirectory(at: worldURL, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: invalidWorldURL, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: embeddedBehaviorPackURL, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: embeddedResourcePackURL, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: topLevelBehaviorPackURL, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: topLevelResourcePackURL, withIntermediateDirectories: true)
+
+        try Data().write(to: worldURL.appendingPathComponent("level.dat"))
+        try "{}".write(to: embeddedBehaviorPackURL.appendingPathComponent("manifest.json"), atomically: true, encoding: .utf8)
+        try "{}".write(to: embeddedResourcePackURL.appendingPathComponent("manifest.json"), atomically: true, encoding: .utf8)
+        try "{}".write(to: topLevelBehaviorPackURL.appendingPathComponent("manifest.json"), atomically: true, encoding: .utf8)
+        try Data().write(to: topLevelResourcePackURL.appendingPathComponent("pack_icon.png"))
+
+        let discoveredRecorder = LockedRecorder<URL>()
+        let discovered = try WorldScanner.discoverItems(in: sourceURL) { item in
+            discoveredRecorder.append(item.id)
+        }
+
+        #expect(discovered.count == 5)
+        #expect(Set(discovered.map(\.id)) == Set(discoveredRecorder.values))
+        #expect(discovered.contains { $0.folderURL.standardizedFileURL == worldURL.standardizedFileURL && $0.contentType == .world })
+        #expect(discovered.contains { $0.folderURL.standardizedFileURL == embeddedBehaviorPackURL.standardizedFileURL && $0.contentType == .behaviorPack })
+        #expect(discovered.contains { $0.folderURL.standardizedFileURL == embeddedResourcePackURL.standardizedFileURL && $0.contentType == .resourcePack })
+        #expect(discovered.contains { $0.folderURL.standardizedFileURL == topLevelBehaviorPackURL.standardizedFileURL && $0.contentType == .behaviorPack })
+        #expect(discovered.contains { $0.folderURL.standardizedFileURL == topLevelResourcePackURL.standardizedFileURL && $0.contentType == .resourcePack })
+        #expect(discovered.contains { $0.folderURL.standardizedFileURL == invalidWorldURL.standardizedFileURL } == false)
+    }
+
+    @Test func worldScannerCollectionRootDiscoverySnapshotsAndSizeLoading() async throws {
+        let fileManager = FileManager.default
+        let sourceURL = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let worldsURL = sourceURL.appendingPathComponent("minecraftWorlds", isDirectory: true)
+        let worldAURL = worldsURL.appendingPathComponent("WorldA", isDirectory: true)
+        let worldBURL = worldsURL.appendingPathComponent("WorldB", isDirectory: true)
+        let packsURL = sourceURL.appendingPathComponent("behavior_packs", isDirectory: true)
+        let packURL = packsURL.appendingPathComponent("PackA", isDirectory: true)
+        defer { try? fileManager.removeItem(at: sourceURL) }
+
+        try fileManager.createDirectory(at: worldAURL, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: worldBURL, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: packURL, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: worldAURL.appendingPathComponent("db", isDirectory: true), withIntermediateDirectories: true)
+        try Data([1, 2, 3]).write(to: worldAURL.appendingPathComponent("level.dat"))
+        try "World B".write(to: worldBURL.appendingPathComponent("levelname.txt"), atomically: true, encoding: .utf8)
+        try Data([4, 5]).write(to: worldAURL.appendingPathComponent("db/chunk.bin"), options: .atomic)
+        try "{}".write(to: packURL.appendingPathComponent("manifest.json"), atomically: true, encoding: .utf8)
+        try "ignore".write(to: worldsURL.appendingPathComponent("notes.txt"), atomically: true, encoding: .utf8)
+
+        let callbackRecorder = LockedRecorder<Int>()
+        let worlds = try WorldScanner.discoverItems(inCollectionRootURL: worldsURL, contentType: .world) { _ in
+            callbackRecorder.append(1)
+        }
+        let snapshots = WorldScanner.collectionSnapshots(in: sourceURL)
+        let sizedWorld = WorldScanner.loadSize(for: worlds[0])
+        await WorldScanner.endScanSession(for: sourceURL)
+
+        #expect(worlds.count == 2)
+        #expect(callbackRecorder.values.count == 2)
+        #expect(snapshots.count == 2)
+        #expect(snapshots.contains { $0.folderName == "minecraftWorlds" && $0.childDirectoryCount == 2 })
+        #expect(snapshots.contains { $0.folderName == "behavior_packs" && $0.childDirectoryCount == 1 })
+        #expect(snapshots.first(where: { $0.folderName == "minecraftWorlds" })?.fingerprint.contains("WorldA@") == true)
+        #expect(sizedWorld.sizeLoaded)
+        #expect(sizedWorld.sizeBytes == 5)
     }
 
     @Test func worldScannerDecodesBedrockLevelMetadata() async throws {
@@ -337,6 +528,81 @@ struct World_Manager_for_MinecraftTests {
         #expect(enrichedPack.packUUID == "056e5d6e-6135-4daf-844f-5b775b019e56")
         #expect(enrichedPack.packVersion == "0.1.0")
         #expect(enrichedPack.packMetadataDetails?.minimumEngineVersion == "1.19.50")
+    }
+
+    @Test func minecraftContentMetadataReaderPrefersExpectedNamesIconsAndVersions() async throws {
+        let fileManager = FileManager.default
+        let rootURL = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let worldURL = rootURL.appendingPathComponent("WorldA", isDirectory: true)
+        let packURL = rootURL.appendingPathComponent("PackA", isDirectory: true)
+        defer { try? fileManager.removeItem(at: rootURL) }
+
+        try fileManager.createDirectory(at: worldURL, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: packURL, withIntermediateDirectories: true)
+
+        try "  My World  ".write(to: worldURL.appendingPathComponent("levelname.txt"), atomically: true, encoding: .utf8)
+        try Data([1]).write(to: worldURL.appendingPathComponent("world_icon.jpg"))
+        try Data([2]).write(to: worldURL.appendingPathComponent("world_icon.png"))
+
+        let manifest = """
+        {
+          "header": {
+            "name": "  Fancy Pack  ",
+            "uuid": "ABC-123",
+            "version": [1, "2", 3],
+            "min_engine_version": "1.21.0"
+          }
+        }
+        """
+        try manifest.write(to: packURL.appendingPathComponent("manifest.json"), atomically: true, encoding: .utf8)
+        try Data([3]).write(to: packURL.appendingPathComponent("pack_icon.jpeg"))
+        try Data([4]).write(to: packURL.appendingPathComponent("pack_icon.jpg"))
+
+        #expect(MinecraftContentMetadataReader.displayName(for: worldURL, contentType: .world, fallbackName: "Fallback") == "My World")
+        #expect(MinecraftContentMetadataReader.displayName(for: packURL, contentType: .behaviorPack, fallbackName: "Fallback") == "Fancy Pack")
+        #expect(MinecraftContentMetadataReader.iconURL(for: worldURL, contentType: .world) == worldURL.appendingPathComponent("world_icon.jpg"))
+        #expect(MinecraftContentMetadataReader.iconURL(for: packURL, contentType: .behaviorPack) == packURL.appendingPathComponent("pack_icon.jpeg"))
+        #expect(MinecraftContentMetadataReader.packIconURL(in: packURL) == packURL.appendingPathComponent("pack_icon.jpeg"))
+        #expect(MinecraftContentMetadataReader.manifestMetadata(in: packURL)?.uuid == "abc-123")
+        #expect(MinecraftContentMetadataReader.manifestMetadata(in: packURL)?.version == "1.2.3")
+        #expect(MinecraftContentMetadataReader.manifestMetadata(in: packURL)?.minimumEngineVersion == "1.21.0")
+        #expect(MinecraftContentMetadataReader.versionString(from: "") == nil)
+        #expect(MinecraftContentMetadataReader.versionString(from: [1, "2", 3]) == "1.2.3")
+        #expect(MinecraftContentMetadataReader.versionString(from: [[:]]) == nil)
+    }
+
+    @Test func minecraftContentMetadataReaderInfersPackTypesAndFallbacks() async throws {
+        let fileManager = FileManager.default
+        let rootURL = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let resourceURL = rootURL.appendingPathComponent("ResourcePack", isDirectory: true)
+        let skinURL = rootURL.appendingPathComponent("SkinPack", isDirectory: true)
+        let behaviorURL = rootURL.appendingPathComponent("BehaviorPack", isDirectory: true)
+        let fallbackURL = rootURL.appendingPathComponent("FallbackPack", isDirectory: true)
+        defer { try? fileManager.removeItem(at: rootURL) }
+
+        try fileManager.createDirectory(at: resourceURL, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: skinURL, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: behaviorURL, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: fallbackURL, withIntermediateDirectories: true)
+
+        try """
+        { "modules": [{ "type": "resources" }] }
+        """.write(to: resourceURL.appendingPathComponent("manifest.json"), atomically: true, encoding: .utf8)
+        try """
+        { "metadata": { "product_type": "skin_pack" } }
+        """.write(to: skinURL.appendingPathComponent("manifest.json"), atomically: true, encoding: .utf8)
+        try """
+        { "modules": [{ "type": "script" }] }
+        """.write(to: behaviorURL.appendingPathComponent("manifest.json"), atomically: true, encoding: .utf8)
+        try """
+        { "header": { "name": "   " } }
+        """.write(to: fallbackURL.appendingPathComponent("manifest.json"), atomically: true, encoding: .utf8)
+
+        #expect(MinecraftContentMetadataReader.inferredPackContentType(for: resourceURL) == .resourcePack)
+        #expect(MinecraftContentMetadataReader.inferredPackContentType(for: skinURL) == .skinPack)
+        #expect(MinecraftContentMetadataReader.inferredPackContentType(for: behaviorURL) == .behaviorPack)
+        #expect(MinecraftContentMetadataReader.inferredPackContentType(for: rootURL.appendingPathComponent("Missing", isDirectory: true)) == .behaviorPack)
+        #expect(MinecraftContentMetadataReader.displayName(for: fallbackURL, contentType: .behaviorPack, fallbackName: "Ignored") == "FallbackPack")
     }
 
     @Test func minecraftPackageInspectorReadsMcworldMetadata() async throws {
@@ -457,6 +723,58 @@ struct World_Manager_for_MinecraftTests {
         #expect(inspection.displayName == "Nested Behavior Pack")
     }
 
+    @Test func minecraftPackageInspectorRejectsUnsupportedExtension() async throws {
+        let fileManager = FileManager.default
+        let workingURL = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let archiveURL = workingURL.appendingPathComponent("Invalid.zip", isDirectory: false)
+        defer { try? fileManager.removeItem(at: workingURL) }
+
+        try fileManager.createDirectory(at: workingURL, withIntermediateDirectories: true)
+        try Data().write(to: archiveURL)
+
+        do {
+            _ = try MinecraftPackageInspector.inspectArchive(at: archiveURL)
+            Issue.record("Expected unsupported file type error.")
+        } catch let error as MinecraftPackageInspector.InspectionError {
+            switch error {
+            case .unsupportedFileType(let pathExtension):
+                #expect(pathExtension == "zip")
+            default:
+                Issue.record("Expected unsupported file type error but received \(error).")
+            }
+            #expect(error.errorDescription == "Unsupported Minecraft package type: .zip")
+        }
+    }
+
+    @Test func minecraftPackageInspectorRejectsAmbiguousNestedArchiveLayout() async throws {
+        let fileManager = FileManager.default
+        let workingURL = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let archiveRootURL = workingURL.appendingPathComponent("ArchiveRoot", isDirectory: true)
+        let firstPackURL = archiveRootURL.appendingPathComponent("PackOne", isDirectory: true)
+        let secondPackURL = archiveRootURL.appendingPathComponent("PackTwo", isDirectory: true)
+        let archiveURL = workingURL.appendingPathComponent("Ambiguous.mcpack", isDirectory: false)
+        defer { try? fileManager.removeItem(at: workingURL) }
+
+        try fileManager.createDirectory(at: firstPackURL, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: secondPackURL, withIntermediateDirectories: true)
+        try "{}".write(to: firstPackURL.appendingPathComponent("manifest.json"), atomically: true, encoding: .utf8)
+        try "{}".write(to: secondPackURL.appendingPathComponent("manifest.json"), atomically: true, encoding: .utf8)
+        try makeArchive(from: archiveRootURL, to: archiveURL)
+
+        do {
+            _ = try MinecraftPackageInspector.inspectArchive(at: archiveURL)
+            Issue.record("Expected invalid archive layout error.")
+        } catch let error as MinecraftPackageInspector.InspectionError {
+            switch error {
+            case .invalidArchiveLayout:
+                break
+            default:
+                Issue.record("Expected invalid archive layout error but received \(error).")
+            }
+            #expect(error.errorDescription == "The Minecraft package did not contain a valid world or pack layout.")
+        }
+    }
+
     @Test func sourcePersistenceStoreRoundTripsCachedSource() async throws {
         let fileManager = FileManager.default
         let workingURL = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -513,8 +831,128 @@ struct World_Manager_for_MinecraftTests {
         #expect(restored.first?.folderURL == sourceURL.standardizedFileURL)
         #expect(restored.first?.displayName == "Source")
         #expect(restored.first?.rawItems == [item])
-        #expect(restored.first?.snapshot == snapshot)
+        #expect(restored.first?.snapshot?.sourceID == snapshot.sourceID)
+        #expect(restored.first?.snapshot?.rootModifiedDate == snapshot.rootModifiedDate)
+        #expect(restored.first?.snapshot?.collectionSnapshots == snapshot.collectionSnapshots)
+        #expect(restored.first?.snapshot?.itemSnapshots.count == snapshot.itemSnapshots.count)
+        #expect(
+            normalizedTestFileURLPath(restored.first?.snapshot?.itemSnapshots.first?.id)
+            == normalizedTestFileURLPath(snapshot.itemSnapshots.first?.id)
+        )
+        #expect(restored.first?.snapshot?.itemSnapshots.first?.relativePath == snapshot.itemSnapshots.first?.relativePath)
+        #expect(restored.first?.snapshot?.itemSnapshots.first?.modifiedDate == snapshot.itemSnapshots.first?.modifiedDate)
+        #expect(restored.first?.snapshot?.itemSnapshots.first?.sizeBytes == snapshot.itemSnapshots.first?.sizeBytes)
+        #expect(restored.first?.snapshot?.itemSnapshots.first?.packUUID == snapshot.itemSnapshots.first?.packUUID)
+        #expect(restored.first?.snapshot?.itemSnapshots.first?.packVersion == snapshot.itemSnapshots.first?.packVersion)
         #expect(restored.first?.lastScanDate == source.lastScanDate)
+    }
+
+    @Test func sourcePersistenceStoreDeletesSavedSource() async throws {
+        let fileManager = FileManager.default
+        let workingURL = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let databaseURL = workingURL.appendingPathComponent("cache.sqlite", isDirectory: false)
+        let sourceURL = workingURL.appendingPathComponent("Source", isDirectory: true)
+        defer { try? fileManager.removeItem(at: workingURL) }
+
+        let store = SourcePersistenceStore(databaseURL: databaseURL)
+        try await store.save(source: MinecraftSource(folderURL: sourceURL))
+        #expect(try await store.loadSources().count == 1)
+
+        try await store.deleteSource(withID: sourceURL)
+
+        #expect(try await store.loadSources().isEmpty)
+    }
+
+    @Test func sourcePersistenceStoreRepairsLegacyPayloadsLeniently() async throws {
+        let fileManager = FileManager.default
+        let workingURL = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let databaseURL = workingURL.appendingPathComponent("cache.sqlite", isDirectory: false)
+        let sourceURL = workingURL.appendingPathComponent("Source", isDirectory: true)
+        defer { try? fileManager.removeItem(at: workingURL) }
+
+        let store = SourcePersistenceStore(databaseURL: databaseURL)
+        try await store.save(source: MinecraftSource(folderURL: sourceURL))
+
+        let validItem = MinecraftContentItem(
+            folderURL: sourceURL.appendingPathComponent("minecraftWorlds/WorldA", isDirectory: true),
+            folderName: "WorldA",
+            contentType: .world,
+            collectionRootURL: sourceURL.appendingPathComponent("minecraftWorlds", isDirectory: true),
+            displayName: "World A"
+        )
+        let mixedRawItems = try JSONSerialization.data(withJSONObject: [
+            try jsonObject(for: validItem),
+            5
+        ])
+
+        try withSQLiteDatabase(at: databaseURL) { database in
+            try sqliteExec(
+                """
+                UPDATE source_cache
+                SET origin_json = ?,
+                    access_descriptor_json = ?,
+                    raw_items_json = ?,
+                    snapshot_json = ?,
+                    availability_state = 'bogus'
+                WHERE folder_path = ?;
+                """,
+                on: database,
+                bindings: [
+                    .blob(Data("{".utf8)),
+                    .blob(Data("{".utf8)),
+                    .blob(mixedRawItems),
+                    .blob(Data("{".utf8)),
+                    .text(sourceURL.path)
+                ]
+            )
+        }
+
+        let repaired = try await store.loadSources()
+
+        #expect(repaired.count == 1)
+        #expect(repaired[0].needsRepair)
+        #expect(repaired[0].origin.kind == .localFolder)
+        #expect(repaired[0].accessDescriptor.kind == .localFolder)
+        #expect(repaired[0].accessDescriptor.refreshStrategy == .eagerFullScan)
+        #expect(repaired[0].availability == .unknown)
+        #expect(repaired[0].rawItems == [validItem])
+        #expect(repaired[0].snapshot == nil)
+    }
+
+    @Test func sourcePersistenceStoreRepairPersistsNormalizedRecord() async throws {
+        let fileManager = FileManager.default
+        let workingURL = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let databaseURL = workingURL.appendingPathComponent("cache.sqlite", isDirectory: false)
+        let sourceURL = workingURL.appendingPathComponent("Source", isDirectory: true)
+        defer { try? fileManager.removeItem(at: workingURL) }
+
+        let legacyRecord = PersistedSourceRecord(
+            sourceID: sourceURL,
+            folderURL: sourceURL,
+            origin: .localFolder(bookmarkData: nil),
+            accessDescriptor: SourceAccessDescriptor(
+                accessorIdentifier: LocalFolderSourceAccess().accessorIdentifier,
+                kind: .localFolder,
+                refreshStrategy: .eagerFullScan
+            ),
+            availability: .available,
+            bookmarkData: nil,
+            displayName: "Repaired Source",
+            rawItems: [],
+            snapshot: nil,
+            lastScanDate: Date(timeIntervalSince1970: 999),
+            needsRepair: true
+        )
+
+        let store = SourcePersistenceStore(databaseURL: databaseURL)
+        try await store.repair(record: legacyRecord)
+
+        let restored = try await store.loadSources()
+        #expect(restored.count == 1)
+        #expect(restored[0].displayName == "Repaired Source")
+        #expect(restored[0].sourceID == sourceURL.standardizedFileURL)
+        #expect(restored[0].availability == .available)
+        #expect(restored[0].lastScanDate == legacyRecord.lastScanDate)
     }
 
     @Test func connectedDeviceSourceFactoryCreatesStableSyntheticIdentifier() async throws {
@@ -542,40 +980,144 @@ struct World_Manager_for_MinecraftTests {
         #expect(source.displayName == "John's iPhone • Minecraft")
     }
 
-    @Test func ifuseDeviceServicesParsesListAppsOutputAcrossCommonFormats() async throws {
-        let output = """
-        com.mojang.minecraftpe - Minecraft
-        VLC (org.videolan.vlc-ios)
-        Documents\tcom.readdle.ReaddleDocs
-        com.apple.Pages
-        """
+    @Test func connectedDeviceDiscoveryCachePolicyHonorsTransportSpecificTTL() async throws {
+        let usbDevice = ConnectedDevice(
+            udid: "usb-device",
+            name: "USB Device",
+            productType: nil,
+            osVersion: nil,
+            connection: .usb,
+            trustState: .trusted
+        )
+        let networkDevice = ConnectedDevice(
+            udid: "network-device",
+            name: "Network Device",
+            productType: nil,
+            osVersion: nil,
+            connection: .network,
+            trustState: .trusted
+        )
+        let cache: [String: CachedConnectedDeviceDiscovery] = [
+            usbDevice.udid: ConnectedDeviceDiscoveryCachePolicy.cacheDiscovery(
+                for: usbDevice,
+                containers: [],
+                discoveryErrorDescription: nil,
+                now: Date(timeIntervalSince1970: 100)
+            ),
+            networkDevice.udid: ConnectedDeviceDiscoveryCachePolicy.cacheDiscovery(
+                for: networkDevice,
+                containers: [],
+                discoveryErrorDescription: nil,
+                now: Date(timeIntervalSince1970: 100)
+            )
+        ]
 
-        let containers = IFuseDeviceServices.parseAppContainers(
-            from: output,
-            deviceUDID: "device-1"
+        let usbFresh = ConnectedDeviceDiscoveryCachePolicy.cachedDiscovery(
+            for: usbDevice,
+            cache: cache,
+            isActivelyScanning: false,
+            now: Date(timeIntervalSince1970: 159)
+        )
+        let usbExpired = ConnectedDeviceDiscoveryCachePolicy.cachedDiscovery(
+            for: usbDevice,
+            cache: cache,
+            isActivelyScanning: false,
+            now: Date(timeIntervalSince1970: 161)
+        )
+        let networkFresh = ConnectedDeviceDiscoveryCachePolicy.cachedDiscovery(
+            for: networkDevice,
+            cache: cache,
+            isActivelyScanning: false,
+            now: Date(timeIntervalSince1970: 279)
+        )
+        let networkExpired = ConnectedDeviceDiscoveryCachePolicy.cachedDiscovery(
+            for: networkDevice,
+            cache: cache,
+            isActivelyScanning: false,
+            now: Date(timeIntervalSince1970: 281)
         )
 
-        #expect(containers.count == 4)
-        #expect(containers.contains { $0.appID == "com.mojang.minecraftpe" && $0.appName == "Minecraft" })
-        #expect(containers.contains { $0.appID == "org.videolan.vlc-ios" && $0.appName == "VLC" })
-        #expect(containers.contains { $0.appID == "com.readdle.ReaddleDocs" && $0.appName == "Documents" })
-        #expect(containers.contains { $0.appID == "com.apple.Pages" && $0.appName == "com.apple.Pages" })
+        #expect(usbFresh != nil)
+        #expect(usbExpired == nil)
+        #expect(networkFresh != nil)
+        #expect(networkExpired == nil)
     }
 
-    @Test func ifuseDeviceServicesParsesIdeviceInfoKeyValueOutput() async throws {
-        let output = """
-        DeviceName: John's iPad
-        ProductType: iPad14,5
-        ProductVersion: 18.1
-        ConnectionType: USB
-        """
+    @Test func connectedDeviceSourcePolicyDerivesAvailabilityAndPreferredName() async throws {
+        #expect(ConnectedDeviceSourcePolicy.availability(for: .init(
+            udid: "trusted",
+            name: "John's iPhone",
+            productType: nil,
+            osVersion: nil,
+            connection: .usb,
+            trustState: .trusted
+        ), hasMinecraftContainer: true) == .available)
+        #expect(ConnectedDeviceSourcePolicy.availability(for: .init(
+            udid: "locked",
+            name: "John's iPhone",
+            productType: nil,
+            osVersion: nil,
+            connection: .usb,
+            trustState: .locked
+        ), hasMinecraftContainer: true) == .limited)
+        #expect(ConnectedDeviceSourcePolicy.availability(for: .init(
+            udid: "missing",
+            name: "John's iPhone",
+            productType: nil,
+            osVersion: nil,
+            connection: .usb,
+            trustState: .trusted
+        ), hasMinecraftContainer: false) == .unavailable)
 
-        let values = IFuseDeviceServices.parseKeyValueOutput(output)
+        #expect(ConnectedDeviceSourcePolicy.preferredDeviceName(
+            currentName: "  John's iPad  ",
+            fallbackDeviceName: "Backup Name",
+            fallbackDisplayName: "Display Name • Minecraft"
+        ) == "John's iPad")
+        #expect(ConnectedDeviceSourcePolicy.preferredDeviceName(
+            currentName: "Unknown Device",
+            fallbackDeviceName: "  John's Switch  ",
+            fallbackDisplayName: "Ignored • Minecraft"
+        ) == "John's Switch")
+        #expect(ConnectedDeviceSourcePolicy.preferredDeviceName(
+            currentName: "Unknown Device",
+            fallbackDeviceName: "",
+            fallbackDisplayName: "Bedroom iPad • Minecraft"
+        ) == "Bedroom iPad")
+    }
 
-        #expect(values["DeviceName"] == "John's iPad")
-        #expect(values["ProductType"] == "iPad14,5")
-        #expect(values["ProductVersion"] == "18.1")
-        #expect(values["ConnectionType"] == "USB")
+    @Test func connectedDeviceSourcePolicyDetectsRefreshDebt() async throws {
+        let device = ConnectedDevice(
+            udid: "device",
+            name: "Device",
+            productType: nil,
+            osVersion: nil,
+            connection: .usb,
+            trustState: .trusted
+        )
+        let container = DeviceAppContainer(
+            deviceUDID: device.udid,
+            appID: "com.mojang.minecraftpe",
+            appName: "Minecraft",
+            accessMode: .documents,
+            minecraftFolderRelativePath: "Documents/games/com.mojang"
+        )
+        var source = ConnectedDeviceSourceFactory().makeSource(device: device, container: container)
+
+        #expect(ConnectedDeviceSourcePolicy.hasRefreshDebt(source))
+
+        source.rawItems = [
+            MinecraftContentItem(
+                folderURL: source.folderURL.appendingPathComponent("minecraftWorlds/WorldA", isDirectory: true),
+                folderName: "WorldA",
+                contentType: .world,
+                collectionRootURL: source.folderURL.appendingPathComponent("minecraftWorlds", isDirectory: true)
+            )
+        ]
+        source.previewLoadedCount = 1
+        source.sizeLoadedCount = 1
+
+        #expect(ConnectedDeviceSourcePolicy.hasRefreshDebt(source) == false)
     }
 
     @Test func scanNotificationServiceFormatsCompletionMessage() async throws {
@@ -722,6 +1264,84 @@ private enum ArchiveTestError: LocalizedError {
             return output.isEmpty ? "Failed to create test archive." : output
         }
     }
+}
+
+private func normalizedTestFileURLPath(_ url: URL?) -> String? {
+    guard let path = url?.standardizedFileURL.path else {
+        return nil
+    }
+
+    if path.count > 1, path.hasSuffix("/") {
+        return String(path.dropLast())
+    }
+
+    return path
+}
+
+private enum SQLiteBinding {
+    case text(String)
+    case blob(Data)
+}
+
+private final class LockedRecorder<Value>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage: [Value] = []
+
+    func append(_ value: Value) {
+        lock.lock()
+        storage.append(value)
+        lock.unlock()
+    }
+
+    var values: [Value] {
+        lock.lock()
+        let values = storage
+        lock.unlock()
+        return values
+    }
+}
+
+private func withSQLiteDatabase(at url: URL, perform body: (OpaquePointer?) throws -> Void) throws {
+    var database: OpaquePointer?
+    guard sqlite3_open(url.path, &database) == SQLITE_OK else {
+        defer { sqlite3_close(database) }
+        throw NSError(domain: "TestSQLite", code: 1, userInfo: [NSLocalizedDescriptionKey: "Failed to open database."])
+    }
+    defer { sqlite3_close(database) }
+    try body(database)
+}
+
+private func sqliteExec(_ sql: String, on database: OpaquePointer?, bindings: [SQLiteBinding] = []) throws {
+    var statement: OpaquePointer?
+    guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK else {
+        throw NSError(domain: "TestSQLite", code: 1, userInfo: [NSLocalizedDescriptionKey: "Failed to prepare SQL statement."])
+    }
+    defer { sqlite3_finalize(statement) }
+
+    let transientDestructor = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+    for (index, binding) in bindings.enumerated() {
+        switch binding {
+        case .text(let value):
+            guard sqlite3_bind_text(statement, Int32(index + 1), value, -1, transientDestructor) == SQLITE_OK else {
+                throw NSError(domain: "TestSQLite", code: 1, userInfo: [NSLocalizedDescriptionKey: "Failed to bind text parameter."])
+            }
+        case .blob(let value):
+            let result = value.withUnsafeBytes { rawBuffer in
+                sqlite3_bind_blob(statement, Int32(index + 1), rawBuffer.baseAddress, Int32(value.count), transientDestructor)
+            }
+            guard result == SQLITE_OK else {
+                throw NSError(domain: "TestSQLite", code: 1, userInfo: [NSLocalizedDescriptionKey: "Failed to bind blob parameter."])
+            }
+        }
+    }
+
+    guard sqlite3_step(statement) == SQLITE_DONE else {
+        throw NSError(domain: "TestSQLite", code: 1, userInfo: [NSLocalizedDescriptionKey: "Failed to execute SQL statement."])
+    }
+}
+
+private func jsonObject<T: Encodable>(for value: T) throws -> Any {
+    try JSONSerialization.jsonObject(with: JSONEncoder().encode(value))
 }
 
 private func appendLE<T: FixedWidthInteger>(_ value: T, to data: inout Data) {
