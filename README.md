@@ -1,6 +1,6 @@
 # World Manager for Minecraft
 
-World Manager for Minecraft is a macOS app for inspecting and exporting items in Minecraft Bedrock content libraries on Apple devices. It scans worlds, behavior packs, resource packs, and templates from local folders, and can mirror content from a trusted connected iPhone or iPad for browsing on the Mac.
+World Manager for Minecraft is a macOS app for inspecting and exporting items in Minecraft Bedrock content libraries on Apple devices. It scans worlds, behavior packs, resource packs, and templates from local folders, and can export content from a trusted connected iPhone or iPad for browsing or sharing from the Mac.
 
 Its creator is a dad often tasked with finding and retrieving worlds and modpacks from mobile devices thrust at him, often with an immediate deadline. "Why can't a computer do this for me," he more or less asked himself one day. He fired up Xcode, roughed in a UI, and peppered Codex with questions about getting at the files programmatically. The result is this thing. With it, the days of digging around in the Files app on a device and coaxing iOS to zip them up, rename them, and share them to a friend are BEHIND US.
 
