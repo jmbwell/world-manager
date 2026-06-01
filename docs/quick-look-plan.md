@@ -1,41 +1,126 @@
-# Quick Look Plan
+# Quick Look Architecture
 
-## Current State
+## Summary
 
-Quick Look thumbnail and preview extension targets are present in the project and share the app's Bedrock package inspection layer:
+The app includes Quick Look thumbnail and preview extensions for Minecraft Bedrock package files:
 
-- `World Manager for Minecraft/Services/MinecraftPackageInspector.swift`
-  - extracts `.mcworld`, `.mcpack`, `.mctemplate`, and `.mcaddon`
-  - normalizes archives with either flat contents or a single nested top-level folder
-  - infers pack type for ambiguous `.mcpack` and `.mcaddon` archives
-- `World Manager for Minecraft/Services/MinecraftContentMetadataReader.swift`
-  - shared manifest, icon, display-name, and world metadata parsing
-- `World Manager for Minecraft/QuickLook/MinecraftPackageTypes.swift`
-  - central UTType identifiers and extension definitions
-- `World Manager for Minecraft/QuickLook/MinecraftPackageQuickLookModel.swift`
-  - preview-friendly summary model
-- `World Manager for Minecraft/QuickLook/MinecraftPackageThumbnailRenderer.swift`
-  - branded thumbnail rendering with icon fallback
+- `.mcworld`
+- `.mcpack`
+- `.mctemplate`
+- `.mcaddon`
+
+Both extensions share the same package inspection and thumbnail rendering code used by the app target where possible.
+
+## Targets
+
+### Thumbnail Extension
+
+`MinecraftPackageThumbnailExtension/ThumbnailProvider.swift`
+
+- Implements `QLThumbnailProvider`.
+- Calls `MinecraftPackageInspector.inspectArchive(at:)`.
+- Renders a `CGImage` with `MinecraftPackageThumbnailRenderer`.
+- Cleans up the temporary extraction directory with `MinecraftPackageInspector.cleanup`.
+
+### Preview Extension
+
+`MinecraftPackagePreviewExtension/PreviewViewController.swift`
+
+- Implements `QLPreviewingController`.
+- Inspects the selected package archive.
+- Displays the package icon when one exists.
+- Falls back to the generated thumbnail artwork.
+- Keeps the inspection result alive while the preview is displayed, then removes temporary extraction files in `deinit`.
+
+The preview is currently image-focused. `MinecraftPackageQuickLookModelBuilder` already builds structured facts, but the preview controller does not render those facts yet.
+
+## Shared Package Inspection
+
+`MinecraftPackageInspector` is the central archive reader for Quick Look:
+
+- Accepts `.mcworld`, `.mcpack`, `.mctemplate`, and `.mcaddon`.
+- Uses `ZipArchiveReader` to inspect ZIP entries.
+- Supports packages with content at the archive root or under one top-level folder.
+- Extracts only metadata-relevant files into a temporary inspection directory.
+- Resolves content type from extension and manifest metadata.
+- Reads display name, icon, world metadata, and manifest metadata.
+
+Inspection results include:
+
+- archive URL
+- temporary extraction root
+- resolved content root
+- content type
+- display name
+- icon URL
+- world metadata
+- manifest metadata
+
+Callers are responsible for cleanup.
+
+## Metadata Readers
+
+`MinecraftContentMetadataReader` provides shared metadata parsing:
+
+- World display names from `levelname.txt`.
+- Pack display names from `manifest.json`.
+- World icons from `world_icon.*`.
+- Pack icons from `pack_icon.*`.
+- World metadata from `level.dat` through `BedrockLevelMetadataDecoder`.
+- Manifest UUID, version, and minimum engine version.
+- Pack type inference for ambiguous `.mcpack` and `.mcaddon` archives.
+
+`MinecraftPackageQuickLookModelBuilder` converts inspection results into preview-friendly facts such as version, UUID, engine version, game mode, difficulty, last played date, seed, and Bedrock version.
+
+## Thumbnail Rendering
+
+`MinecraftPackageThumbnailRenderer` renders square thumbnail artwork:
+
+- If the package has an icon, it draws that icon cropped to a rounded square with a subtle border.
+- If no icon is present, it draws a generated voxel-style badge with content-type-specific colors.
+- Rendering is done with AppKit bitmap drawing and returns a `CGImage`.
+
+## Type Registration
+
+The main app registers exported UTTypes and document roles for Minecraft package extensions in `World-Manager-for-Minecraft-Info.plist`.
+
+The extension Info.plists list the same internal UTTypes under `QLSupportedContentTypes`:
+
+- `us.b-wells.minecraft.mcworld`
+- `us.b-wells.minecraft.mcpack`
+- `us.b-wells.minecraft.mctemplate`
+- `us.b-wells.minecraft.mcaddon`
+
+## Relevant Files
+
+- `World-Manager-for-Minecraft-Info.plist`
+- `MinecraftPackageThumbnailExtension/Info.plist`
 - `MinecraftPackageThumbnailExtension/ThumbnailProvider.swift`
-  - renders Quick Look thumbnails for supported Minecraft package files
+- `MinecraftPackagePreviewExtension/Info.plist`
 - `MinecraftPackagePreviewExtension/PreviewViewController.swift`
-  - renders a basic image preview from package icons or generated thumbnail art
+- `World Manager for Minecraft/QuickLook/MinecraftPackageTypes.swift`
+- `World Manager for Minecraft/QuickLook/MinecraftPackageQuickLookModel.swift`
+- `World Manager for Minecraft/QuickLook/MinecraftPackageThumbnailRenderer.swift`
+- `World Manager for Minecraft/Services/ArchiveInspection/MinecraftPackageInspector.swift`
+- `World Manager for Minecraft/Services/ArchiveInspection/MinecraftContentMetadataReader.swift`
+- `World Manager for Minecraft/Services/ArchiveInspection/ZipArchiveReader.swift`
 
-Archive inspection is covered by tests in `World Manager for MinecraftTests/World_Manager_for_MinecraftTests.swift`.
+## Current Limitations
 
-## Remaining Work
+- Preview rendering shows only an image, not the structured metadata facts.
+- `.mcaddon` support resolves one content root; multi-pack add-ons are not yet presented as a compound package.
+- The inspector extracts only metadata files, which is intentional for Quick Look speed but means package validation is shallow.
 
-The target layer is intentionally thin, but the preview experience can still be improved:
+## Verification
 
-- render structured metadata with `MinecraftPackageQuickLookModelBuilder`
-- include:
-  - package icon or branded artwork
-  - title
-  - package kind
-  - key facts like version, UUID, minimum engine, game mode, difficulty, and last played
-- add explicit UI tests or fixture-driven render tests for package previews
+Run:
 
-## Verification Notes
+```sh
+xcodebuild \
+  -project "World Manager for Minecraft.xcodeproj" \
+  -scheme "World Manager for Minecraft" \
+  -configuration Debug \
+  build
+```
 
-- `xcodebuild ... build` succeeds.
-- `xcodebuild ... test` should be run before release and whenever the shared archive inspection layer changes.
+The unit tests cover archive inspection behavior in `World Manager for MinecraftTests/World_Manager_for_MinecraftTests.swift`.

@@ -1,136 +1,105 @@
-# iOS Device Access Notes
+# Connected iOS Device Access
 
 ## Summary
 
-This project can now read Minecraft Bedrock content directly from a connected iPhone or iPad on macOS using `MobileDevice.framework` and House Arrest.
+World Manager can browse Minecraft Bedrock content from a trusted iPhone or iPad on macOS using Apple's private `MobileDevice.framework` and the House Arrest service.
 
-The app does **not** scan the device live through custom file APIs. Instead, it:
+Connected-device sources are modeled as normal `MinecraftSource` values, but they are not scanned through a live filesystem mirror. The current implementation asks the device for library item summaries, metadata, icons, sizes, and directory listings through `AppleMobileDeviceSourceAccess`. Only explicit materialization operations, such as reveal/export/share, mirror an item subtree into a temporary local directory.
 
-1. Detects a connected trusted device with `MobileDevice.framework`.
-2. Opens House Arrest for `com.mojang.minecraftpe`.
-3. Uses `VendDocuments`.
-4. Mirrors the proven Minecraft subtree into a temporary local folder.
-5. Hands that local folder to the existing `WorldScanner`.
+## Current Flow
 
-That keeps the rest of the app filesystem-based.
+1. `SourceLibrary` owns a `ConnectedDeviceRuntime` refresh loop when a connected-device access method is configured.
+2. `AppleMobileDeviceSourceAccess.listConnectedDevices()` enumerates devices through `AppleMobileDeviceAccess.connectedDevices()`.
+3. `AppleMobileDeviceSourceAccess.listAccessibleContainers(for:)` lists app containers and prioritizes `com.mojang.minecraftpe`.
+4. `ConnectedDeviceSourcePickerView` lets the user add a device-backed Minecraft source.
+5. `ConnectedDeviceSourceFactory` creates a stable synthetic source identifier:
 
-## Proven Findings
+   ```text
+   wmminecraft-device://<device-udid>/<bundle-id>?mode=documents
+   ```
 
-### Correct bundle ID
+6. `SourceScanExecutor` scans the source through the generic `SourceAccessMethod` protocol.
+7. `AppleMobileDeviceSourceAccess.discoverItems` calls `minecraftLibrarySnapshot` for item summaries and `minecraftMetadataBatch` for metadata.
+8. Preview icons, size metrics, directory contents, and full item materialization are loaded lazily through the same source-access method.
 
-Minecraft on the tested device is:
+This keeps UI, indexing, export, and persistence mostly source-agnostic while allowing connected devices to avoid a full upfront mirror.
 
-- `com.mojang.minecraftpe`
+## Minecraft Container
 
-### App metadata
+The tested Minecraft bundle identifier is:
 
-The app record reported:
+```text
+com.mojang.minecraftpe
+```
 
-- `UIFileSharingEnabled = 1`
-- `LSSupportsOpeningDocumentsInPlace = 1`
+Minecraft exposes a vendable Documents surface. The working Minecraft content root for House Arrest `VendDocuments` is:
 
-So Minecraft does expose a vendable Documents surface.
+```text
+Documents/games/com.mojang
+```
 
-### Correct vend root
+The app treats that value as a vend-relative path stored on `DeviceAppContainer.minecraftFolderRelativePath`.
 
-House Arrest `VendDocuments` succeeds, but the Minecraft content is **not** rooted at:
+Expected subfolders under that root:
 
-- `games/com.mojang`
+- `minecraftWorlds`
+- `resource_packs`
+- `behavior_packs`
+- `skin_packs`
+- `world_templates`
 
-The proven path is:
+## House Arrest Details
 
-- `Documents/games/com.mojang`
+The implementation uses the explicit House Arrest flow in the Objective-C bridge:
 
-### Proven subfolders
+1. Start `com.apple.mobile.house_arrest`.
+2. Send `VendDocuments`.
+3. Receive the vend response.
+4. Use AFC against the returned service connection.
 
-These paths were verified through AFC on the real device:
+The direct `AMDeviceCreateHouseArrestService` helper returned `InstallationLookupFailed` / `e80000b7` on the tested device, so it is not the primary path.
 
-- `Documents/games/com.mojang/minecraftWorlds`
-- `Documents/games/com.mojang/resource_packs`
-- `Documents/games/com.mojang/behavior_packs`
-- `Documents/games/com.mojang/world_templates`
+The AFC root for this vend should not be treated as a normal `/` filesystem root. Paths are relative to the vend surface, and Minecraft content is reached through `Documents/games/com.mojang`.
 
-## Important API Findings
+## Runtime Behavior
 
-### `AMDeviceCreateHouseArrestService`
+Connected-device sources use a staged refresh strategy:
 
-The direct helper path still returned a device-side error on the tested device:
+- Availability is derived from current device presence and trust state.
+- Trusted devices are available.
+- Locked or untrusted devices are limited.
+- Missing or inaccessible devices are disconnected.
+- When a source becomes available, `SourceSyncRuntime` can queue a reconcile scan instead of a full scan if cached content exists.
 
-- `InstallationLookupFailed`
-- `e80000b7`
+Scan execution uses fewer workers for connected-device sources than local folders to avoid overloading AFC/MobileDevice calls.
 
-So the app currently relies on the explicit vend flow instead:
+During scan:
 
-1. `AMDeviceSecureStartService("com.apple.mobile.house_arrest")`
-2. `AMDServiceConnectionSendMessage` with `VendDocuments`
-3. `AMDServiceConnectionReceiveMessage`
-4. Create AFC from the returned service connection
+- `minecraftLibrarySnapshot` returns candidate content items.
+- `minecraftMetadataBatch` returns display names, UUIDs, versions, minimum engine versions, and world pack references.
+- Icons are loaded with `minecraftIconBatch` or individual file reads and cached through `ImageCacheStore`.
+- Size information is loaded through `pathMetricsBatch`.
+- Directory previews call `listDirectory`.
 
-### `VendDocuments` vs `VendContainer`
+During materialization:
 
-`VendDocuments` is the working path for Minecraft on the tested device.
+- `materializeItem` mirrors one remote item subtree into `NSTemporaryDirectory()/WMMConnectedDeviceReveal/...`.
+- `ContentPackageExporter` mirrors the selected item into archive staging when exporting connected-device content.
+- Temporary materialized folders are treated as disposable.
 
-### AFC path behavior
+## Persistence
 
-The AFC root is not a normal `/` root for this vend. Examples:
+Connected-device sources are persisted in the SQLite source cache with:
 
-- `"/"` returned AFC status `0xA`
-- `"/games/com.mojang"` returned AFC status `0x8`
-- `"Documents/games/com.mojang"` worked
+- source identifier
+- source origin and device/container metadata
+- access descriptor
+- availability
+- raw item cache
+- source snapshot
+- last scan date
 
-So code should use the proven vend-relative path instead of assuming a container root layout.
-
-## Current Project Shape
-
-## Source Access Architecture
-
-Source intake is now organized around access methods rather than one-off services.
-
-- `SourceAccess/Core`
-  - shared contracts and the `SourceAccessCoordinator`
-- `SourceAccess/LocalFolder`
-  - the local disk access method
-- `SourceAccess/ConnectedDevice`
-  - connected-device source creation and picker UI
-- `SourceAccess/ConnectedDevice/AppleMobileDevice`
-  - the built-in Apple mobile-device transport
-
-The key abstraction is `SourceAccessMethod`.
-
-Each access method is responsible for:
-
-1. turning a `MinecraftSource` into a local `PreparedScanRoot`
-2. cleaning up that prepared root when scanning finishes
-
-That keeps the rest of the app indifferent to how a source is reached.
-
-### App path
-
-User flow:
-
-- `SourcesSidebarView` opens the connected-device sheet.
-- `ConnectedDeviceSourcePickerView` lets the user select a device/app and a subpath.
-- `AppleMobileDeviceSourceAccess` is the active connected-device access method.
-
-### Scan-root preparation
-
-`SourceAccessCoordinator` chooses between:
-
-- local folder sources
-- connected device sources
-
-For connected devices:
-
-- the built-in `AppleMobileDeviceSourceAccess`
-- future connected-device access methods can implement the same contracts
-
-### Mirror behavior
-
-The MobileDevice fallback:
-
-- mirrors the subtree into a temporary directory
-- returns that directory as `PreparedScanRoot.rootURL`
-- cleans it up with `CleanupBehavior.deleteTemporaryDirectory`
+On app launch, cached sources and items are restored before availability refreshes complete, so offline device-backed sources can still show cached results.
 
 ## Relevant Files
 
@@ -138,19 +107,14 @@ The MobileDevice fallback:
 - `World Manager for Minecraft/SourceAccess/ConnectedDevice/AppleMobileDevice/AppleMobileDeviceBridge.h`
 - `World Manager for Minecraft/SourceAccess/ConnectedDevice/AppleMobileDevice/AppleMobileDeviceAccess.swift`
 - `World Manager for Minecraft/SourceAccess/ConnectedDevice/AppleMobileDevice/AppleMobileDeviceSourceAccess.swift`
-- `World Manager for Minecraft/SourceAccess/Core/SourceAccessCoordinator.swift`
-- `World Manager for Minecraft/SourceAccess/LocalFolder/LocalFolderSourceAccess.swift`
-- `World Manager for Minecraft/Models/SourceOrigin.swift`
+- `World Manager for Minecraft/SourceAccess/ConnectedDevice/ConnectedDeviceSourceFactory.swift`
 - `World Manager for Minecraft/SourceAccess/ConnectedDevice/ConnectedDeviceSourcePickerView.swift`
+- `World Manager for Minecraft/Services/Sources/ConnectedDevice/SourceConnectedDeviceRuntime.swift`
+- `World Manager for Minecraft/Services/Sources/Scanning/SourceScanExecution.swift`
 
-## Developer CLI
+## Developer Probe
 
-A local probe harness was added for iteration:
-
-- `Scripts/run_mobile_device_probe.sh`
-- `Tools/mobile_device_probe.m`
-
-Useful commands:
+The local probe harness is useful for debugging MobileDevice behavior outside the app:
 
 ```sh
 Scripts/run_mobile_device_probe.sh summary
@@ -160,18 +124,11 @@ Scripts/run_mobile_device_probe.sh probe-paths com.mojang.minecraftpe
 Scripts/run_mobile_device_probe.sh mirror com.mojang.minecraftpe 'Documents/games/com.mojang' /tmp/wmm-minecraft-device-mirror
 ```
 
-These commands generally need to run outside the agent sandbox to access the real connected device.
+These commands require a trusted connected device and generally need to run outside restricted automation sandboxes.
 
-## Known Cleanup Targets
+## Caveats
 
-Not part of the device-access implementation itself:
-
-- `layoutSubtreeIfNeeded` warning: SwiftUI/AppKit layout issue
-- `duplicate column name: bookmark_data`: persistence migration issue
-- preview actor-isolation warnings in `PreviewFixtures.swift`
-
-## Recommendation
-
-Keep the CLI probe and this document.
-
-They provide a reproducible path for future device-access debugging without going back through GUI-based experimentation.
+- `MobileDevice.framework`, House Arrest, and AFC are private Apple interfaces.
+- Behavior can change across macOS, iOS, iPadOS, and Minecraft releases.
+- Device access requires trust, unlock state, and a vendable app container.
+- Connected-device export/reveal operations may be slower than local folder operations because they materialize remote content on demand.
