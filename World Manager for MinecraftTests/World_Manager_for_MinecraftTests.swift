@@ -973,7 +973,7 @@ struct World_Manager_for_MinecraftTests {
         #expect(source.origin.kind == .connectedDevice)
         #expect(source.id.scheme == "wmminecraft-device")
         #expect(source.id.host == device.udid)
-        #expect(source.displayName == "John's iPhone • Minecraft")
+        #expect(source.displayName == "John's iPhone")
     }
 
     @Test func connectedDeviceDiscoveryCachePolicyHonorsTransportSpecificTTL() async throws {
