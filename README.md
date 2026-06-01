@@ -19,6 +19,30 @@ This thing is called "World Manager," and it happens to pertain to someone else'
 - Export worlds and packs as portable `.mcworld`, `.mcpack`, `.mctemplate`, and `.mcaddon` packages, or share them via Messages, AirDrop, etc. via the "Share" sheet.
 - Preview and thumbnail supported Minecraft package files with Quick Look extensions.
 
+## Usage
+
+### Adding a Library
+
+For a local folder, click the folder toolbar button and choose the folder that contains your Bedrock content, or drag the folder into the source list. World Manager will scan it and look for the usual Minecraft folders like `minecraftWorlds`, `behavior_packs`, `resource_packs`, and `world_templates`.
+
+For an iPhone or iPad, connect the device over USB first. If iOS asks whether to trust the Mac, allow it on the device and unlock the device if needed. Once the device appears in the sidebar, click `Add`. After a device has trusted the Mac, it should usually be discoverable over the network even when it is not connected by USB.
+
+Device discovery is not always instant. If a trusted device does not appear, try sleeping the device, waking and unlocking it again, then waiting a little while for Apple's MobileDevice services to catch up. You can also click the device toolbar icon and try to find it from the device picker.
+
+Once a folder or device source is added, World Manager scans it and discovers the worlds, packs, templates, and other supported items it can find. If a device disconnects after it has been scanned, you can still browse cached results. Exporting and sharing from that device require reconnecting it. If a device disconnects while a discovery scan is in progress, the scan should resume when the source becomes available again.
+
+### Browsing and Inspecting
+
+Click a source in the sidebar to see all detected items and source details. Click one of the filter rows under a source to show only worlds, behavior packs, resource packs, skin packs, or templates.
+
+Click an item in the item list to inspect it. The detail view shows the metadata World Manager could detect, including names, icons, dates, size, pack UUID/version information, basic world facts, and world-to-pack relationships where available.
+
+### Exporting and Sharing
+
+From an item's detail view, you can export it to a Minecraft package file on your Mac or share it directly through the macOS share sheet. Worlds export as `.mcworld`, packs as `.mcpack`, and templates as `.mctemplate`.
+
+If you share to another device with AirDrop, Messages, or a similar route, opening the received file on that device should launch Minecraft and begin Minecraft's normal import flow.
+
 ## Requirements
 
 - macOS 26.2 or newer, based on the current Xcode project deployment target. Could work with older macOS. I don't have any so I don't know.
