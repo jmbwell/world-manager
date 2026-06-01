@@ -1,9 +1,5 @@
-//
-//  ScanNotificationService.swift
-//  World Manager for Minecraft
-//
-//  Created by Codex on 2026-05-27.
-//
+// SPDX-FileCopyrightText: 2026 John Burwell and contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 import AppKit
 import Foundation

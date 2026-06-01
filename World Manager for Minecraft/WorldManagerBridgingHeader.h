@@ -1,8 +1,4 @@
-//
-//  WorldManagerBridgingHeader.h
-//  World Manager for Minecraft
-//
-//  Created by OpenAI on 2026-05-26.
-//
+// SPDX-FileCopyrightText: 2026 John Burwell and contributors
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 #import "SourceAccess/ConnectedDevice/AppleMobileDevice/AppleMobileDeviceBridge.h"
