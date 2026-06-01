@@ -3,7 +3,7 @@
 
 import Foundation
 
-struct MinecraftSource: Identifiable, Hashable, Sendable {
+nonisolated struct MinecraftSource: Identifiable, Hashable, Sendable {
     let id: URL
     let folderURL: URL
     var origin: MinecraftSourceOrigin
@@ -197,7 +197,7 @@ nonisolated private func normalizedSourceURL(_ url: URL) -> URL {
 }
 
 private extension Array {
-    func uniqued<Key: Hashable>(by keyPath: KeyPath<Element, Key>) -> [Element] {
+    nonisolated func uniqued<Key: Hashable>(by keyPath: KeyPath<Element, Key>) -> [Element] {
         var seen = Set<Key>()
         var result: [Element] = []
 

@@ -3,12 +3,12 @@
 
 import Foundation
 
-enum PackIdentitySource: String, Hashable, Sendable {
+nonisolated enum PackIdentitySource: String, Hashable, Sendable {
     case manifestUUID
     case fallback
 }
 
-struct PackIdentity: Hashable, Sendable, Identifiable {
+nonisolated struct PackIdentity: Hashable, Sendable, Identifiable {
     let type: MinecraftContentType
     let uuid: String?
     let version: String?
@@ -96,7 +96,7 @@ struct PackIdentity: Hashable, Sendable, Identifiable {
     }
 }
 
-struct PackInstance: Identifiable, Hashable, Sendable {
+nonisolated struct PackInstance: Identifiable, Hashable, Sendable {
     let id: URL
     let itemID: URL
     let sourceID: URL
@@ -105,7 +105,7 @@ struct PackInstance: Identifiable, Hashable, Sendable {
     let hostWorldItemID: URL?
 }
 
-struct LogicalPack: Identifiable, Hashable, Sendable {
+nonisolated struct LogicalPack: Identifiable, Hashable, Sendable {
     let id: PackIdentity
     let contentType: MinecraftContentType
     let displayName: String
@@ -116,14 +116,14 @@ struct LogicalPack: Identifiable, Hashable, Sendable {
     let isSuspicious: Bool
 }
 
-struct LogicalWorld: Identifiable, Hashable, Sendable {
+nonisolated struct LogicalWorld: Identifiable, Hashable, Sendable {
     let id: URL
     let itemID: URL
     let usedPackIDs: [PackIdentity]
     let unresolvedReferences: [ContentPackReference]
 }
 
-struct WorldPackRelationship: Identifiable, Hashable, Sendable {
+nonisolated struct WorldPackRelationship: Identifiable, Hashable, Sendable {
     let worldItemID: URL
     let logicalPackID: PackIdentity?
     let reference: ContentPackReference
@@ -137,7 +137,7 @@ struct WorldPackRelationship: Identifiable, Hashable, Sendable {
     }
 }
 
-struct ItemSnapshot: Identifiable, Hashable, Sendable, Codable {
+nonisolated struct ItemSnapshot: Identifiable, Hashable, Sendable, Codable {
     let id: URL
     let relativePath: String
     let modifiedDate: Date?
@@ -146,7 +146,7 @@ struct ItemSnapshot: Identifiable, Hashable, Sendable, Codable {
     let packVersion: String?
 }
 
-struct CollectionSnapshot: Identifiable, Hashable, Sendable, Codable {
+nonisolated struct CollectionSnapshot: Identifiable, Hashable, Sendable, Codable {
     let folderName: String
     let modifiedDate: Date?
     let childDirectoryCount: Int
@@ -155,7 +155,7 @@ struct CollectionSnapshot: Identifiable, Hashable, Sendable, Codable {
     var id: String { folderName }
 }
 
-struct SourceSnapshot: Hashable, Sendable, Codable {
+nonisolated struct SourceSnapshot: Hashable, Sendable, Codable {
     let sourceID: URL
     let rootModifiedDate: Date?
     let collectionSnapshots: [CollectionSnapshot]

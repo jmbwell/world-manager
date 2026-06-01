@@ -3,7 +3,7 @@
 
 import Foundation
 
-struct SourceCapabilities: Hashable, Sendable, Codable {
+nonisolated struct SourceCapabilities: Hashable, Sendable, Codable {
     var canScan: Bool = true
     var canMaterializeItems: Bool = true
     var canExportPortablePackages: Bool = true
