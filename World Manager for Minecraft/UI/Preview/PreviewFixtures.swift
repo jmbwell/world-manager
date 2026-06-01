@@ -323,7 +323,7 @@ struct ItemListColumnPreviewContainer: View {
                 subtitle: "5 items in Kid iPad Imports",
                 showsSubtitle: false,
                 isRefreshing: false,
-                isUpdatingProjection: false,
+                showsProjectionLoadingState: false,
                 items: PreviewFixtures.primarySource.displayItems,
                 searchPrompt: "Search Worlds",
                 chooseFolderAction: {},

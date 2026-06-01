@@ -26,7 +26,11 @@ final class SourceLibrary: ObservableObject, SourceScanSessionHosting, SourcePer
         category: "ConnectedDevicePerformance"
     )
 
-    @Published var sources: [MinecraftSource] = []
+    @Published var sources: [MinecraftSource] = [] {
+        didSet {
+            rebuildLookupIndexes()
+        }
+    }
     @Published var connectedDevices: [ConnectedDeviceSidebarEntry] = []
     @Published var isRestoringPersistedSources = true
 
@@ -40,6 +44,8 @@ final class SourceLibrary: ObservableObject, SourceScanSessionHosting, SourcePer
     private let notificationService: ScanNotificationServicing
     private let itemActionService: ContentItemActionService
     private let connectedDeviceSourceFactory = ConnectedDeviceSourceFactory()
+    private var sourceIndexByID: [URL: Int] = [:]
+    private var sourceIDByItemID: [URL: URL] = [:]
     var lastMatchedConnectedSourceIDs: Set<URL> = []
     var cachedDeviceDiscoveryByUDID: [String: CachedConnectedDeviceDiscovery] = [:]
     var isShuttingDown = false
@@ -88,6 +94,14 @@ final class SourceLibrary: ObservableObject, SourceScanSessionHosting, SourcePer
 
     var sidebarSources: [MinecraftSource] {
         visibleSources
+    }
+
+    func sourceID(forItemID itemID: URL) -> URL? {
+        sourceIDByItemID[itemID]
+    }
+
+    func containsItem(withID itemID: URL) -> Bool {
+        sourceIDByItemID[itemID] != nil
     }
 
     func shutdown() {
@@ -189,7 +203,11 @@ final class SourceLibrary: ObservableObject, SourceScanSessionHosting, SourcePer
     }
 
     func source(withID sourceID: URL) -> MinecraftSource? {
-        sources.first(where: { $0.id == sourceID })
+        guard let index = sourceIndexByID[sourceID], sources.indices.contains(index) else {
+            return nil
+        }
+
+        return sources[index]
     }
 
     func rescanSource(withID sourceID: URL) {
@@ -497,6 +515,18 @@ final class SourceLibrary: ObservableObject, SourceScanSessionHosting, SourcePer
             includingResourceValuesForKeys: nil,
             relativeTo: nil
         )
+    }
+
+    private func rebuildLookupIndexes() {
+        sourceIndexByID = Dictionary(uniqueKeysWithValues: sources.enumerated().map { ($0.element.id, $0.offset) })
+
+        var itemIndex: [URL: URL] = [:]
+        for source in sources {
+            for item in source.items {
+                itemIndex[item.id] = source.id
+            }
+        }
+        sourceIDByItemID = itemIndex
     }
 
     @discardableResult

@@ -33,7 +33,7 @@ struct ItemListColumnView<MenuContent: View>: View {
     let subtitle: String
     let showsSubtitle: Bool
     let isRefreshing: Bool
-    let isUpdatingProjection: Bool
+    let showsProjectionLoadingState: Bool
     let items: [MinecraftContentItem]
     let searchPrompt: String
     let chooseFolderAction: () -> Void
@@ -58,7 +58,7 @@ struct ItemListColumnView<MenuContent: View>: View {
                 }
                 .listStyle(.inset)
                 .overlay {
-                    if isUpdatingProjection && items.isEmpty {
+                    if showsProjectionLoadingState && items.isEmpty {
                         ItemListLoadingOverlay()
                     }
                 }
@@ -73,7 +73,7 @@ struct ItemListColumnView<MenuContent: View>: View {
                     subtitle: subtitle,
                     showsSubtitle: showsSubtitle,
                     isRefreshing: isRefreshing,
-                    isUpdatingProjection: isUpdatingProjection
+                    showsProjectionLoadingState: showsProjectionLoadingState
                 )
             }
         }
@@ -106,7 +106,7 @@ private struct ItemListHeaderView: View {
     let subtitle: String
     let showsSubtitle: Bool
     let isRefreshing: Bool
-    let isUpdatingProjection: Bool
+    let showsProjectionLoadingState: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -121,13 +121,13 @@ private struct ItemListHeaderView: View {
                     .font(.title2.weight(.semibold))
                     .lineLimit(2)
 
-                if isRefreshing || isUpdatingProjection {
+                if isRefreshing || showsProjectionLoadingState {
                     ProgressView()
                         .appActivityIndicatorStyle(.small)
                 }
             }
 
-            if showsSubtitle || isUpdatingProjection {
+            if showsSubtitle || showsProjectionLoadingState {
                 Text(displaySubtitle)
                     .appTextStyle(.supporting)
             }
@@ -140,7 +140,7 @@ private struct ItemListHeaderView: View {
     }
 
     private var displaySubtitle: String {
-        if isUpdatingProjection {
+        if showsProjectionLoadingState {
             return "Loading items..."
         }
 

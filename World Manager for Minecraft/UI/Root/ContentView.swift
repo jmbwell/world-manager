@@ -20,6 +20,7 @@ struct ContentView: View {
     @State private var isShowingDeviceSourceSheet = false
     @State private var sortMode: ItemSortMode = .name
     @State private var directoryPreviewContents: [DirectoryEntry] = []
+    @State private var showsProjectionLoadingState = false
     @State private var itemListProjection = ItemCollectionProjection.placeholder(
         for: ItemCollectionProjectionRequest(
             selection: nil,
@@ -33,6 +34,7 @@ struct ContentView: View {
     private let deviceSourceFactory: ConnectedDeviceSourceFactory
     private let itemActionService: ContentItemActionService
     private let directoryPreviewLimit = 12
+    private let projectionLoadingDelay: Duration = .milliseconds(150)
 
     init() {
         let dependencies = ContentViewDependencies.makeDefault()
@@ -53,15 +55,25 @@ struct ContentView: View {
             sortMode: sortMode,
             source: resolvedCurrentSource
         )
+        let fastPathProjection = fastProjection(for: currentProjectionRequest, previousRequest: itemListProjection.request)
         let reusesCurrentProjectedItems =
             itemListProjection.request.selection == currentProjectionRequest.selection &&
             itemListProjection.request.source?.id == currentProjectionRequest.source?.id
-        let isUpdatingItemListProjection = itemListProjection.request != currentProjectionRequest
-        let resolvedItemListProjection = itemListProjection.request == currentProjectionRequest
-            ? itemListProjection
-            : ItemCollectionProjection.placeholder(for: currentProjectionRequest)
+        let resolvedItemListProjection = if let fastPathProjection {
+            fastPathProjection
+        } else if itemListProjection.request == currentProjectionRequest {
+            itemListProjection
+        } else {
+            ItemCollectionProjection.placeholder(for: currentProjectionRequest)
+        }
         let resolvedCurrentSelectedItem = currentSelectedItem(in: resolvedCurrentSource)
-        let resolvedDisplayedItems = reusesCurrentProjectedItems ? itemListProjection.items : []
+        let resolvedDisplayedItems: [MinecraftContentItem] = if let fastPathProjection {
+            fastPathProjection.items
+        } else if reusesCurrentProjectedItems {
+            itemListProjection.items
+        } else {
+            []
+        }
 
         NavigationSplitView(columnVisibility: $columnVisibility) {
             SourcesSidebarView(
@@ -94,9 +106,9 @@ struct ContentView: View {
                 showsSourceName: !isSidebarVisible,
                 title: resolvedItemListProjection.title,
                 subtitle: resolvedItemListProjection.subtitle,
-                showsSubtitle: isSearching || isUpdatingItemListProjection,
+                showsSubtitle: isSearching || showsProjectionLoadingState,
                 isRefreshing: resolvedCurrentSource?.isScanning == true,
-                isUpdatingProjection: isUpdatingItemListProjection,
+                showsProjectionLoadingState: showsProjectionLoadingState,
                 items: resolvedDisplayedItems,
                 searchPrompt: resolvedItemListProjection.searchPrompt,
                 chooseFolderAction: pickFolder,
@@ -180,13 +192,40 @@ struct ContentView: View {
         }
         .task(id: currentProjectionRequest) {
             let request = currentProjectionRequest
+            if let fastPathProjection = fastProjection(for: request, previousRequest: itemListProjection.request) {
+                showsProjectionLoadingState = false
+                itemListProjection = fastPathProjection
+                return
+            }
+
             let projection = await Task.detached(priority: .userInitiated) {
                 ItemCollectionProjector.makeProjection(for: request)
             }.value
             guard !Task.isCancelled else {
                 return
             }
+            showsProjectionLoadingState = false
             itemListProjection = projection
+        }
+        .task(id: currentProjectionRequest) {
+            showsProjectionLoadingState = false
+
+            guard itemListProjection.request != currentProjectionRequest else {
+                return
+            }
+
+            guard fastProjection(for: currentProjectionRequest, previousRequest: itemListProjection.request) == nil else {
+                return
+            }
+
+            try? await Task.sleep(for: projectionLoadingDelay)
+            guard !Task.isCancelled else {
+                return
+            }
+
+            if itemListProjection.request != currentProjectionRequest {
+                showsProjectionLoadingState = true
+            }
         }
         .task(id: resolvedCurrentSelectedItem?.id) {
             await refreshDirectoryPreviewContents()
@@ -224,10 +263,9 @@ struct ContentView: View {
             return item
         }
 
-        for source in library.visibleSources {
-            if let item = source.items.first(where: { $0.id == selectedItemID }) {
-                return item
-            }
+        if let sourceID = library.sourceID(forItemID: selectedItemID),
+           let source = library.source(withID: sourceID) {
+            return source.items.first(where: { $0.id == selectedItemID })
         }
 
         return nil
@@ -558,18 +596,17 @@ struct ContentView: View {
         }
 
         if let selectedItemID {
-            let itemStillExists = library.visibleSources
-                .flatMap(\.items)
-                .contains(where: { $0.id == selectedItemID })
-
-            if !itemStillExists {
+            if !library.containsItem(withID: selectedItemID) {
                 self.selectedItemID = nil
             }
         }
     }
 
     private func areFileActionsEnabled(for item: MinecraftContentItem) -> Bool {
-        guard let source = library.visibleSources.first(where: { $0.items.contains(where: { $0.id == item.id }) }) else {
+        guard
+            let sourceID = library.sourceID(forItemID: item.id),
+            let source = library.source(withID: sourceID)
+        else {
             return false
         }
 
@@ -577,9 +614,28 @@ struct ContentView: View {
     }
 
     private func sourceForItem(_ item: MinecraftContentItem) -> MinecraftSource? {
-        library.visibleSources.first(where: { source in
-            source.items.contains(where: { $0.id == item.id })
-        })
+        guard let sourceID = library.sourceID(forItemID: item.id) else {
+            return nil
+        }
+
+        return library.source(withID: sourceID)
+    }
+
+    private func fastProjection(
+        for request: ItemCollectionProjectionRequest,
+        previousRequest: ItemCollectionProjectionRequest
+    ) -> ItemCollectionProjection? {
+        guard
+            let sourceID = request.source?.id,
+            sourceID == previousRequest.source?.id,
+            request.searchText == previousRequest.searchText,
+            request.sortMode == previousRequest.sortMode,
+            request.selection != previousRequest.selection
+        else {
+            return nil
+        }
+
+        return ItemCollectionProjector.makeProjection(for: request)
     }
 
     private func saveItem(_ item: MinecraftContentItem) {
