@@ -15,7 +15,7 @@ protocol SourcePersistenceHosting: AnyObject {
     func refreshConnectedDevices() async
     func refreshLocalSources() async
     func queueAutomaticSync(for sourceID: URL, reason: String, debounce: TimeInterval?)
-    func currentCollectionSnapshots(for sourceURL: URL) -> [CollectionSnapshot]
+    func currentCollectionSnapshots(for sourceURL: URL, edition: MinecraftEdition) -> [CollectionSnapshot]
     func connectedDeviceDisplayName(for device: ConnectedDevice, container: DeviceAppContainer) -> String
 }
 
@@ -125,7 +125,7 @@ enum SourcePersistenceCoordinator {
             if let refreshReason = SourceRestoration.startupRefreshReason(
                 for: source,
                 persistedRecord: persistedRecordsByID[source.id],
-                currentCollectionSnapshots: host.currentCollectionSnapshots(for:)
+                currentCollectionSnapshots: host.currentCollectionSnapshots(for:edition:)
             ) {
                 host.queueAutomaticSync(for: source.id, reason: refreshReason, debounce: nil)
             }

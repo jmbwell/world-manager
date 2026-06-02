@@ -10,6 +10,7 @@ enum SourceDiscoveryMode: Sendable {
 
 protocol SourceAccessMethod: Sendable {
     nonisolated var accessorIdentifier: SourceAccessorIdentifier { get }
+    nonisolated func probeLocalFolder(_ url: URL) async -> SourceProbeResult?
     nonisolated func accessDescriptor(for source: MinecraftSource) -> SourceAccessDescriptor
     nonisolated func accessStatus(for source: MinecraftSource) async -> SourceAccessStatus
     nonisolated func availability(for source: MinecraftSource) async -> SourceAvailability
@@ -36,6 +37,11 @@ protocol SourceAccessMethod: Sendable {
 extension SourceAccessMethod {
     nonisolated var accessorIdentifier: SourceAccessorIdentifier {
         String(reflecting: Self.self)
+    }
+
+    nonisolated func probeLocalFolder(_ url: URL) async -> SourceProbeResult? {
+        _ = url
+        return nil
     }
 
     nonisolated func accessDescriptor(for source: MinecraftSource) -> SourceAccessDescriptor {
@@ -219,6 +225,30 @@ struct SourceAccessCoordinator: SourceAccessMethod {
         }
 
         fatalError("No source access method is registered for \(source.accessDescriptor.accessorIdentifier).")
+    }
+
+    nonisolated func probeLocalFolder(_ url: URL) async -> SourceProbeResult? {
+        var bestProbe: SourceProbeResult?
+
+        for accessMethod in accessMethodsByIdentifier.values {
+            guard let probe = await accessMethod.probeLocalFolder(url) else {
+                continue
+            }
+
+            guard probe.confidence > .none else {
+                continue
+            }
+
+            if let currentBest = bestProbe {
+                if probe.confidence > currentBest.confidence {
+                    bestProbe = probe
+                }
+            } else {
+                bestProbe = probe
+            }
+        }
+
+        return bestProbe
     }
 
     nonisolated func discoverItems(

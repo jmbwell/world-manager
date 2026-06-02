@@ -25,14 +25,32 @@ struct ContentItemFileFacts: Sendable {
             self.approximateAgeText = nil
         }
 
-        switch item.contentType {
-        case .world:
-            let levelDBURL = item.folderURL.appendingPathComponent("db", isDirectory: true)
-            self.storageFormatLabel = fileManager.fileExists(atPath: levelDBURL.path)
-                ? "LevelDB world storage"
-                : "Flat-file world storage"
-        case .behaviorPack, .resourcePack, .skinPack, .worldTemplate:
-            self.storageFormatLabel = "Manifest-based package"
+        switch item.sourceEdition {
+        case .bedrock:
+            switch item.contentType {
+            case .world:
+                let levelDBURL = item.folderURL.appendingPathComponent("db", isDirectory: true)
+                self.storageFormatLabel = fileManager.fileExists(atPath: levelDBURL.path)
+                    ? "LevelDB world storage"
+                    : "Flat-file world storage"
+            case .behaviorPack, .resourcePack, .skinPack, .worldTemplate:
+                self.storageFormatLabel = "Manifest-based package"
+            }
+        case .java:
+            switch item.contentKind {
+            case .world:
+                self.storageFormatLabel = "Anvil world storage"
+            case .mod:
+                self.storageFormatLabel = "Java mod archive"
+            case .shaderPack:
+                self.storageFormatLabel = "Shader pack archive"
+            case .resourcePack:
+                self.storageFormatLabel = "Resource pack archive"
+            case .dataPack:
+                self.storageFormatLabel = "Data pack archive"
+            case .behaviorPack, .skinPack, .worldTemplate:
+                self.storageFormatLabel = "Java content"
+            }
         }
     }
 }

@@ -42,6 +42,28 @@ nonisolated struct SourceAccessStatus: Hashable, Sendable, Codable {
     var warningText: String?
 }
 
+nonisolated enum SourceProbeConfidence: Int, Comparable, Hashable, Sendable, Codable {
+    case none = 0
+    case weak = 25
+    case medium = 50
+    case strong = 75
+    case exact = 100
+
+    static func < (lhs: SourceProbeConfidence, rhs: SourceProbeConfidence) -> Bool {
+        lhs.rawValue < rhs.rawValue
+    }
+}
+
+nonisolated struct SourceProbeResult: Hashable, Sendable {
+    let providerID: PlatformProviderID
+    let edition: MinecraftEdition
+    let confidence: SourceProbeConfidence
+    let sourceRootURL: URL
+    let displayName: String
+    let detectedKinds: Set<MinecraftContentKind>
+    let warnings: [String]
+}
+
 nonisolated enum WorkStageState: String, Hashable, Sendable, Codable {
     case pending
     case running

@@ -10,6 +10,10 @@ struct BedrockLocalFolderSourceAccess: SourceAccessMethod {
 
     nonisolated init() {}
 
+    nonisolated func probeLocalFolder(_ url: URL) async -> SourceProbeResult? {
+        BedrockContentScanner.probeLocalFolder(url, providerID: accessorIdentifier)
+    }
+
     nonisolated func accessDescriptor(for source: MinecraftSource) -> SourceAccessDescriptor {
         _ = source
         return SourceAccessDescriptor(
@@ -214,6 +218,10 @@ struct JavaLocalFolderSourceAccess: SourceAccessMethod {
 
     nonisolated init() {}
 
+    nonisolated func probeLocalFolder(_ url: URL) async -> SourceProbeResult? {
+        JavaContentScanner.probeLocalFolder(url, providerID: accessorIdentifier)
+    }
+
     nonisolated func accessDescriptor(for source: MinecraftSource) -> SourceAccessDescriptor {
         _ = source
         return SourceAccessDescriptor(
@@ -226,8 +234,15 @@ struct JavaLocalFolderSourceAccess: SourceAccessMethod {
     nonisolated func accessStatus(for source: MinecraftSource) async -> SourceAccessStatus {
         let candidateURL: URL
         let mode: SourceAccessMode
-        if case .javaLocalFolder(let bookmarkData) = source.origin,
-           let bookmarkData {
+        let bookmarkData: Data?
+        switch source.origin {
+        case .javaLocalFolder(let data), .localFolder(let data):
+            bookmarkData = data
+        case .connectedDevice:
+            bookmarkData = nil
+        }
+
+        if let bookmarkData {
             mode = .securityScopedLocalFolder
             var isStale = false
             if let resolvedURL = try? URL(
@@ -267,7 +282,11 @@ struct JavaLocalFolderSourceAccess: SourceAccessMethod {
         onDiscovered: @escaping @Sendable (MinecraftContentItem) -> Void
     ) async throws {
         _ = mode
-        guard case .javaLocalFolder(let bookmarkData) = source.origin else {
+        let bookmarkData: Data?
+        switch source.origin {
+        case .javaLocalFolder(let data), .localFolder(let data):
+            bookmarkData = data
+        case .connectedDevice:
             throw SourceAccessError.accessFailed(
                 reason: "No Java local-folder access method is configured for this source type."
             )
@@ -304,7 +323,7 @@ struct JavaLocalFolderSourceAccess: SourceAccessMethod {
 
     nonisolated func enrich(_ item: MinecraftContentItem, for source: MinecraftSource) async -> MinecraftContentItem {
         _ = source
-        return JavaContentScanner.enrich(item: item)
+        return await JavaContentScanner.enrich(item: item)
     }
 
     nonisolated func loadSize(for item: MinecraftContentItem, in source: MinecraftSource) async -> MinecraftContentItem {
@@ -314,6 +333,11 @@ struct JavaLocalFolderSourceAccess: SourceAccessMethod {
 
     nonisolated func listItemContents(for item: MinecraftContentItem, in source: MinecraftSource) async throws -> [DirectoryEntry] {
         _ = source
+        let values = try? item.folderURL.resourceValues(forKeys: [.isDirectoryKey])
+        guard values?.isDirectory == true else {
+            return []
+        }
+
         return try await BedrockLocalFolderSourceAccess().listItemContents(for: item, in: source)
     }
 

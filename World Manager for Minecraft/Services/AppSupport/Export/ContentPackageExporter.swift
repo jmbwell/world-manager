@@ -37,7 +37,11 @@ enum ContentPackageExporter {
             try fileManager.removeItem(at: archiveURL)
         }
 
-        try await createArchive(for: item, source: source, at: archiveURL)
+        if isPortableFileItem(item) {
+            try copyPortableFileItem(item, to: archiveURL, fileManager: fileManager)
+        } else {
+            try await createArchive(for: item, source: source, at: archiveURL)
+        }
         return archiveURL
     }
 
@@ -282,6 +286,28 @@ enum ContentPackageExporter {
 
     nonisolated private static func archiveExtension(for item: MinecraftContentItem) -> String {
         item.capabilities.portablePackageExtension ?? item.contentType.archiveExtension
+    }
+
+    nonisolated private static func isPortableFileItem(_ item: MinecraftContentItem) -> Bool {
+        guard item.sourceEdition == .java else {
+            return false
+        }
+
+        guard let expectedExtension = item.capabilities.portablePackageExtension else {
+            return false
+        }
+
+        let values = try? item.folderURL.resourceValues(forKeys: [.isRegularFileKey])
+        return values?.isRegularFile == true
+            && item.folderURL.pathExtension.localizedCaseInsensitiveCompare(expectedExtension) == .orderedSame
+    }
+
+    nonisolated private static func copyPortableFileItem(
+        _ item: MinecraftContentItem,
+        to destinationURL: URL,
+        fileManager: FileManager
+    ) throws {
+        try fileManager.copyItem(at: item.folderURL, to: destinationURL)
     }
 
     nonisolated private static func uniqueArchiveURL(

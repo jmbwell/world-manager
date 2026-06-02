@@ -574,8 +574,10 @@ struct ContentView: View {
         }
 
         for url in panel.urls {
-            let sourceID = library.addSource(at: url)
-            selectSourceIfNeeded(sourceID)
+            Task { @MainActor in
+                let sourceID = await library.addSource(at: url)
+                selectSourceIfNeeded(sourceID)
+            }
         }
     }
 
@@ -596,7 +598,7 @@ struct ContentView: View {
                 }
 
                 Task { @MainActor in
-                    let sourceID = library.addSource(at: url)
+                    let sourceID = await library.addSource(at: url)
                     selectSourceIfNeeded(sourceID)
                 }
             }

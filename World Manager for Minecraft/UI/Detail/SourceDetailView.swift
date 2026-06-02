@@ -197,14 +197,26 @@ struct SourceDetailView: View {
     }
 
     private var contentRows: [(String, String)] {
-        [
-            ("Total Items", source.items.count.formatted(.number)),
-            ("Worlds", itemCount(for: .world).formatted(.number)),
-            ("Behavior Packs", itemCount(for: .behaviorPack).formatted(.number)),
-            ("Resource Packs", itemCount(for: .resourcePack).formatted(.number)),
-            ("Skin Packs", itemCount(for: .skinPack).formatted(.number)),
-            ("World Templates", itemCount(for: .worldTemplate).formatted(.number))
+        var rows = [("Total Items", source.items.count.formatted(.number))]
+        let orderedKinds: [(MinecraftContentKind, String)] = [
+            (.world, "Worlds"),
+            (.behaviorPack, "Behavior Packs"),
+            (.resourcePack, "Resource Packs"),
+            (.dataPack, "Data Packs"),
+            (.skinPack, "Skin Packs"),
+            (.worldTemplate, "World Templates"),
+            (.shaderPack, "Shader Packs"),
+            (.mod, "Mods")
         ]
+
+        for (kind, title) in orderedKinds {
+            let count = itemCount(for: kind)
+            if count > 0 || source.edition == .bedrock && bedrockAlwaysDisplayedContentKinds.contains(kind) {
+                rows.append((title, count.formatted(.number)))
+            }
+        }
+
+        return rows
     }
 
     private var locationRows: [(String, String)] {
@@ -483,6 +495,14 @@ struct SourceDetailView: View {
 
     private func itemCount(for type: MinecraftContentType) -> Int {
         source.items.filter { $0.contentType == type }.count
+    }
+
+    private func itemCount(for kind: MinecraftContentKind) -> Int {
+        source.items.filter { $0.contentKind == kind }.count
+    }
+
+    private var bedrockAlwaysDisplayedContentKinds: Set<MinecraftContentKind> {
+        [.world, .behaviorPack, .resourcePack, .skinPack, .worldTemplate]
     }
 
     @ViewBuilder

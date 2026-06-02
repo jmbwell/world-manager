@@ -22,6 +22,49 @@ enum BedrockContentScanner {
         await packReferenceIndexStore.reset(for: sourceRootURL)
     }
 
+    nonisolated static func probeLocalFolder(_ url: URL, providerID: PlatformProviderID) -> SourceProbeResult? {
+        let fileManager = FileManager.default
+        let normalizedURL = url.standardizedFileURL
+        var detectedKinds = Set<MinecraftContentKind>()
+        var score = 0
+
+        let collectionKinds: [(String, MinecraftContentKind)] = [
+            ("minecraftWorlds", .world),
+            ("behavior_packs", .behaviorPack),
+            ("resource_packs", .resourcePack),
+            ("skin_packs", .skinPack),
+            ("world_templates", .worldTemplate)
+        ]
+
+        for (folderName, kind) in collectionKinds {
+            if fileManager.fileExists(atPath: normalizedURL.appendingPathComponent(folderName, isDirectory: true).path) {
+                detectedKinds.insert(kind)
+                score += 25
+            }
+        }
+
+        if fileManager.fileExists(atPath: normalizedURL.appendingPathComponent("db", isDirectory: true).path)
+            || fileManager.fileExists(atPath: normalizedURL.appendingPathComponent("levelname.txt").path) {
+            detectedKinds.insert(.world)
+            score += 35
+        }
+
+        guard score > 0 else {
+            return nil
+        }
+
+        let confidence: SourceProbeConfidence = score >= 50 ? .strong : .medium
+        return SourceProbeResult(
+            providerID: providerID,
+            edition: .bedrock,
+            confidence: confidence,
+            sourceRootURL: normalizedURL,
+            displayName: normalizedURL.lastPathComponent,
+            detectedKinds: detectedKinds,
+            warnings: []
+        )
+    }
+
     nonisolated static func discoverItems(
         in searchRootURL: URL,
         onDiscovered: @Sendable (MinecraftContentItem) -> Void = { _ in }
@@ -583,6 +626,52 @@ private actor PackReferenceIndexStore {
 }
 
 enum JavaContentScanner {
+    nonisolated static func probeLocalFolder(_ url: URL, providerID: PlatformProviderID) -> SourceProbeResult? {
+        let fileManager = FileManager.default
+        let candidates = localFolderProbeCandidates(for: url.standardizedFileURL, fileManager: fileManager)
+        let scoredCandidates = candidates.compactMap { candidate -> (url: URL, score: Int, kinds: Set<MinecraftContentKind>)? in
+            let score = javaProbeScore(for: candidate, fileManager: fileManager)
+            guard score.value > 0 else {
+                return nil
+            }
+
+            return (candidate, score.value, score.kinds)
+        }
+
+        guard let best = scoredCandidates.max(by: { lhs, rhs in
+            if lhs.score != rhs.score {
+                return lhs.score < rhs.score
+            }
+
+            return lhs.url.path.count > rhs.url.path.count
+        }) else {
+            return nil
+        }
+
+        let confidence: SourceProbeConfidence
+        if best.score >= 70 {
+            confidence = .exact
+        } else if best.score >= 45 {
+            confidence = .strong
+        } else {
+            confidence = .medium
+        }
+
+        let warnings = best.url.standardizedFileURL == url.standardizedFileURL ? [] : [
+            "Using nested Java instance folder: \(best.url.lastPathComponent)"
+        ]
+
+        return SourceProbeResult(
+            providerID: providerID,
+            edition: .java,
+            confidence: confidence,
+            sourceRootURL: best.url.standardizedFileURL,
+            displayName: best.url.lastPathComponent,
+            detectedKinds: best.kinds,
+            warnings: warnings
+        )
+    }
+
     nonisolated static func discoverItems(
         in searchRootURL: URL,
         onDiscovered: @Sendable (MinecraftContentItem) -> Void = { _ in }
@@ -603,14 +692,50 @@ enum JavaContentScanner {
             discoveredItems.append(contentsOf: resourcePackItems)
         }
 
+        if let dataPacksURL = existingDirectory(named: "datapacks", in: searchRootURL, fileManager: fileManager) {
+            discoveredItems.append(contentsOf: try discoverJavaPackages(
+                in: dataPacksURL,
+                contentKind: .dataPack,
+                platformType: .dataPack,
+                packageExtension: "zip",
+                fileManager: fileManager
+            ))
+        }
+
+        if let shaderPacksURL = existingDirectory(named: "shaderpacks", in: searchRootURL, fileManager: fileManager) {
+            discoveredItems.append(contentsOf: try discoverJavaPackages(
+                in: shaderPacksURL,
+                contentKind: .shaderPack,
+                platformType: .shaderPack,
+                packageExtension: "zip",
+                fileManager: fileManager
+            ))
+        }
+
+        if let modsURL = existingDirectory(named: "mods", in: searchRootURL, fileManager: fileManager) {
+            discoveredItems.append(contentsOf: try discoverJavaPackages(
+                in: modsURL,
+                contentKind: .mod,
+                platformType: .mod,
+                packageExtension: "jar",
+                fileManager: fileManager
+            ))
+        }
+
         discoveredItems.sort(by: WorldScanner.sortItems)
         discoveredItems.forEach(onDiscovered)
         return discoveredItems
     }
 
-    nonisolated static func enrich(item: MinecraftContentItem) -> MinecraftContentItem {
+    nonisolated static func enrich(item: MinecraftContentItem) async -> MinecraftContentItem {
         var enrichedItem = item
-        enrichedItem.displayName = displayName(for: item)
+        let metadata = JavaContentMetadataReader.metadata(for: item)
+        enrichedItem.displayName = metadata?.displayName ?? displayName(for: item)
+        enrichedItem.iconURL = await JavaContentMetadataReader.cachedIconURL(for: item, metadata: metadata)
+        if let packMetadata = metadata?.pack {
+            enrichedItem.platformMetadata = .java(JavaContentMetadata(pack: packMetadata))
+        }
+        enrichedItem.hasKnownIcon = enrichedItem.iconURL != nil
         enrichedItem.modifiedDate = WorldScanner.modifiedDate(for: item.folderURL)
         enrichedItem.metadataLoaded = true
         enrichedItem.previewLoaded = true
@@ -620,7 +745,7 @@ enum JavaContentScanner {
 
     nonisolated static func loadSize(for item: MinecraftContentItem) -> MinecraftContentItem {
         var sizedItem = item
-        sizedItem.sizeBytes = WorldScanner.folderSize(at: item.folderURL, fileManager: .default)
+        sizedItem.sizeBytes = contentSize(at: item.folderURL, fileManager: .default)
         sizedItem.sizeLoaded = true
         return sizedItem
     }
@@ -629,7 +754,10 @@ enum JavaContentScanner {
         let fileManager = FileManager.default
         let candidateRoots = [
             existingDirectory(named: "saves", in: sourceRootURL, fileManager: fileManager),
-            existingDirectory(named: "resourcepacks", in: sourceRootURL, fileManager: fileManager)
+            existingDirectory(named: "resourcepacks", in: sourceRootURL, fileManager: fileManager),
+            existingDirectory(named: "datapacks", in: sourceRootURL, fileManager: fileManager),
+            existingDirectory(named: "shaderpacks", in: sourceRootURL, fileManager: fileManager),
+            existingDirectory(named: "mods", in: sourceRootURL, fileManager: fileManager)
         ]
 
         return candidateRoots.compactMap { collectionURL in
@@ -663,22 +791,53 @@ enum JavaContentScanner {
     }
 
     nonisolated private static func discoverResourcePacks(in resourcePacksURL: URL, fileManager: FileManager) throws -> [MinecraftContentItem] {
-        let directories = try WorldScanner.immediateChildDirectories(of: resourcePacksURL, fileManager: fileManager)
-        return directories.compactMap { packURL in
-            guard fileManager.fileExists(atPath: packURL.appendingPathComponent("pack.mcmeta").path) else {
+        try discoverJavaPackages(
+            in: resourcePacksURL,
+            contentKind: .resourcePack,
+            platformType: .resourcePack,
+            packageExtension: "zip",
+            fileManager: fileManager,
+            folderMarker: "pack.mcmeta"
+        )
+    }
+
+    nonisolated private static func discoverJavaPackages(
+        in collectionURL: URL,
+        contentKind: MinecraftContentKind,
+        platformType: JavaContentType,
+        packageExtension: String,
+        fileManager: FileManager,
+        folderMarker: String? = nil
+    ) throws -> [MinecraftContentItem] {
+        let children = try fileManager.contentsOfDirectory(
+            at: collectionURL,
+            includingPropertiesForKeys: [.isDirectoryKey, .isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        )
+
+        return children.compactMap { childURL in
+            let values = try? childURL.resourceValues(forKeys: [.isDirectoryKey, .isRegularFileKey])
+            let isDirectory = values?.isDirectory == true
+            let isRegularFile = values?.isRegularFile == true
+
+            if isDirectory {
+                if let folderMarker,
+                   !fileManager.fileExists(atPath: childURL.appendingPathComponent(folderMarker).path) {
+                    return nil
+                }
+            } else if isRegularFile {
+                guard childURL.pathExtension.localizedCaseInsensitiveCompare(packageExtension) == .orderedSame else {
+                    return nil
+                }
+            } else {
                 return nil
             }
 
-            return MinecraftContentItem(
-                folderURL: packURL,
-                folderName: packURL.lastPathComponent,
-                contentType: .resourcePack,
-                sourceEdition: .java,
-                contentKind: .resourcePack,
-                platformType: .java(.resourcePack),
-                collectionRootURL: resourcePacksURL,
-                capabilities: .java(contentType: .resourcePack),
-                platformMetadata: .java(JavaContentMetadata())
+            return javaContentItem(
+                url: childURL,
+                contentKind: contentKind,
+                platformType: platformType,
+                collectionRootURL: collectionURL
             )
         }
     }
@@ -692,6 +851,86 @@ enum JavaContentScanner {
         return directoryURL
     }
 
+    nonisolated private static func javaContentItem(
+        url: URL,
+        contentKind: MinecraftContentKind,
+        platformType: JavaContentType,
+        collectionRootURL: URL
+    ) -> MinecraftContentItem {
+        MinecraftContentItem(
+            folderURL: url,
+            folderName: url.lastPathComponent,
+            contentType: contentKind == .world ? .world : .resourcePack,
+            sourceEdition: .java,
+            contentKind: contentKind,
+            platformType: .java(platformType),
+            collectionRootURL: collectionRootURL,
+            displayName: url.deletingPathExtension().lastPathComponent,
+            capabilities: .java(contentType: platformType),
+            platformMetadata: .java(JavaContentMetadata())
+        )
+    }
+
+    nonisolated private static func contentSize(at url: URL, fileManager: FileManager) -> Int64? {
+        let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .fileSizeKey])
+        if values?.isDirectory == true {
+            return WorldScanner.folderSize(at: url, fileManager: fileManager)
+        }
+
+        return values?.fileSize.map(Int64.init)
+    }
+
+    nonisolated private static func localFolderProbeCandidates(for url: URL, fileManager: FileManager) -> [URL] {
+        var candidates = [url]
+        let children = (try? fileManager.contentsOfDirectory(
+            at: url,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        )) ?? []
+        candidates.append(contentsOf: children.filter {
+            (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
+        })
+        return candidates
+    }
+
+    nonisolated private static func javaProbeScore(for url: URL, fileManager: FileManager) -> (value: Int, kinds: Set<MinecraftContentKind>) {
+        var score = 0
+        var kinds = Set<MinecraftContentKind>()
+
+        if existingDirectory(named: "saves", in: url, fileManager: fileManager) != nil {
+            kinds.insert(.world)
+            score += 25
+        }
+        if existingDirectory(named: "resourcepacks", in: url, fileManager: fileManager) != nil {
+            kinds.insert(.resourcePack)
+            score += 20
+        }
+        if existingDirectory(named: "datapacks", in: url, fileManager: fileManager) != nil {
+            kinds.insert(.dataPack)
+            score += 15
+        }
+        if existingDirectory(named: "shaderpacks", in: url, fileManager: fileManager) != nil {
+            kinds.insert(.shaderPack)
+            score += 15
+        }
+        if existingDirectory(named: "mods", in: url, fileManager: fileManager) != nil {
+            kinds.insert(.mod)
+            score += 20
+        }
+        if fileManager.fileExists(atPath: url.appendingPathComponent("options.txt").path)
+            || fileManager.fileExists(atPath: url.appendingPathComponent("launcher_profiles.json").path)
+            || fileManager.fileExists(atPath: url.appendingPathComponent(".curseclient").path) {
+            score += 15
+        }
+        if fileManager.fileExists(atPath: url.appendingPathComponent("region", isDirectory: true).path)
+            && fileManager.fileExists(atPath: url.appendingPathComponent("level.dat").path) {
+            kinds.insert(.world)
+            score += 35
+        }
+
+        return (score, kinds)
+    }
+
     nonisolated private static func collectionSnapshot(
         for collectionURL: URL,
         fileManager: FileManager
@@ -702,35 +941,41 @@ enum JavaContentScanner {
 
         let children = (try? fileManager.contentsOfDirectory(
             at: collectionURL,
-            includingPropertiesForKeys: [.isDirectoryKey, .contentModificationDateKey],
+            includingPropertiesForKeys: [.isDirectoryKey, .isRegularFileKey, .contentModificationDateKey, .fileSizeKey],
             options: [.skipsHiddenFiles]
         )) ?? []
-        let childDirectorySnapshots = children.compactMap { childURL -> (name: String, modifiedDate: Date?)? in
-            guard (try? childURL.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true else {
+        let childSnapshots = children.compactMap { childURL -> (name: String, modifiedDate: Date?, size: Int?)? in
+            let values = try? childURL.resourceValues(forKeys: [
+                .isDirectoryKey,
+                .isRegularFileKey,
+                .contentModificationDateKey,
+                .fileSizeKey
+            ])
+            guard values?.isDirectory == true || values?.isRegularFile == true else {
                 return nil
             }
 
-            let modifiedDate = try? childURL.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
-            return (childURL.lastPathComponent, modifiedDate)
+            return (childURL.lastPathComponent, values?.contentModificationDate, values?.fileSize)
         }.sorted {
             $0.name.localizedStandardCompare($1.name) == .orderedAscending
         }
 
         let modifiedDate = try? collectionURL.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
-        let childFingerprint = childDirectorySnapshots.map { child in
+        let childFingerprint = childSnapshots.map { child in
             [
                 child.name,
-                child.modifiedDate?.timeIntervalSince1970.formatted() ?? "nil"
+                child.modifiedDate?.timeIntervalSince1970.formatted() ?? "nil",
+                child.size.map(String.init) ?? "nil"
             ].joined(separator: "@")
         }.joined(separator: "|")
 
         return CollectionSnapshot(
             folderName: collectionURL.lastPathComponent,
             modifiedDate: modifiedDate,
-            childDirectoryCount: childDirectorySnapshots.count,
+            childDirectoryCount: childSnapshots.count,
             fingerprint: [
                 collectionURL.lastPathComponent,
-                String(childDirectorySnapshots.count),
+                String(childSnapshots.count),
                 modifiedDate?.timeIntervalSince1970.formatted() ?? "nil",
                 childFingerprint
             ].joined(separator: "::")

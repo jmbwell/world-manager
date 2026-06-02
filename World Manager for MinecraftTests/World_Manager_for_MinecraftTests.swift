@@ -148,8 +148,12 @@ struct World_Manager_for_MinecraftTests {
     @Test func javaLocalFolderAccessDiscoversWorldsAndResourcePacks() async throws {
         let fileManager = FileManager.default
         let rootURL = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
-        let worldURL = rootURL.appendingPathComponent("saves/JavaWorld", isDirectory: true)
-        let packURL = rootURL.appendingPathComponent("resourcepacks/JavaPack", isDirectory: true)
+        let instanceURL = rootURL.appendingPathComponent("Better MC [NEOFORGE] BMC5", isDirectory: true)
+        let worldURL = instanceURL.appendingPathComponent("saves/JavaWorld", isDirectory: true)
+        let packURL = instanceURL.appendingPathComponent("resourcepacks/JavaPack", isDirectory: true)
+        let zippedPackURL = instanceURL.appendingPathComponent("resourcepacks/JavaPack.zip")
+        let shaderPackURL = instanceURL.appendingPathComponent("shaderpacks/Shader.zip")
+        let modURL = instanceURL.appendingPathComponent("mods/ExampleMod.jar")
         defer { try? fileManager.removeItem(at: rootURL) }
 
         try fileManager.createDirectory(at: worldURL, withIntermediateDirectories: true)
@@ -165,17 +169,35 @@ struct World_Manager_for_MinecraftTests {
             atomically: true,
             encoding: .utf8
         )
+        try fileManager.createDirectory(at: zippedPackURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("zip".utf8).write(to: zippedPackURL)
+        try fileManager.createDirectory(at: shaderPackURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("shader".utf8).write(to: shaderPackURL)
+        try fileManager.createDirectory(at: modURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("jar".utf8).write(to: modURL)
 
-        let source = MinecraftSource(
-            folderURL: rootURL,
-            origin: .javaLocalFolder(bookmarkData: nil)
-        )
         let access = SourceAccessCoordinator(
             accessMethods: [
                 LocalFolderSourceAccess(),
                 JavaLocalFolderSourceAccess()
             ]
         )
+        let probe = await access.probeLocalFolder(rootURL)
+        #expect(probe?.providerID == JavaLocalFolderSourceAccess().accessorIdentifier)
+        #expect(probe?.sourceRootURL == instanceURL.standardizedFileURL)
+        #expect(probe?.detectedKinds.contains(.mod) == true)
+
+        var source = MinecraftSource(
+            folderURL: instanceURL,
+            origin: .localFolder(bookmarkData: nil),
+            accessDescriptor: SourceAccessDescriptor(
+                accessorIdentifier: JavaLocalFolderSourceAccess().accessorIdentifier,
+                kind: .localFolder,
+                refreshStrategy: .eagerFullScan
+            )
+        )
+        source.edition = .java
+        source.providerID = JavaLocalFolderSourceAccess().accessorIdentifier
         var discoveredItems: [MinecraftContentItem] = []
 
         for try await event in access.scanEvents(for: source, mode: .fullScan) {
@@ -188,22 +210,155 @@ struct World_Manager_for_MinecraftTests {
             enrichedItems.append(await access.enrich(item, for: source))
         }
 
-        #expect(discoveredItems.count == 2)
+        #expect(discoveredItems.count == 5)
         #expect(discoveredItems.allSatisfy { $0.sourceEdition == .java })
         #expect(discoveredItems.contains { $0.platformType == .java(.world) && $0.capabilities.portablePackageExtension == "zip" })
         #expect(discoveredItems.contains { $0.platformType == .java(.resourcePack) && $0.contentType == .resourcePack })
+        #expect(discoveredItems.contains { $0.platformType == .java(.shaderPack) && $0.contentKind == .shaderPack })
+        #expect(discoveredItems.contains { $0.platformType == .java(.mod) && $0.contentKind == .mod })
         #expect(enrichedItems.contains { $0.displayName == "Displayed Java World" })
 
         var indexedSource = source
         indexedSource.rawItems = enrichedItems
         let index = SourceContentIndexer.buildIndex(for: indexedSource)
         #expect(index.displayItemCountsByKind[.world] == 1)
-        #expect(index.displayItemCountsByKind[.resourcePack] == 1)
+        #expect(index.displayItemCountsByKind[.resourcePack] == 2)
+        #expect(index.displayItemCountsByKind[.shaderPack] == 1)
+        #expect(index.displayItemCountsByKind[.mod] == 1)
 
         indexedSource.rawItems = enrichedItems
-        let snapshot = SourceScanPolicy.buildSnapshot(for: indexedSource, scanRootURL: rootURL)
+        let snapshot = SourceScanPolicy.buildSnapshot(for: indexedSource, scanRootURL: instanceURL)
         #expect(snapshot.collectionSnapshots.map(\.folderName).contains("saves"))
         #expect(snapshot.collectionSnapshots.map(\.folderName).contains("resourcepacks"))
+        #expect(snapshot.collectionSnapshots.map(\.folderName).contains("shaderpacks"))
+        #expect(snapshot.collectionSnapshots.map(\.folderName).contains("mods"))
+    }
+
+    @Test func javaArchiveEnrichmentReadsModMetadataPackMetadataAndIcons() async throws {
+        let fileManager = FileManager.default
+        let workingURL = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let modSourceURL = workingURL.appendingPathComponent("ModSource", isDirectory: true)
+        let resourceSourceURL = workingURL.appendingPathComponent("ResourceSource", isDirectory: true)
+        let modArchiveURL = workingURL.appendingPathComponent("ExampleMod.jar")
+        let resourceArchiveURL = workingURL.appendingPathComponent("ExamplePack.zip")
+        defer { try? fileManager.removeItem(at: workingURL) }
+
+        try fileManager.createDirectory(at: modSourceURL.appendingPathComponent("META-INF", isDirectory: true), withIntermediateDirectories: true)
+        try """
+        modLoader = "javafml"
+        loaderVersion = "[1,)"
+
+        [[mods]]
+        modId = "examplemod"
+        displayName = "Example Java Mod"
+        logoFile = "icon.png"
+        description = "A test mod."
+        """.write(
+            to: modSourceURL.appendingPathComponent("META-INF/neoforge.mods.toml"),
+            atomically: true,
+            encoding: .utf8
+        )
+        try """
+        {
+          "pack": {
+            "description": "Example Mod Resources",
+            "pack_format": 31
+          }
+        }
+        """.write(to: modSourceURL.appendingPathComponent("pack.mcmeta"), atomically: true, encoding: .utf8)
+        try Data([0x89, 0x50, 0x4E, 0x47]).write(to: modSourceURL.appendingPathComponent("icon.png"))
+        try makeArchive(from: modSourceURL, to: modArchiveURL)
+
+        try fileManager.createDirectory(at: resourceSourceURL, withIntermediateDirectories: true)
+        try """
+        {
+          "pack": {
+            "description": "Example Resource Pack",
+            "pack_format": 34
+          }
+        }
+        """.write(to: resourceSourceURL.appendingPathComponent("pack.mcmeta"), atomically: true, encoding: .utf8)
+        try Data([0x89, 0x50, 0x4E, 0x47]).write(to: resourceSourceURL.appendingPathComponent("pack.png"))
+        try makeArchive(from: resourceSourceURL, to: resourceArchiveURL)
+
+        let modItem = MinecraftContentItem(
+            folderURL: modArchiveURL,
+            folderName: modArchiveURL.lastPathComponent,
+            contentType: .resourcePack,
+            sourceEdition: .java,
+            contentKind: .mod,
+            platformType: .java(.mod),
+            collectionRootURL: workingURL,
+            capabilities: .java(contentType: .mod),
+            platformMetadata: .java(JavaContentMetadata())
+        )
+        let resourceItem = MinecraftContentItem(
+            folderURL: resourceArchiveURL,
+            folderName: resourceArchiveURL.lastPathComponent,
+            contentType: .resourcePack,
+            sourceEdition: .java,
+            contentKind: .resourcePack,
+            platformType: .java(.resourcePack),
+            collectionRootURL: workingURL,
+            capabilities: .java(contentType: .resourcePack),
+            platformMetadata: .java(JavaContentMetadata())
+        )
+
+        let enrichedMod = await JavaContentScanner.enrich(item: modItem)
+        let enrichedResource = await JavaContentScanner.enrich(item: resourceItem)
+
+        #expect(enrichedMod.displayName == "Example Java Mod")
+        #expect(enrichedMod.iconURL != nil)
+        #expect(enrichedMod.hasKnownIcon)
+        if case .java(let metadata) = enrichedMod.platformMetadata {
+            #expect(metadata.pack?.description == "Example Mod Resources")
+            #expect(metadata.pack?.packFormat == 31)
+        } else {
+            Issue.record("Expected Java metadata")
+        }
+
+        #expect(enrichedResource.iconURL != nil)
+        if case .java(let metadata) = enrichedResource.platformMetadata {
+            #expect(metadata.pack?.description == "Example Resource Pack")
+            #expect(metadata.pack?.packFormat == 34)
+        } else {
+            Issue.record("Expected Java metadata")
+        }
+    }
+
+    @Test func sourceLibraryAddSourceResolvesJavaWrapperFolder() async throws {
+        let fileManager = FileManager.default
+        let rootURL = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let instanceURL = rootURL.appendingPathComponent("Better MC [NEOFORGE] BMC5", isDirectory: true)
+        let modURL = instanceURL.appendingPathComponent("mods/ExampleMod.jar")
+        defer { try? fileManager.removeItem(at: rootURL) }
+
+        try fileManager.createDirectory(at: modURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("jar".utf8).write(to: modURL)
+        try fileManager.createDirectory(
+            at: instanceURL.appendingPathComponent("resourcepacks", isDirectory: true),
+            withIntermediateDirectories: true
+        )
+
+        let access = SourceAccessCoordinator(
+            accessMethods: [
+                LocalFolderSourceAccess(),
+                JavaLocalFolderSourceAccess()
+            ]
+        )
+        let library = SourceLibrary(sourceAccessMethod: access)
+
+        let sourceID = await library.addSource(at: rootURL)
+        guard let source = library.source(withID: sourceID) else {
+            Issue.record("Expected added source")
+            return
+        }
+
+        #expect(source.folderURL == instanceURL.standardizedFileURL)
+        #expect(source.origin.kind == .localFolder)
+        #expect(source.edition == .java)
+        #expect(source.providerID == JavaLocalFolderSourceAccess().accessorIdentifier)
+        #expect(source.accessDescriptor.accessorIdentifier == JavaLocalFolderSourceAccess().accessorIdentifier)
     }
 
     @Test func libraryExternalRepresentationUsesPortablePackageByDefault() async throws {
@@ -1118,6 +1273,106 @@ struct World_Manager_for_MinecraftTests {
         #expect(restored[0].sourceID == sourceURL.standardizedFileURL)
         #expect(restored[0].availability == .available)
         #expect(restored[0].lastScanDate == legacyRecord.lastScanDate)
+    }
+
+    @Test func sourceRestorationPreservesJavaProviderResolvedLocalFolder() async throws {
+        let sourceURL = URL(fileURLWithPath: "/tmp/JavaInstance", isDirectory: true)
+        let accessDescriptor = SourceAccessDescriptor(
+            accessorIdentifier: JavaLocalFolderSourceAccess().accessorIdentifier,
+            kind: .localFolder,
+            refreshStrategy: .eagerFullScan
+        )
+        let record = PersistedSourceRecord(
+            sourceID: sourceURL,
+            folderURL: sourceURL,
+            origin: .localFolder(bookmarkData: nil),
+            accessDescriptor: accessDescriptor,
+            availability: .available,
+            bookmarkData: nil,
+            displayName: "Java Instance",
+            rawItems: [],
+            snapshot: nil,
+            lastScanDate: nil,
+            needsRepair: false
+        )
+
+        let source = SourceRestoration.restoredSource(from: record) { _, _ in "" }
+
+        #expect(source.origin.kind == .localFolder)
+        #expect(source.edition == .java)
+        #expect(source.providerID == JavaLocalFolderSourceAccess().accessorIdentifier)
+        #expect(source.accessDescriptor == accessDescriptor)
+    }
+
+    @Test func javaRestoredSnapshotDoesNotRequestRefreshWhenUnchanged() async throws {
+        let fileManager = FileManager.default
+        let sourceURL = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let modURL = sourceURL.appendingPathComponent("mods/ExampleMod.jar")
+        defer { try? fileManager.removeItem(at: sourceURL) }
+
+        try fileManager.createDirectory(at: modURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("jar".utf8).write(to: modURL)
+
+        let item = MinecraftContentItem(
+            folderURL: modURL,
+            folderName: modURL.lastPathComponent,
+            contentType: .resourcePack,
+            sourceEdition: .java,
+            contentKind: .mod,
+            platformType: .java(.mod),
+            collectionRootURL: modURL.deletingLastPathComponent(),
+            displayName: "ExampleMod",
+            capabilities: .java(contentType: .mod),
+            platformMetadata: .java(JavaContentMetadata())
+        )
+        var source = MinecraftSource(
+            folderURL: sourceURL,
+            origin: .localFolder(bookmarkData: nil),
+            accessDescriptor: SourceAccessDescriptor(
+                accessorIdentifier: JavaLocalFolderSourceAccess().accessorIdentifier,
+                kind: .localFolder,
+                refreshStrategy: .eagerFullScan
+            ),
+            availability: .available
+        )
+        source.providerID = JavaLocalFolderSourceAccess().accessorIdentifier
+        source.edition = .java
+        SourceRestoration.applyRestoredItemState(
+            [item],
+            lastScanDate: Date(timeIntervalSince1970: 1_000),
+            snapshot: nil,
+            to: &source
+        )
+        source.snapshot = SourceScanPolicy.buildSnapshot(for: source, scanRootURL: sourceURL)
+
+        let record = PersistedSourceRecord(
+            sourceID: source.id,
+            folderURL: source.folderURL,
+            origin: source.origin,
+            accessDescriptor: source.accessDescriptor,
+            availability: source.availability,
+            bookmarkData: nil,
+            displayName: source.displayName,
+            rawItems: source.rawItems,
+            snapshot: source.snapshot,
+            lastScanDate: source.lastScanDate,
+            needsRepair: false
+        )
+
+        let refreshReason = SourceRestoration.startupRefreshReason(
+            for: source,
+            persistedRecord: record
+        ) { url, edition in
+            switch edition {
+            case .bedrock:
+                return WorldScanner.collectionSnapshots(in: url)
+            case .java:
+                return JavaContentScanner.collectionSnapshots(in: url)
+            }
+        }
+
+        #expect(refreshReason == nil)
+        #expect(source.snapshot?.collectionSnapshots.first?.childDirectoryCount == 1)
     }
 
     @Test func connectedDeviceSourceFactoryCreatesStableSyntheticIdentifier() async throws {

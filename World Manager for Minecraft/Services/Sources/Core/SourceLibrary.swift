@@ -137,32 +137,53 @@ final class SourceLibrary: ObservableObject, SourceScanSessionHosting, SourcePer
         )
     }
 
-    func addSource(at url: URL) -> URL {
-        let normalizedURL = url.standardizedFileURL
-        let bookmarkData = securityScopedBookmarkData(for: normalizedURL)
+    func addSource(at url: URL) async -> URL {
+        let selectedURL = url.standardizedFileURL
+        let probe = await sourceAccessMethod.probeLocalFolder(selectedURL)
+        let normalizedURL = (probe?.sourceRootURL ?? selectedURL).standardizedFileURL
+        let bookmarkData = securityScopedBookmarkData(for: normalizedURL) ?? securityScopedBookmarkData(for: selectedURL)
+        let providerID = probe?.providerID ?? LocalFolderSourceAccess().accessorIdentifier
+        let edition = probe?.edition ?? .bedrock
 
         if sources.contains(where: { $0.id == normalizedURL }) {
             updateSource(normalizedURL) { source in
                 if source.bookmarkData == nil {
                     source.bookmarkData = bookmarkData
                 }
-                source.accessDescriptor = sourceAccessMethod.accessDescriptor(for: source)
-                source.providerID = source.accessDescriptor.accessorIdentifier
+                source.accessDescriptor = SourceAccessDescriptor(
+                    accessorIdentifier: providerID,
+                    kind: .localFolder,
+                    refreshStrategy: .eagerFullScan
+                )
+                source.providerID = providerID
+                source.edition = edition
                 source.capabilities = source.origin.defaultCapabilities
+                if let probe {
+                    source.displayName = probe.displayName
+                    if let warning = probe.warnings.first {
+                        source.scanDiagnostic = warning
+                    }
+                }
             }
             startScan(for: normalizedURL, mode: .fullScan)
             return normalizedURL
         }
 
-        let source = MinecraftSource(
+        var source = MinecraftSource(
             folderURL: normalizedURL,
             bookmarkData: bookmarkData,
             accessDescriptor: SourceAccessDescriptor(
-                accessorIdentifier: LocalFolderSourceAccess().accessorIdentifier,
+                accessorIdentifier: providerID,
                 kind: .localFolder,
                 refreshStrategy: .eagerFullScan
             )
         )
+        source.providerID = providerID
+        source.edition = edition
+        source.displayName = probe?.displayName ?? normalizedURL.lastPathComponent
+        if let warning = probe?.warnings.first {
+            source.scanDiagnostic = warning
+        }
         return addSource(source, shouldPersist: true, shouldScan: true)
     }
 
@@ -173,7 +194,7 @@ final class SourceLibrary: ObservableObject, SourceScanSessionHosting, SourcePer
                 existingSource.origin = source.origin
                 existingSource.accessDescriptor = source.accessDescriptor
                 existingSource.providerID = source.accessDescriptor.accessorIdentifier
-                existingSource.edition = source.origin.defaultEdition
+                existingSource.edition = source.edition
                 existingSource.accessStatus = source.origin.defaultAccessStatus(displayName: source.displayName)
                 existingSource.availability = source.availability
                 existingSource.capabilities = source.capabilities
@@ -188,7 +209,7 @@ final class SourceLibrary: ObservableObject, SourceScanSessionHosting, SourcePer
             var resolvedSource = source
             resolvedSource.accessDescriptor = sourceAccessMethod.accessDescriptor(for: resolvedSource)
             resolvedSource.providerID = resolvedSource.accessDescriptor.accessorIdentifier
-            resolvedSource.edition = resolvedSource.origin.defaultEdition
+            resolvedSource.edition = source.edition
             resolvedSource.accessStatus = resolvedSource.origin.defaultAccessStatus(displayName: resolvedSource.displayName)
             resolvedSource.capabilities = resolvedSource.origin.defaultCapabilities
             sources.append(resolvedSource)
@@ -441,8 +462,13 @@ final class SourceLibrary: ObservableObject, SourceScanSessionHosting, SourcePer
         await ConnectedDeviceRuntime.refreshDevices(on: self, using: connectedDeviceAccessMethod)
     }
 
-    func currentCollectionSnapshots(for sourceURL: URL) -> [CollectionSnapshot] {
-        WorldScanner.collectionSnapshots(in: sourceURL)
+    func currentCollectionSnapshots(for sourceURL: URL, edition: MinecraftEdition) -> [CollectionSnapshot] {
+        switch edition {
+        case .bedrock:
+            return WorldScanner.collectionSnapshots(in: sourceURL)
+        case .java:
+            return JavaContentScanner.collectionSnapshots(in: sourceURL)
+        }
     }
 
     func connectedDeviceDisplayName(for device: ConnectedDevice, container: DeviceAppContainer) -> String {

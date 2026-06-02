@@ -16,6 +16,8 @@ enum SourceRestoration {
             accessDescriptor: record.accessDescriptor,
             availability: record.availability
         )
+        source.providerID = record.accessDescriptor.accessorIdentifier
+        source.edition = edition(for: record.accessDescriptor, origin: record.origin)
 
         if case .connectedDevice(let device, let container) = source.origin {
             var repairedDevice = device
@@ -104,7 +106,7 @@ enum SourceRestoration {
     static func startupRefreshReason(
         for source: MinecraftSource,
         persistedRecord: PersistedSourceRecord?,
-        currentCollectionSnapshots: (URL) -> [CollectionSnapshot]
+        currentCollectionSnapshots: (URL, MinecraftEdition) -> [CollectionSnapshot]
     ) -> String? {
         guard source.availability == .available else {
             return nil
@@ -133,7 +135,7 @@ enum SourceRestoration {
 
     static func needsReconcile(
         _ source: MinecraftSource,
-        currentCollectionSnapshots: (URL) -> [CollectionSnapshot]
+        currentCollectionSnapshots: (URL, MinecraftEdition) -> [CollectionSnapshot]
     ) -> Bool {
         reconcileIsNeeded(source, currentCollectionSnapshots: currentCollectionSnapshots)
     }
@@ -152,7 +154,7 @@ enum SourceRestoration {
 
     private static func needsRescan(
         _ record: PersistedSourceRecord,
-        currentCollectionSnapshots: (URL) -> [CollectionSnapshot]
+        currentCollectionSnapshots: (URL, MinecraftEdition) -> [CollectionSnapshot]
     ) -> Bool {
         guard record.accessDescriptor.refreshStrategy == .eagerFullScan else {
             return record.rawItems.isEmpty
@@ -167,15 +169,16 @@ enum SourceRestoration {
             return true
         }
 
+        let edition = edition(for: record.accessDescriptor, origin: record.origin)
         return collectionsDiffer(
-            currentCollectionSnapshots(sourceURL),
+            currentCollectionSnapshots(sourceURL, edition),
             persistedCollections: snapshot.collectionSnapshots
         )
     }
 
     private static func reconcileIsNeeded(
         _ source: MinecraftSource,
-        currentCollectionSnapshots: (URL) -> [CollectionSnapshot]
+        currentCollectionSnapshots: (URL, MinecraftEdition) -> [CollectionSnapshot]
     ) -> Bool {
         guard source.accessDescriptor.refreshStrategy == .eagerFullScan else {
             return source.rawItems.isEmpty
@@ -191,9 +194,20 @@ enum SourceRestoration {
         }
 
         return collectionsDiffer(
-            currentCollectionSnapshots(sourceURL),
+            currentCollectionSnapshots(sourceURL, source.edition),
             persistedCollections: snapshot.collectionSnapshots
         )
+    }
+
+    private static func edition(
+        for accessDescriptor: SourceAccessDescriptor,
+        origin: MinecraftSourceOrigin
+    ) -> MinecraftEdition {
+        if accessDescriptor.accessorIdentifier == JavaLocalFolderSourceAccess().accessorIdentifier {
+            return .java
+        }
+
+        return origin.defaultEdition
     }
 
     private static func collectionsDiffer(

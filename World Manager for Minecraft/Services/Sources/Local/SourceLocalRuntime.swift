@@ -12,7 +12,7 @@ protocol LocalSourceRuntimeHosting: AnyObject {
     func source(withID sourceID: URL) -> MinecraftSource?
     func updateAvailability(for sourceID: URL, to newAvailability: SourceAvailability) -> (previous: SourceAvailability, becameAvailable: Bool)
     func queueAutomaticSync(for sourceID: URL, reason: String, debounce: TimeInterval?)
-    func currentCollectionSnapshots(for sourceURL: URL) -> [CollectionSnapshot]
+    func currentCollectionSnapshots(for sourceURL: URL, edition: MinecraftEdition) -> [CollectionSnapshot]
 }
 
 enum LocalSourceRuntime {
@@ -86,7 +86,7 @@ enum LocalSourceRuntime {
 
             if SourceRestoration.needsReconcile(
                 refreshedSource,
-                currentCollectionSnapshots: host.currentCollectionSnapshots(for:)
+                currentCollectionSnapshots: host.currentCollectionSnapshots(for:edition:)
             ) {
                 host.queueAutomaticSync(
                     for: sourceID,

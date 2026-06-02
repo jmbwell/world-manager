@@ -51,6 +51,36 @@ UI
 
 ## Core Concepts
 
+### Local Folder Intake
+
+The folder picker should not decide the platform. A picked folder is a local
+access root; providers decide whether it contains Bedrock, Java, or another
+platform.
+
+```text
+User picks folder
+  -> provider registry asks local providers to probe it
+  -> strongest probe chooses provider, edition, and source root
+  -> source is stored as a local folder with providerID/accessDescriptor
+  -> scans route through the selected provider
+```
+
+This keeps filesystem access separate from Minecraft format knowledge. For
+example, selecting a wrapper folder that contains one Java modpack instance can
+resolve to the nested instance folder while still using local folder access.
+
+```swift
+struct SourceProbeResult {
+    let providerID: PlatformProviderID
+    let edition: MinecraftEdition
+    let confidence: SourceProbeConfidence
+    let sourceRootURL: URL
+    let displayName: String
+    let detectedKinds: Set<MinecraftContentKind>
+    let warnings: [String]
+}
+```
+
 ### Provider
 
 A provider is the unit that knows a platform and access method. A provider can
