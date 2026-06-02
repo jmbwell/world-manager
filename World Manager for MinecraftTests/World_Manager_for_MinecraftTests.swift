@@ -413,6 +413,48 @@ struct World_Manager_for_MinecraftTests {
         #expect(snapshots.map(\.folderName).contains("a/e/f/resourcepacks"))
     }
 
+    @Test func sourceLibraryAddSourceCandidatePreservesJavaAggregateProvider() async throws {
+        let fileManager = FileManager.default
+        let workingURL = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let instanceURL = workingURL.appendingPathComponent("a/b/c", isDirectory: true)
+        let modURL = instanceURL.appendingPathComponent("mods/ExampleMod.jar")
+        defer { try? fileManager.removeItem(at: workingURL) }
+
+        try fileManager.createDirectory(at: modURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("jar".utf8).write(to: modURL)
+
+        let candidate = SourceCandidate(
+            providerID: JavaLocalFolderSourceAccess().accessorIdentifier,
+            edition: .java,
+            sourceRootURL: workingURL,
+            displayName: workingURL.lastPathComponent,
+            confidence: .strong,
+            reason: "Found multiple Java sources",
+            detectedKinds: [.mod]
+        )
+        let access = SourceAccessCoordinator(
+            accessMethods: [
+                LocalFolderSourceAccess(),
+                JavaLocalFolderSourceAccess()
+            ]
+        )
+        let library = SourceLibrary(sourceAccessMethod: access)
+
+        let sourceID = await library.addSource(candidate: candidate)
+        guard let source = library.source(withID: sourceID) else {
+            Issue.record("Expected added source")
+            return
+        }
+
+        #expect(source.folderURL == workingURL.standardizedFileURL)
+        #expect(source.edition == .java)
+        #expect(source.providerID == JavaLocalFolderSourceAccess().accessorIdentifier)
+        #expect(source.accessDescriptor.accessorIdentifier == JavaLocalFolderSourceAccess().accessorIdentifier)
+
+        let items = try JavaContentScanner.discoverItems(in: source.folderURL)
+        #expect(items.contains { $0.contentKind == .mod && $0.folderName == "ExampleMod.jar" })
+    }
+
     @Test func sourceLibraryAddSourceResolvesJavaWrapperFolder() async throws {
         let fileManager = FileManager.default
         let rootURL = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)

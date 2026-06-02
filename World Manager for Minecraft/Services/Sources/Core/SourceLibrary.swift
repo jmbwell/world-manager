@@ -229,7 +229,45 @@ final class SourceLibrary: ObservableObject, SourceScanSessionHosting, SourcePer
     }
 
     func addSource(candidate: SourceCandidate) async -> URL {
-        await addSource(at: candidate.sourceRootURL)
+        let normalizedURL = candidate.sourceRootURL.standardizedFileURL
+        let bookmarkData = securityScopedBookmarkData(for: normalizedURL)
+
+        if sources.contains(where: { $0.id == normalizedURL }) {
+            updateSource(normalizedURL) { source in
+                if source.bookmarkData == nil {
+                    source.bookmarkData = bookmarkData
+                }
+                source.accessDescriptor = SourceAccessDescriptor(
+                    accessorIdentifier: candidate.providerID,
+                    kind: .localFolder,
+                    refreshStrategy: .eagerFullScan
+                )
+                source.providerID = candidate.providerID
+                source.edition = candidate.edition
+                source.displayName = candidate.displayName
+                source.capabilities = source.origin.defaultCapabilities
+            }
+            sourceCandidates.removeAll { $0.id == candidate.id || $0.sourceRootURL == normalizedURL }
+            startScan(for: normalizedURL, mode: .fullScan)
+            return normalizedURL
+        }
+
+        var source = MinecraftSource(
+            folderURL: normalizedURL,
+            bookmarkData: bookmarkData,
+            accessDescriptor: SourceAccessDescriptor(
+                accessorIdentifier: candidate.providerID,
+                kind: .localFolder,
+                refreshStrategy: .eagerFullScan
+            )
+        )
+        source.providerID = candidate.providerID
+        source.edition = candidate.edition
+        source.displayName = candidate.displayName
+
+        let sourceID = addSource(source, shouldPersist: true, shouldScan: true)
+        sourceCandidates.removeAll { $0.id == candidate.id || $0.sourceRootURL == sourceID }
+        return sourceID
     }
 
     @discardableResult
