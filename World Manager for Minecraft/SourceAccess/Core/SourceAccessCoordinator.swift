@@ -11,6 +11,7 @@ enum SourceDiscoveryMode: Sendable {
 protocol SourceAccessMethod: Sendable {
     nonisolated var accessorIdentifier: SourceAccessorIdentifier { get }
     nonisolated func accessDescriptor(for source: MinecraftSource) -> SourceAccessDescriptor
+    nonisolated func accessStatus(for source: MinecraftSource) async -> SourceAccessStatus
     nonisolated func availability(for source: MinecraftSource) async -> SourceAvailability
     nonisolated func capabilities(for source: MinecraftSource) async -> SourceCapabilities
     nonisolated func discoverItems(
@@ -18,6 +19,10 @@ protocol SourceAccessMethod: Sendable {
         mode: SourceDiscoveryMode,
         onDiscovered: @escaping @Sendable (MinecraftContentItem) -> Void
     ) async throws
+    nonisolated func scanEvents(
+        for source: MinecraftSource,
+        mode: SourceDiscoveryMode
+    ) -> AsyncThrowingStream<ProviderEvent, Error>
     nonisolated func enrich(_ item: MinecraftContentItem, for source: MinecraftSource) async -> MinecraftContentItem
     nonisolated func loadPreviewAssets(for item: MinecraftContentItem, in source: MinecraftSource) async -> MinecraftContentItem
     nonisolated func loadPreviewAssets(for items: [MinecraftContentItem], in source: MinecraftSource) async -> [MinecraftContentItem]
@@ -42,8 +47,13 @@ extension SourceAccessMethod {
     }
 
     nonisolated func availability(for source: MinecraftSource) async -> SourceAvailability {
-        _ = source
-        return .unknown
+        await accessStatus(for: source).availability
+    }
+
+    nonisolated func accessStatus(for source: MinecraftSource) async -> SourceAccessStatus {
+        var status = source.origin.defaultAccessStatus(displayName: source.displayName)
+        status.availability = .unknown
+        return status
     }
 
     nonisolated func capabilities(for source: MinecraftSource) async -> SourceCapabilities {
@@ -58,6 +68,64 @@ extension SourceAccessMethod {
         _ = source
         _ = mode
         _ = onDiscovered
+    }
+
+    nonisolated func scanEvents(
+        for source: MinecraftSource,
+        mode: SourceDiscoveryMode
+    ) -> AsyncThrowingStream<ProviderEvent, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task.detached(priority: .userInitiated) {
+                let accessStatus = await accessStatus(for: source)
+                continuation.yield(.accessStatusChanged(accessStatus))
+                continuation.yield(
+                    .stageUpdated(
+                        WorkStage(
+                            id: "discovery",
+                            title: "Discovering content",
+                            detail: nil,
+                            state: .running,
+                            progress: .indeterminate
+                        )
+                    )
+                )
+
+                do {
+                    try await discoverItems(for: source, mode: mode) { item in
+                        continuation.yield(.discovered(item))
+                    }
+                    continuation.yield(
+                        .stageUpdated(
+                            WorkStage(
+                                id: "discovery",
+                                title: "Discovering content",
+                                detail: nil,
+                                state: .succeeded,
+                                progress: .indeterminate
+                            )
+                        )
+                    )
+                    continuation.finish()
+                } catch {
+                    continuation.yield(
+                        .stageUpdated(
+                            WorkStage(
+                                id: "discovery",
+                                title: "Discovering content",
+                                detail: error.localizedDescription,
+                                state: .failed,
+                                progress: .indeterminate
+                            )
+                        )
+                    )
+                    continuation.finish(throwing: error)
+                }
+            }
+
+            continuation.onTermination = { @Sendable _ in
+                task.cancel()
+            }
+        }
     }
 
     nonisolated func enrich(_ item: MinecraftContentItem, for source: MinecraftSource) async -> MinecraftContentItem {
@@ -123,9 +191,10 @@ struct SourceAccessCoordinator: SourceAccessMethod {
 
     nonisolated init(
         localFolderAccess: SourceAccessMethod = LocalFolderSourceAccess(),
+        javaLocalFolderAccess: SourceAccessMethod = JavaLocalFolderSourceAccess(),
         connectedDeviceAccess: ConnectedDeviceSourceAccessMethod
     ) {
-        self.init(accessMethods: [localFolderAccess, connectedDeviceAccess])
+        self.init(accessMethods: [localFolderAccess, javaLocalFolderAccess, connectedDeviceAccess])
     }
 
     nonisolated init(accessMethods: [any SourceAccessMethod]) {
@@ -164,12 +233,23 @@ struct SourceAccessCoordinator: SourceAccessMethod {
         )
     }
 
+    nonisolated func scanEvents(
+        for source: MinecraftSource,
+        mode: SourceDiscoveryMode
+    ) -> AsyncThrowingStream<ProviderEvent, Error> {
+        accessMethod(for: source).scanEvents(for: source, mode: mode)
+    }
+
     nonisolated func accessDescriptor(for source: MinecraftSource) -> SourceAccessDescriptor {
         accessMethod(for: source).accessDescriptor(for: source)
     }
 
     nonisolated func availability(for source: MinecraftSource) async -> SourceAvailability {
         return await accessMethod(for: source).availability(for: source)
+    }
+
+    nonisolated func accessStatus(for source: MinecraftSource) async -> SourceAccessStatus {
+        return await accessMethod(for: source).accessStatus(for: source)
     }
 
     nonisolated func capabilities(for source: MinecraftSource) async -> SourceCapabilities {

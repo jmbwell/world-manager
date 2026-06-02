@@ -10,7 +10,9 @@ struct MinecraftManifestMetadata: Sendable, Hashable {
     let minimumEngineVersion: String?
 }
 
-enum MinecraftContentMetadataReader {
+typealias MinecraftContentMetadataReader = BedrockContentMetadataReader
+
+enum BedrockContentMetadataReader {
     nonisolated static func displayName(
         for directoryURL: URL,
         contentType: MinecraftContentType,

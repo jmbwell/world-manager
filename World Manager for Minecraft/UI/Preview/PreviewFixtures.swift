@@ -144,6 +144,9 @@ enum PreviewFixtures {
         source.displayItemCountsByType = source.displayItems.reduce(into: [MinecraftContentType: Int]()) { counts, item in
             counts[item.contentType, default: 0] += 1
         }
+        source.displayItemCountsByKind = source.displayItems.reduce(into: [MinecraftContentKind: Int]()) { counts, item in
+            counts[item.contentKind, default: 0] += 1
+        }
         source.rawItems = source.displayItems
         source.logicalPacks = [
             LogicalPack(
@@ -228,6 +231,9 @@ enum PreviewFixtures {
         source.displayItems = [secondLibraryPack]
         source.displayItemCountsByType = source.displayItems.reduce(into: [MinecraftContentType: Int]()) { counts, item in
             counts[item.contentType, default: 0] += 1
+        }
+        source.displayItemCountsByKind = source.displayItems.reduce(into: [MinecraftContentKind: Int]()) { counts, item in
+            counts[item.contentKind, default: 0] += 1
         }
         source.rawItems = source.displayItems
         source.indexedItemCount = source.displayItems.count

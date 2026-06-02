@@ -18,26 +18,68 @@ struct AppleMobileDeviceSourceAccess: ConnectedDeviceSourceAccessMethod {
     }
 
     nonisolated func availability(for source: MinecraftSource) async -> SourceAvailability {
+        await accessStatus(for: source).availability
+    }
+
+    nonisolated func accessStatus(for source: MinecraftSource) async -> SourceAccessStatus {
         guard case .connectedDevice(let expectedDevice, _) = source.origin else {
-            return .unavailable
+            return SourceAccessStatus(
+                availability: .unavailable,
+                mode: .unknown,
+                displayName: source.displayName,
+                iconSystemName: "iphone.gen3",
+                statusText: "Device source unavailable",
+                warningText: nil
+            )
         }
+
+        let fallbackMode: SourceAccessMode = expectedDevice.connection == .usb ? .usbDevice : .networkDevice
 
         do {
             let devices = try await listConnectedDevices()
             guard let device = devices.first(where: { $0.udid == expectedDevice.udid }) else {
-                return .disconnected
+                return SourceAccessStatus(
+                    availability: .disconnected,
+                    mode: fallbackMode,
+                    displayName: source.displayName,
+                    iconSystemName: "iphone.gen3",
+                    statusText: "Device disconnected",
+                    warningText: nil
+                )
             }
 
+            let mode: SourceAccessMode = device.connection == .usb ? .usbDevice : .networkDevice
+            let availability: SourceAvailability
+            let statusText: String?
             switch device.trustState {
             case .trusted:
-                return .available
+                availability = .available
+                statusText = nil
             case .locked, .untrusted:
-                return .limited
+                availability = .limited
+                statusText = "Unlock and trust the device"
             case .unavailable:
-                return .disconnected
+                availability = .disconnected
+                statusText = "Device unavailable"
             }
+
+            return SourceAccessStatus(
+                availability: availability,
+                mode: mode,
+                displayName: device.name,
+                iconSystemName: "iphone.gen3",
+                statusText: statusText,
+                warningText: nil
+            )
         } catch {
-            return .disconnected
+            return SourceAccessStatus(
+                availability: .disconnected,
+                mode: fallbackMode,
+                displayName: source.displayName,
+                iconSystemName: "iphone.gen3",
+                statusText: "Device status unavailable",
+                warningText: error.localizedDescription
+            )
         }
     }
 

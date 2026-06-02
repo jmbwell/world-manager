@@ -3,6 +3,47 @@
 
 import Foundation
 
+typealias PlatformProviderID = String
+
+nonisolated enum MinecraftEdition: String, CaseIterable, Hashable, Sendable, Codable {
+    case bedrock
+    case java
+}
+
+nonisolated enum MinecraftContentKind: String, CaseIterable, Hashable, Sendable, Codable {
+    case world
+    case behaviorPack
+    case resourcePack
+    case dataPack
+    case skinPack
+    case worldTemplate
+    case shaderPack
+    case mod
+}
+
+nonisolated enum JavaContentType: String, CaseIterable, Hashable, Sendable, Codable {
+    case world = "Java World"
+    case resourcePack = "Java Resource Pack"
+    case dataPack = "Java Data Pack"
+    case shaderPack = "Java Shader Pack"
+    case mod = "Java Mod"
+
+    nonisolated var kind: MinecraftContentKind {
+        switch self {
+        case .world:
+            return .world
+        case .resourcePack:
+            return .resourcePack
+        case .dataPack:
+            return .dataPack
+        case .shaderPack:
+            return .shaderPack
+        case .mod:
+            return .mod
+        }
+    }
+}
+
 nonisolated enum MinecraftContentType: String, CaseIterable, Hashable, Sendable, Codable {
     case world = "World"
     case behaviorPack = "Behavior Pack"
@@ -22,6 +63,21 @@ nonisolated enum MinecraftContentType: String, CaseIterable, Hashable, Sendable,
             return "skin_packs"
         case .worldTemplate:
             return "world_templates"
+        }
+    }
+
+    nonisolated var kind: MinecraftContentKind {
+        switch self {
+        case .world:
+            return .world
+        case .behaviorPack:
+            return .behaviorPack
+        case .resourcePack:
+            return .resourcePack
+        case .skinPack:
+            return .skinPack
+        case .worldTemplate:
+            return .worldTemplate
         }
     }
 
@@ -49,6 +105,71 @@ nonisolated enum MinecraftContentType: String, CaseIterable, Hashable, Sendable,
         case .worldTemplate:
             return "World Template"
         }
+    }
+}
+
+nonisolated enum MinecraftPlatformContentType: Hashable, Sendable, Codable {
+    case bedrock(MinecraftContentType)
+    case java(JavaContentType)
+
+    nonisolated var edition: MinecraftEdition {
+        switch self {
+        case .bedrock:
+            return .bedrock
+        case .java:
+            return .java
+        }
+    }
+
+    nonisolated var kind: MinecraftContentKind {
+        switch self {
+        case .bedrock(let contentType):
+            return contentType.kind
+        case .java(let contentType):
+            return contentType.kind
+        }
+    }
+
+    nonisolated var displayName: String {
+        switch self {
+        case .bedrock(let contentType):
+            return contentType.rawValue
+        case .java(let contentType):
+            return contentType.rawValue
+        }
+    }
+}
+
+nonisolated struct ContentItemCapabilities: Hashable, Sendable, Codable {
+    var canRevealNativeContent: Bool
+    var canExportPortablePackage: Bool
+    var canShare: Bool
+    var portablePackageExtension: String?
+
+    nonisolated static func bedrock(contentType: MinecraftContentType) -> ContentItemCapabilities {
+        ContentItemCapabilities(
+            canRevealNativeContent: true,
+            canExportPortablePackage: true,
+            canShare: true,
+            portablePackageExtension: contentType.archiveExtension
+        )
+    }
+
+    nonisolated static func java(contentType: JavaContentType) -> ContentItemCapabilities {
+        let extensionName: String?
+        switch contentType {
+        case .world, .resourcePack, .dataPack, .shaderPack:
+            extensionName = "zip"
+        case .mod:
+            extensionName = "jar"
+        }
+
+        return ContentItemCapabilities(
+            canRevealNativeContent: true,
+            canExportPortablePackage: true,
+            canShare: true,
+            portablePackageExtension: extensionName
+        )
     }
 }
 
@@ -113,11 +234,77 @@ nonisolated struct PackMetadataDetails: Hashable, Sendable, Codable {
     var minimumEngineVersion: String?
 }
 
+nonisolated enum PlatformContentMetadata: Hashable, Sendable, Codable {
+    case bedrock(BedrockContentMetadata)
+    case java(JavaContentMetadata)
+    case none
+}
+
+nonisolated struct BedrockContentMetadata: Hashable, Sendable, Codable {
+    var world: WorldMetadata?
+    var packUUID: String?
+    var packVersion: String?
+    var packDetails: PackMetadataDetails?
+    var packReferences: [ContentPackReference]
+
+    nonisolated init(
+        world: WorldMetadata? = nil,
+        packUUID: String? = nil,
+        packVersion: String? = nil,
+        packDetails: PackMetadataDetails? = nil,
+        packReferences: [ContentPackReference] = []
+    ) {
+        self.world = world
+        self.packUUID = packUUID?.lowercased()
+        self.packVersion = packVersion
+        self.packDetails = packDetails
+        self.packReferences = packReferences
+    }
+}
+
+nonisolated struct JavaContentMetadata: Hashable, Sendable, Codable {
+    var world: JavaWorldMetadata?
+    var pack: JavaPackMetadata?
+    var dataPacks: [JavaPackReference]
+
+    nonisolated init(
+        world: JavaWorldMetadata? = nil,
+        pack: JavaPackMetadata? = nil,
+        dataPacks: [JavaPackReference] = []
+    ) {
+        self.world = world
+        self.pack = pack
+        self.dataPacks = dataPacks
+    }
+}
+
+nonisolated struct JavaWorldMetadata: Hashable, Sendable, Codable {
+    var dataVersion: String?
+    var gameMode: String?
+    var difficulty: String?
+    var seed: String?
+    var lastPlayedDate: Date?
+}
+
+nonisolated struct JavaPackMetadata: Hashable, Sendable, Codable {
+    var packFormat: Int?
+    var description: String?
+}
+
+nonisolated struct JavaPackReference: Identifiable, Hashable, Sendable, Codable {
+    let id: String
+    var name: String
+    var pathHint: String?
+}
+
 nonisolated struct MinecraftContentItem: Identifiable, Hashable, Sendable, Codable {
     let id: URL
     let folderURL: URL
     let folderName: String
     let contentType: MinecraftContentType
+    let sourceEdition: MinecraftEdition
+    let contentKind: MinecraftContentKind
+    let platformType: MinecraftPlatformContentType
     let collectionRootURL: URL
     var displayName: String
     var iconURL: URL?
@@ -125,11 +312,23 @@ nonisolated struct MinecraftContentItem: Identifiable, Hashable, Sendable, Codab
     var lastPlayedDate: Date?
     var modifiedDate: Date?
     var sizeBytes: Int64?
-    var packUUID: String?
-    var packVersion: String?
-    var packMetadataDetails: PackMetadataDetails?
-    var packReferences: [ContentPackReference]
-    var worldMetadata: WorldMetadata?
+    var capabilities: ContentItemCapabilities
+    var platformMetadata: PlatformContentMetadata
+    var packUUID: String? {
+        didSet { syncBedrockMetadataFromCompatibilityFields() }
+    }
+    var packVersion: String? {
+        didSet { syncBedrockMetadataFromCompatibilityFields() }
+    }
+    var packMetadataDetails: PackMetadataDetails? {
+        didSet { syncBedrockMetadataFromCompatibilityFields() }
+    }
+    var packReferences: [ContentPackReference] {
+        didSet { syncBedrockMetadataFromCompatibilityFields() }
+    }
+    var worldMetadata: WorldMetadata? {
+        didSet { syncBedrockMetadataFromCompatibilityFields() }
+    }
     var metadataLoaded: Bool
     var previewLoaded: Bool
     var sizeLoaded: Bool
@@ -138,6 +337,9 @@ nonisolated struct MinecraftContentItem: Identifiable, Hashable, Sendable, Codab
         folderURL: URL,
         folderName: String,
         contentType: MinecraftContentType,
+        sourceEdition: MinecraftEdition? = nil,
+        contentKind: MinecraftContentKind? = nil,
+        platformType: MinecraftPlatformContentType? = nil,
         collectionRootURL: URL,
         displayName: String? = nil,
         iconURL: URL? = nil,
@@ -145,6 +347,8 @@ nonisolated struct MinecraftContentItem: Identifiable, Hashable, Sendable, Codab
         lastPlayedDate: Date? = nil,
         modifiedDate: Date? = nil,
         sizeBytes: Int64? = nil,
+        capabilities: ContentItemCapabilities? = nil,
+        platformMetadata: PlatformContentMetadata? = nil,
         packUUID: String? = nil,
         packVersion: String? = nil,
         packMetadataDetails: PackMetadataDetails? = nil,
@@ -158,6 +362,9 @@ nonisolated struct MinecraftContentItem: Identifiable, Hashable, Sendable, Codab
         self.folderURL = folderURL
         self.folderName = folderName
         self.contentType = contentType
+        self.sourceEdition = sourceEdition ?? .bedrock
+        self.contentKind = contentKind ?? contentType.kind
+        self.platformType = platformType ?? .bedrock(contentType)
         self.collectionRootURL = collectionRootURL
         self.displayName = displayName ?? folderName
         self.iconURL = iconURL
@@ -165,6 +372,16 @@ nonisolated struct MinecraftContentItem: Identifiable, Hashable, Sendable, Codab
         self.lastPlayedDate = lastPlayedDate
         self.modifiedDate = modifiedDate
         self.sizeBytes = sizeBytes
+        self.capabilities = capabilities ?? .bedrock(contentType: contentType)
+        self.platformMetadata = platformMetadata ?? .bedrock(
+            BedrockContentMetadata(
+                world: worldMetadata,
+                packUUID: packUUID,
+                packVersion: packVersion,
+                packDetails: packMetadataDetails,
+                packReferences: packReferences
+            )
+        )
         self.packUUID = packUUID?.lowercased()
         self.packVersion = packVersion
         self.packMetadataDetails = packMetadataDetails
@@ -173,6 +390,22 @@ nonisolated struct MinecraftContentItem: Identifiable, Hashable, Sendable, Codab
         self.metadataLoaded = metadataLoaded
         self.previewLoaded = previewLoaded
         self.sizeLoaded = sizeLoaded
+    }
+
+    nonisolated mutating private func syncBedrockMetadataFromCompatibilityFields() {
+        guard sourceEdition == .bedrock else {
+            return
+        }
+
+        platformMetadata = .bedrock(
+            BedrockContentMetadata(
+                world: worldMetadata,
+                packUUID: packUUID,
+                packVersion: packVersion,
+                packDetails: packMetadataDetails,
+                packReferences: packReferences
+            )
+        )
     }
 
     nonisolated var folderID: String {

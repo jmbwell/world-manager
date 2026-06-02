@@ -16,7 +16,7 @@ struct ContentItemActionService: Sendable {
     }
 
     nonisolated func archiveContentType(for item: MinecraftContentItem) -> UTType {
-        UTType(filenameExtension: item.contentType.archiveExtension) ?? .data
+        UTType(filenameExtension: item.capabilities.portablePackageExtension ?? item.contentType.archiveExtension) ?? .data
     }
 
     nonisolated func persistExternalRepresentation(

@@ -3,7 +3,9 @@
 
 import Foundation
 
-struct LocalFolderSourceAccess: SourceAccessMethod {
+typealias LocalFolderSourceAccess = BedrockLocalFolderSourceAccess
+
+struct BedrockLocalFolderSourceAccess: SourceAccessMethod {
     nonisolated let accessorIdentifier: SourceAccessorIdentifier = "local-folder"
 
     nonisolated init() {}
@@ -18,9 +20,15 @@ struct LocalFolderSourceAccess: SourceAccessMethod {
     }
 
     nonisolated func availability(for source: MinecraftSource) async -> SourceAvailability {
+        await accessStatus(for: source).availability
+    }
+
+    nonisolated func accessStatus(for source: MinecraftSource) async -> SourceAccessStatus {
         let candidateURL: URL
+        let mode: SourceAccessMode
         if case .localFolder(let bookmarkData) = source.origin,
            let bookmarkData {
+            mode = .securityScopedLocalFolder
             var isStale = false
             if let resolvedURL = try? URL(
                 resolvingBookmarkData: bookmarkData,
@@ -33,10 +41,19 @@ struct LocalFolderSourceAccess: SourceAccessMethod {
                 candidateURL = source.folderURL
             }
         } else {
+            mode = .localFileSystem
             candidateURL = source.folderURL
         }
 
-        return FileManager.default.fileExists(atPath: candidateURL.path) ? .available : .unavailable
+        let availability: SourceAvailability = FileManager.default.fileExists(atPath: candidateURL.path) ? .available : .unavailable
+        return SourceAccessStatus(
+            availability: availability,
+            mode: mode,
+            displayName: source.displayName,
+            iconSystemName: "folder",
+            statusText: availability == .available ? nil : "Folder unavailable",
+            warningText: nil
+        )
     }
 
     nonisolated func capabilities(for source: MinecraftSource) async -> SourceCapabilities {
@@ -189,5 +206,119 @@ struct LocalFolderSourceAccess: SourceAccessMethod {
         let relativePath = item.folderURL.path.replacingOccurrences(of: sourceRootURL.path + "/", with: "")
         let components = relativePath.split(separator: "/")
         return components.first.map(String.init)
+    }
+}
+
+struct JavaLocalFolderSourceAccess: SourceAccessMethod {
+    nonisolated let accessorIdentifier: SourceAccessorIdentifier = "java-local-folder"
+
+    nonisolated init() {}
+
+    nonisolated func accessDescriptor(for source: MinecraftSource) -> SourceAccessDescriptor {
+        _ = source
+        return SourceAccessDescriptor(
+            accessorIdentifier: accessorIdentifier,
+            kind: .localFolder,
+            refreshStrategy: .eagerFullScan
+        )
+    }
+
+    nonisolated func accessStatus(for source: MinecraftSource) async -> SourceAccessStatus {
+        let candidateURL: URL
+        let mode: SourceAccessMode
+        if case .javaLocalFolder(let bookmarkData) = source.origin,
+           let bookmarkData {
+            mode = .securityScopedLocalFolder
+            var isStale = false
+            if let resolvedURL = try? URL(
+                resolvingBookmarkData: bookmarkData,
+                options: [.withSecurityScope],
+                relativeTo: nil,
+                bookmarkDataIsStale: &isStale
+            ) {
+                candidateURL = resolvedURL.standardizedFileURL
+            } else {
+                candidateURL = source.folderURL
+            }
+        } else {
+            mode = .localFileSystem
+            candidateURL = source.folderURL
+        }
+
+        let availability: SourceAvailability = FileManager.default.fileExists(atPath: candidateURL.path) ? .available : .unavailable
+        return SourceAccessStatus(
+            availability: availability,
+            mode: mode,
+            displayName: source.displayName,
+            iconSystemName: "folder",
+            statusText: availability == .available ? nil : "Folder unavailable",
+            warningText: nil
+        )
+    }
+
+    nonisolated func capabilities(for source: MinecraftSource) async -> SourceCapabilities {
+        _ = source
+        return .localFolder
+    }
+
+    nonisolated func discoverItems(
+        for source: MinecraftSource,
+        mode: SourceDiscoveryMode,
+        onDiscovered: @escaping @Sendable (MinecraftContentItem) -> Void
+    ) async throws {
+        _ = mode
+        guard case .javaLocalFolder(let bookmarkData) = source.origin else {
+            throw SourceAccessError.accessFailed(
+                reason: "No Java local-folder access method is configured for this source type."
+            )
+        }
+
+        let resolvedURL: URL
+        if let bookmarkData {
+            var isStale = false
+            guard let bookmarkURL = try? URL(
+                resolvingBookmarkData: bookmarkData,
+                options: [.withSecurityScope],
+                relativeTo: nil,
+                bookmarkDataIsStale: &isStale
+            ) else {
+                throw SourceAccessError.accessFailed(
+                    reason: "The saved folder bookmark could not be resolved."
+                )
+            }
+
+            resolvedURL = bookmarkURL.standardizedFileURL
+        } else {
+            resolvedURL = source.folderURL
+        }
+
+        let accessedSecurityScope = resolvedURL.startAccessingSecurityScopedResource()
+        defer {
+            if accessedSecurityScope {
+                resolvedURL.stopAccessingSecurityScopedResource()
+            }
+        }
+
+        _ = try JavaContentScanner.discoverItems(in: resolvedURL, onDiscovered: onDiscovered)
+    }
+
+    nonisolated func enrich(_ item: MinecraftContentItem, for source: MinecraftSource) async -> MinecraftContentItem {
+        _ = source
+        return JavaContentScanner.enrich(item: item)
+    }
+
+    nonisolated func loadSize(for item: MinecraftContentItem, in source: MinecraftSource) async -> MinecraftContentItem {
+        _ = source
+        return JavaContentScanner.loadSize(for: item)
+    }
+
+    nonisolated func listItemContents(for item: MinecraftContentItem, in source: MinecraftSource) async throws -> [DirectoryEntry] {
+        _ = source
+        return try await BedrockLocalFolderSourceAccess().listItemContents(for: item, in: source)
+    }
+
+    nonisolated func materializeItem(for item: MinecraftContentItem, in source: MinecraftSource) async throws -> URL {
+        _ = source
+        return item.folderURL
     }
 }

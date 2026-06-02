@@ -331,16 +331,27 @@ struct ContentView: View {
     }
 
     private func sidebarFilters(for source: MinecraftSource) -> [SidebarFilter] {
-        return MinecraftContentType.allCases.compactMap { contentType in
-            guard let count = source.displayItemCountsByType[contentType], count > 0 else {
+        let orderedKinds: [MinecraftContentKind] = [
+            .world,
+            .behaviorPack,
+            .resourcePack,
+            .dataPack,
+            .skinPack,
+            .worldTemplate,
+            .shaderPack,
+            .mod
+        ]
+
+        return orderedKinds.compactMap { contentKind in
+            guard let count = source.displayItemCountsByKind[contentKind], count > 0 else {
                 return nil
             }
 
             return SidebarFilter(
-                title: sidebarTitle(for: contentType),
-                iconName: sidebarIcon(for: contentType),
+                title: sidebarTitle(for: contentKind),
+                iconName: sidebarIcon(for: contentKind),
                 count: count,
-                selection: .contentType(sourceID: source.id, contentType: contentType)
+                selection: .contentKind(sourceID: source.id, contentKind: contentKind)
             )
         }
     }
@@ -372,6 +383,27 @@ struct ContentView: View {
         }
     }
 
+    private func sidebarTitle(for contentKind: MinecraftContentKind) -> String {
+        switch contentKind {
+        case .world:
+            return "Worlds"
+        case .behaviorPack:
+            return "Behavior Packs"
+        case .resourcePack:
+            return "Resource Packs"
+        case .dataPack:
+            return "Data Packs"
+        case .skinPack:
+            return "Skin Packs"
+        case .worldTemplate:
+            return "World Templates"
+        case .shaderPack:
+            return "Shader Packs"
+        case .mod:
+            return "Mods"
+        }
+    }
+
     private func sidebarIcon(for contentType: MinecraftContentType) -> String {
         switch contentType {
         case .world:
@@ -384,6 +416,27 @@ struct ContentView: View {
             return "person.crop.square"
         case .worldTemplate:
             return "doc.on.doc"
+        }
+    }
+
+    private func sidebarIcon(for contentKind: MinecraftContentKind) -> String {
+        switch contentKind {
+        case .world:
+            return "globe.europe.africa"
+        case .behaviorPack:
+            return "shippingbox"
+        case .resourcePack:
+            return "paintpalette"
+        case .dataPack:
+            return "curlybraces.square"
+        case .skinPack:
+            return "person.crop.square"
+        case .worldTemplate:
+            return "map"
+        case .shaderPack:
+            return "camera.filters"
+        case .mod:
+            return "hammer"
         }
     }
 
@@ -767,7 +820,7 @@ struct ContentView: View {
     }
 
     private func archiveType(for item: MinecraftContentItem) -> UTType {
-        UTType(filenameExtension: item.contentType.archiveExtension) ?? .data
+        itemActionService.archiveContentType(for: item)
     }
 
     private func dragProvider(for item: MinecraftContentItem) -> NSItemProvider {

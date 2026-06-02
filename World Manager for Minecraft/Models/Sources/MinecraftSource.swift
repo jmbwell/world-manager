@@ -6,14 +6,18 @@ import Foundation
 nonisolated struct MinecraftSource: Identifiable, Hashable, Sendable {
     let id: URL
     let folderURL: URL
+    var edition: MinecraftEdition
+    var providerID: PlatformProviderID
     var origin: MinecraftSourceOrigin
     var accessDescriptor: SourceAccessDescriptor
+    var accessStatus: SourceAccessStatus
     var availability: SourceAvailability
     var capabilities: SourceCapabilities
     var bookmarkData: Data?
     var displayName: String
     var displayItems: [MinecraftContentItem]
     var displayItemCountsByType: [MinecraftContentType: Int]
+    var displayItemCountsByKind: [MinecraftContentKind: Int]
     var rawItems: [MinecraftContentItem]
     var logicalPacks: [LogicalPack]
     var logicalWorlds: [LogicalWorld]
@@ -47,18 +51,22 @@ nonisolated struct MinecraftSource: Identifiable, Hashable, Sendable {
         let resolvedOrigin = origin ?? .localFolder(bookmarkData: bookmarkData)
         self.id = normalizedSourceURL(sourceID ?? normalizedFolderURL)
         self.folderURL = normalizedFolderURL
+        self.edition = resolvedOrigin.defaultEdition
+        self.providerID = resolvedOrigin.defaultAccessorIdentifier
         self.origin = resolvedOrigin
         self.accessDescriptor = accessDescriptor ?? SourceAccessDescriptor(
             accessorIdentifier: resolvedOrigin.defaultAccessorIdentifier,
             kind: resolvedOrigin.kind,
             refreshStrategy: resolvedOrigin.defaultRefreshStrategy
         )
+        self.accessStatus = resolvedOrigin.defaultAccessStatus(displayName: normalizedFolderURL.lastPathComponent)
         self.availability = availability
         self.capabilities = resolvedOrigin.defaultCapabilities
         self.bookmarkData = bookmarkData
         self.displayName = normalizedFolderURL.lastPathComponent
         self.displayItems = []
         self.displayItemCountsByType = [:]
+        self.displayItemCountsByKind = [:]
         self.rawItems = []
         self.logicalPacks = []
         self.logicalWorlds = []
@@ -117,6 +125,11 @@ nonisolated struct MinecraftSource: Identifiable, Hashable, Sendable {
                 return []
             }
             return items(for: contentType)
+        case .contentKind(let sourceID, let contentKind):
+            guard sourceID == id else {
+                return []
+            }
+            return displayItems.filter { $0.contentKind == contentKind }
         }
     }
 

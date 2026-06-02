@@ -11,6 +11,7 @@ struct SourceContentIndex {
     let worldPackRelationships: [WorldPackRelationship]
     let displayItems: [MinecraftContentItem]
     let displayItemCountsByType: [MinecraftContentType: Int]
+    let displayItemCountsByKind: [MinecraftContentKind: Int]
 }
 
 enum SourceContentIndexer {
@@ -171,7 +172,8 @@ enum SourceContentIndexer {
             packInstances: sortedPackInstances,
             worldPackRelationships: worldRelationships,
             displayItems: displayItems,
-            displayItemCountsByType: displayItemCounts(for: displayItems)
+            displayItemCountsByType: displayItemCounts(for: displayItems),
+            displayItemCountsByKind: displayItemKindCounts(for: displayItems)
         )
     }
 
@@ -216,6 +218,12 @@ enum SourceContentIndexer {
     private static func displayItemCounts(for items: [MinecraftContentItem]) -> [MinecraftContentType: Int] {
         items.reduce(into: [MinecraftContentType: Int]()) { counts, item in
             counts[item.contentType, default: 0] += 1
+        }
+    }
+
+    private static func displayItemKindCounts(for items: [MinecraftContentItem]) -> [MinecraftContentKind: Int] {
+        items.reduce(into: [MinecraftContentKind: Int]()) { counts, item in
+            counts[item.contentKind, default: 0] += 1
         }
     }
 

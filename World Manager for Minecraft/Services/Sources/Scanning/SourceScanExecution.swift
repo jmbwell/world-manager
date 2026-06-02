@@ -50,9 +50,10 @@ enum SourceScanExecutor {
         host.updateSource(sourceID) { source in
             source.accessDescriptor = sourceAccessMethod.accessDescriptor(for: source)
         }
-        let currentAvailability = await sourceAccessMethod.availability(for: source)
+        let currentAccessStatus = await sourceAccessMethod.accessStatus(for: source)
         host.updateSource(sourceID) { source in
-            source.availability = currentAvailability
+            source.accessStatus = currentAccessStatus
+            source.availability = currentAccessStatus.availability
         }
 
         let scanContextURL = source.folderURL
@@ -89,22 +90,7 @@ enum SourceScanExecutor {
                     }
                 }
             }
-            let discoveryStream = AsyncThrowingStream<MinecraftContentItem, Error> { continuation in
-                let discoveryTask = Task.detached(priority: .userInitiated) {
-                    do {
-                        try await sourceAccessMethod.discoverItems(for: source, mode: mode) { item in
-                            continuation.yield(item)
-                        }
-                        continuation.finish()
-                    } catch {
-                        continuation.finish(throwing: error)
-                    }
-                }
-
-                continuation.onTermination = { @Sendable _ in
-                    discoveryTask.cancel()
-                }
-            }
+            let providerEventStream = sourceAccessMethod.scanEvents(for: source, mode: mode)
 
             let previousItemsByID = Dictionary(uniqueKeysWithValues: previousSource.rawItems.map { ($0.id, $0) })
             let previousSnapshotByItemID = Dictionary(
@@ -116,35 +102,61 @@ enum SourceScanExecutor {
             var discoveredCollectionNames = Set<String>()
             let discoveryStartTime = Date()
 
-            for try await item in discoveryStream {
+            for try await event in providerEventStream {
                 guard !Task.isCancelled else {
                     break
                 }
 
-                discoveredCount += 1
-                discoveredCollectionNames.insert(item.collectionRootURL.lastPathComponent)
-                let itemForIndex: MinecraftContentItem
-                if shouldReconcileFromCache,
-                   let cachedItem = previousItemsByID[item.id],
-                   SourceScanPolicy.shouldReuseCachedItem(
-                    cachedItem,
-                    forDiscoveredItem: item,
-                    source: source,
-                    previousSnapshot: previousSnapshotByItemID[item.id]
-                   ) {
-                    itemForIndex = cachedItem
-                } else {
-                    itemForIndex = item
-                }
+                switch event {
+                case .accessStatusChanged(let accessStatus):
+                    host.updateSource(sourceID) { source in
+                        source.accessStatus = accessStatus
+                        source.availability = accessStatus.availability
+                    }
+                    continue
+                case .stageUpdated(let stage):
+                    host.updateSource(sourceID) { source in
+                        source.scanStatus = stage.detail ?? stage.title
+                    }
+                    continue
+                case .warning(let warning):
+                    host.updateSource(sourceID) { source in
+                        source.scanDiagnostic = warning.detail ?? warning.message
+                    }
+                    continue
+                case .inspected(let inspectedItem):
+                    if let snapshot = await index.applyEnrichedItem(inspectedItem) {
+                        await MainActor.run {
+                            host.applySnapshot(snapshot, to: sourceID)
+                        }
+                    }
+                    continue
+                case .discovered(let item):
+                    discoveredCount += 1
+                    discoveredCollectionNames.insert(item.collectionRootURL.lastPathComponent)
+                    let itemForIndex: MinecraftContentItem
+                    if shouldReconcileFromCache,
+                       let cachedItem = previousItemsByID[item.id],
+                       SourceScanPolicy.shouldReuseCachedItem(
+                        cachedItem,
+                        forDiscoveredItem: item,
+                        source: source,
+                        previousSnapshot: previousSnapshotByItemID[item.id]
+                       ) {
+                        itemForIndex = cachedItem
+                    } else {
+                        itemForIndex = item
+                    }
 
-                if let snapshot = await index.addDiscoveredItem(
-                    itemForIndex,
-                    discoveredCount: discoveredCount
-                ) {
-                    host.applySnapshot(snapshot, to: sourceID)
-                }
-                if itemForIndex.id == item.id, itemForIndex.metadataLoaded == false {
-                    await enrichmentQueue.enqueue(item)
+                    if let snapshot = await index.addDiscoveredItem(
+                        itemForIndex,
+                        discoveredCount: discoveredCount
+                    ) {
+                        host.applySnapshot(snapshot, to: sourceID)
+                    }
+                    if itemForIndex.id == item.id, itemForIndex.metadataLoaded == false {
+                        await enrichmentQueue.enqueue(item)
+                    }
                 }
             }
 
@@ -464,6 +476,7 @@ private actor EnrichmentWorkQueue {
 struct SourceIndexSnapshot {
     let displayItems: [MinecraftContentItem]
     let displayItemCountsByType: [MinecraftContentType: Int]
+    let displayItemCountsByKind: [MinecraftContentKind: Int]
     let rawItems: [MinecraftContentItem]
     let logicalPacks: [LogicalPack]
     let logicalWorlds: [LogicalWorld]
@@ -631,6 +644,9 @@ private actor SourceIndexActor {
         let displayItemCountsByType = dedupedDisplayItems.reduce(into: [MinecraftContentType: Int]()) { counts, item in
             counts[item.contentType, default: 0] += 1
         }
+        let displayItemCountsByKind = dedupedDisplayItems.reduce(into: [MinecraftContentKind: Int]()) { counts, item in
+            counts[item.contentKind, default: 0] += 1
+        }
         let metadataFraction = progressFraction(completed: indexedDetailCount, total: indexedItemCount)
         let previewFraction = progressFraction(completed: previewLoadedCount, total: indexedItemCount)
         let sizeFraction = progressFraction(completed: sizeLoadedCount, total: indexedItemCount)
@@ -652,6 +668,7 @@ private actor SourceIndexActor {
             return SourceIndexSnapshot(
                 displayItems: dedupedDisplayItems,
                 displayItemCountsByType: displayItemCountsByType,
+                displayItemCountsByKind: displayItemCountsByKind,
                 rawItems: rawItems,
                 logicalPacks: logicalPacks,
                 logicalWorlds: [],
@@ -680,6 +697,7 @@ private actor SourceIndexActor {
             return SourceIndexSnapshot(
                 displayItems: dedupedDisplayItems,
                 displayItemCountsByType: displayItemCountsByType,
+                displayItemCountsByKind: displayItemCountsByKind,
                 rawItems: rawItems,
                 logicalPacks: logicalPacks,
                 logicalWorlds: [],
@@ -712,6 +730,7 @@ private actor SourceIndexActor {
             return SourceIndexSnapshot(
                 displayItems: dedupedDisplayItems,
                 displayItemCountsByType: displayItemCountsByType,
+                displayItemCountsByKind: displayItemCountsByKind,
                 rawItems: rawItems,
                 logicalPacks: logicalPacks,
                 logicalWorlds: [],
@@ -824,6 +843,7 @@ private actor SourceIndexActor {
         return SourceIndexSnapshot(
             displayItems: dedupedDisplayItems,
             displayItemCountsByType: displayItemCountsByType,
+            displayItemCountsByKind: displayItemCountsByKind,
             rawItems: rawItems,
             logicalPacks: logicalPacks,
             logicalWorlds: logicalWorlds,

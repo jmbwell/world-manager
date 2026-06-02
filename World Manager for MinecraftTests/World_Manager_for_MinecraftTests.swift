@@ -13,6 +13,9 @@ struct World_Manager_for_MinecraftTests {
     @Test func sourceOriginsExposeOutboundCapabilities() async throws {
         let localSource = MinecraftSource(folderURL: URL(fileURLWithPath: "/tmp/local"))
         #expect(localSource.capabilities == .localFolder)
+        #expect(localSource.edition == .bedrock)
+        #expect(localSource.providerID == LocalFolderSourceAccess().accessorIdentifier)
+        #expect(localSource.accessStatus.mode == .localFileSystem)
 
         let device = ConnectedDevice(
             udid: "device",
@@ -35,6 +38,172 @@ struct World_Manager_for_MinecraftTests {
         )
 
         #expect(deviceSource.capabilities == .connectedDevice)
+        #expect(deviceSource.edition == .bedrock)
+        #expect(deviceSource.providerID == AppleMobileDeviceSourceAccess().accessorIdentifier)
+        #expect(deviceSource.accessStatus.mode == .usbDevice)
+    }
+
+    @Test func contentItemsExposeNeutralProviderSurface() async throws {
+        let rootURL = URL(fileURLWithPath: "/tmp/source")
+        let item = MinecraftContentItem(
+            folderURL: rootURL.appendingPathComponent("minecraftWorlds/WorldA", isDirectory: true),
+            folderName: "WorldA",
+            contentType: .world,
+            collectionRootURL: rootURL.appendingPathComponent("minecraftWorlds", isDirectory: true),
+            displayName: "World A",
+            packUUID: "ABC-123",
+            packVersion: "1.0.0"
+        )
+
+        #expect(item.sourceEdition == .bedrock)
+        #expect(item.contentKind == .world)
+        #expect(item.platformType == .bedrock(.world))
+        #expect(item.capabilities.portablePackageExtension == "mcworld")
+        if case .bedrock(let metadata) = item.platformMetadata {
+            #expect(metadata.packUUID == "abc-123")
+            #expect(metadata.packVersion == "1.0.0")
+        } else {
+            Issue.record("Expected Bedrock metadata")
+        }
+    }
+
+    @Test func bedrockCompatibilityFieldsSynchronizePlatformMetadata() async throws {
+        let rootURL = URL(fileURLWithPath: "/tmp/source")
+        var item = MinecraftContentItem(
+            folderURL: rootURL.appendingPathComponent("behavior_packs/PackA", isDirectory: true),
+            folderName: "PackA",
+            contentType: .behaviorPack,
+            collectionRootURL: rootURL.appendingPathComponent("behavior_packs", isDirectory: true)
+        )
+
+        item.packUUID = "PACK-A"
+        item.packVersion = "2.0.0"
+
+        if case .bedrock(let metadata) = item.platformMetadata {
+            #expect(metadata.packUUID == "pack-a")
+            #expect(metadata.packVersion == "2.0.0")
+        } else {
+            Issue.record("Expected Bedrock metadata")
+        }
+    }
+
+    @Test func localFolderAccessStreamsProviderEvents() async throws {
+        let fileManager = FileManager.default
+        let rootURL = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let itemURL = rootURL.appendingPathComponent("minecraftWorlds/WorldA", isDirectory: true)
+        defer { try? fileManager.removeItem(at: rootURL) }
+
+        try fileManager.createDirectory(at: itemURL, withIntermediateDirectories: true)
+        try "World A".write(
+            to: itemURL.appendingPathComponent("levelname.txt"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let source = MinecraftSource(folderURL: rootURL)
+        let access = LocalFolderSourceAccess()
+        var sawAccessStatus = false
+        var sawRunningStage = false
+        var sawFinishedStage = false
+        var discoveredItems: [MinecraftContentItem] = []
+
+        for try await event in access.scanEvents(for: source, mode: .fullScan) {
+            switch event {
+            case .accessStatusChanged(let status):
+                sawAccessStatus = true
+                #expect(status.availability == .available)
+                #expect(status.mode == .localFileSystem)
+            case .stageUpdated(let stage):
+                if stage.state == .running {
+                    sawRunningStage = true
+                }
+                if stage.state == .succeeded {
+                    sawFinishedStage = true
+                }
+            case .discovered(let item):
+                discoveredItems.append(item)
+            case .inspected, .warning:
+                break
+            }
+        }
+
+        #expect(sawAccessStatus)
+        #expect(sawRunningStage)
+        #expect(sawFinishedStage)
+        #expect(discoveredItems.map(\.displayName).contains("WorldA"))
+    }
+
+    @Test func javaLocalFolderSourceUsesJavaProviderDefaults() async throws {
+        let source = MinecraftSource(
+            folderURL: URL(fileURLWithPath: "/tmp/java"),
+            origin: .javaLocalFolder(bookmarkData: nil)
+        )
+
+        #expect(source.edition == .java)
+        #expect(source.providerID == JavaLocalFolderSourceAccess().accessorIdentifier)
+        #expect(source.accessDescriptor.accessorIdentifier == JavaLocalFolderSourceAccess().accessorIdentifier)
+        #expect(source.accessStatus.mode == .localFileSystem)
+    }
+
+    @Test func javaLocalFolderAccessDiscoversWorldsAndResourcePacks() async throws {
+        let fileManager = FileManager.default
+        let rootURL = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let worldURL = rootURL.appendingPathComponent("saves/JavaWorld", isDirectory: true)
+        let packURL = rootURL.appendingPathComponent("resourcepacks/JavaPack", isDirectory: true)
+        defer { try? fileManager.removeItem(at: rootURL) }
+
+        try fileManager.createDirectory(at: worldURL, withIntermediateDirectories: true)
+        try Data().write(to: worldURL.appendingPathComponent("level.dat"))
+        try "Displayed Java World".write(
+            to: worldURL.appendingPathComponent("levelname.txt"),
+            atomically: true,
+            encoding: .utf8
+        )
+        try fileManager.createDirectory(at: packURL, withIntermediateDirectories: true)
+        try "{}".write(
+            to: packURL.appendingPathComponent("pack.mcmeta"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let source = MinecraftSource(
+            folderURL: rootURL,
+            origin: .javaLocalFolder(bookmarkData: nil)
+        )
+        let access = SourceAccessCoordinator(
+            accessMethods: [
+                LocalFolderSourceAccess(),
+                JavaLocalFolderSourceAccess()
+            ]
+        )
+        var discoveredItems: [MinecraftContentItem] = []
+
+        for try await event in access.scanEvents(for: source, mode: .fullScan) {
+            if case .discovered(let item) = event {
+                discoveredItems.append(item)
+            }
+        }
+        var enrichedItems: [MinecraftContentItem] = []
+        for item in discoveredItems {
+            enrichedItems.append(await access.enrich(item, for: source))
+        }
+
+        #expect(discoveredItems.count == 2)
+        #expect(discoveredItems.allSatisfy { $0.sourceEdition == .java })
+        #expect(discoveredItems.contains { $0.platformType == .java(.world) && $0.capabilities.portablePackageExtension == "zip" })
+        #expect(discoveredItems.contains { $0.platformType == .java(.resourcePack) && $0.contentType == .resourcePack })
+        #expect(enrichedItems.contains { $0.displayName == "Displayed Java World" })
+
+        var indexedSource = source
+        indexedSource.rawItems = enrichedItems
+        let index = SourceContentIndexer.buildIndex(for: indexedSource)
+        #expect(index.displayItemCountsByKind[.world] == 1)
+        #expect(index.displayItemCountsByKind[.resourcePack] == 1)
+
+        indexedSource.rawItems = enrichedItems
+        let snapshot = SourceScanPolicy.buildSnapshot(for: indexedSource, scanRootURL: rootURL)
+        #expect(snapshot.collectionSnapshots.map(\.folderName).contains("saves"))
+        #expect(snapshot.collectionSnapshots.map(\.folderName).contains("resourcepacks"))
     }
 
     @Test func libraryExternalRepresentationUsesPortablePackageByDefault() async throws {

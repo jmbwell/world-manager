@@ -7,10 +7,11 @@ enum SidebarSelection: Hashable, Sendable {
     case source(sourceID: URL)
     case allContent(sourceID: URL)
     case contentType(sourceID: URL, contentType: MinecraftContentType)
+    case contentKind(sourceID: URL, contentKind: MinecraftContentKind)
 
     var sourceID: URL {
         switch self {
-        case .source(let sourceID), .allContent(let sourceID), .contentType(let sourceID, _):
+        case .source(let sourceID), .allContent(let sourceID), .contentType(let sourceID, _), .contentKind(let sourceID, _):
             return sourceID
         }
     }
@@ -197,7 +198,7 @@ private struct SourceHeaderRow: View {
 
     private var headerSymbolName: String {
         switch source.origin {
-        case .localFolder:
+        case .localFolder, .javaLocalFolder:
             return "folder"
         case .connectedDevice:
             return "iphone.gen3"

@@ -46,7 +46,7 @@ enum ContentPackageExporter {
     }
 
     nonisolated static func suggestedFilename(for item: MinecraftContentItem) -> String {
-        "\(suggestedBaseFilename(for: item)).\(item.contentType.archiveExtension)"
+        "\(suggestedBaseFilename(for: item)).\(archiveExtension(for: item))"
     }
 
     nonisolated static func finalArchiveURL(for item: MinecraftContentItem, destinationURL: URL) -> URL {
@@ -209,7 +209,7 @@ enum ContentPackageExporter {
 
         return requestDirectoryURL
             .appendingPathComponent(suggestedBaseFilename(for: item))
-            .appendingPathExtension(item.contentType.archiveExtension)
+            .appendingPathExtension(archiveExtension(for: item))
     }
 
     nonisolated private static func shareCacheKey(for item: MinecraftContentItem) -> String {
@@ -271,13 +271,17 @@ enum ContentPackageExporter {
 
     nonisolated private static func normalizedArchiveURL(for item: MinecraftContentItem, destinationURL: URL) -> URL {
         let normalizedDestinationURL = destinationURL.standardizedFileURL
-        let requiredExtension = item.contentType.archiveExtension
+        let requiredExtension = archiveExtension(for: item)
 
         if normalizedDestinationURL.pathExtension.lowercased() == requiredExtension {
             return normalizedDestinationURL
         }
 
         return normalizedDestinationURL.appendingPathExtension(requiredExtension)
+    }
+
+    nonisolated private static func archiveExtension(for item: MinecraftContentItem) -> String {
+        item.capabilities.portablePackageExtension ?? item.contentType.archiveExtension
     }
 
     nonisolated private static func uniqueArchiveURL(

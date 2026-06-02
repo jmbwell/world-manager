@@ -6,9 +6,9 @@ import Foundation
 enum SourceScanPolicy {
     static func initialStatus(for source: MinecraftSource, mode: SourceDiscoveryMode) -> String {
         switch (source.origin, mode) {
-        case (.localFolder, .fullScan):
+        case (.localFolder, .fullScan), (.javaLocalFolder, .fullScan):
             return "Preparing folder scan..."
-        case (.localFolder, .reconcile):
+        case (.localFolder, .reconcile), (.javaLocalFolder, .reconcile):
             return "Preparing cached library refresh..."
         case (.connectedDevice, .fullScan):
             return "Connecting to device and discovering Minecraft items..."
@@ -19,9 +19,9 @@ enum SourceScanPolicy {
 
     static func scanningLibraryStatus(for source: MinecraftSource, mode: SourceDiscoveryMode) -> String {
         switch (source.origin, mode) {
-        case (.localFolder, .fullScan):
+        case (.localFolder, .fullScan), (.javaLocalFolder, .fullScan):
             return "Scanning Minecraft library..."
-        case (.localFolder, .reconcile):
+        case (.localFolder, .reconcile), (.javaLocalFolder, .reconcile):
             return "Reconciling cached library..."
         case (.connectedDevice, .fullScan):
             return "Scanning Minecraft library on device..."
@@ -32,7 +32,7 @@ enum SourceScanPolicy {
 
     static func performanceContext(for source: MinecraftSource) -> String {
         switch source.origin {
-        case .localFolder:
+        case .localFolder, .javaLocalFolder:
             return "source=\(source.displayName) kind=local"
         case .connectedDevice(let device, let container):
             let transport = device.connection == .usb ? "usb" : "network"
@@ -121,7 +121,13 @@ enum SourceScanPolicy {
     }
 
     static func buildSnapshot(for source: MinecraftSource, scanRootURL: URL) -> SourceSnapshot {
-        let collectionSnapshots = WorldScanner.collectionSnapshots(in: scanRootURL)
+        let collectionSnapshots: [CollectionSnapshot]
+        switch source.edition {
+        case .bedrock:
+            collectionSnapshots = WorldScanner.collectionSnapshots(in: scanRootURL)
+        case .java:
+            collectionSnapshots = JavaContentScanner.collectionSnapshots(in: scanRootURL)
+        }
 
         let itemSnapshots = source.rawItems.map { item in
             ItemSnapshot(
@@ -153,6 +159,7 @@ enum SourceScanRecovery {
     static func restoreIndexedState(from previousSource: MinecraftSource, into source: inout MinecraftSource) {
         source.displayItems = previousSource.displayItems
         source.displayItemCountsByType = previousSource.displayItemCountsByType
+        source.displayItemCountsByKind = previousSource.displayItemCountsByKind
         source.rawItems = previousSource.rawItems
         source.logicalPacks = previousSource.logicalPacks
         source.logicalWorlds = previousSource.logicalWorlds

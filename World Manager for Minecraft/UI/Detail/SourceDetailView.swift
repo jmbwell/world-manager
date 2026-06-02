@@ -183,7 +183,7 @@ struct SourceDetailView: View {
         }
 
         switch source.origin {
-        case .localFolder:
+        case .localFolder, .javaLocalFolder:
             break
         case .connectedDevice(let device, let container):
             rows.append(("Connection", device.connection == .network ? "Network" : "USB"))
@@ -209,7 +209,7 @@ struct SourceDetailView: View {
 
     private var locationRows: [(String, String)] {
         switch source.origin {
-        case .localFolder:
+        case .localFolder, .javaLocalFolder:
             return [("Filesystem Path", source.folderURL.path)]
         case .connectedDevice(_, let container):
             var rows: [(String, String)] = [
@@ -224,7 +224,7 @@ struct SourceDetailView: View {
 
     private var technicalRows: [(String, String)] {
         switch source.origin {
-        case .localFolder:
+        case .localFolder, .javaLocalFolder:
             return []
         case .connectedDevice(let device, let container):
             var rows: [(String, String)] = [
@@ -244,6 +244,8 @@ struct SourceDetailView: View {
         switch source.origin {
         case .localFolder:
             return "Local Folder"
+        case .javaLocalFolder:
+            return "Java Local Folder"
         case .connectedDevice:
             return "Connected Device"
         }

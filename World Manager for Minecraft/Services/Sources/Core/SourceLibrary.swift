@@ -147,6 +147,7 @@ final class SourceLibrary: ObservableObject, SourceScanSessionHosting, SourcePer
                     source.bookmarkData = bookmarkData
                 }
                 source.accessDescriptor = sourceAccessMethod.accessDescriptor(for: source)
+                source.providerID = source.accessDescriptor.accessorIdentifier
                 source.capabilities = source.origin.defaultCapabilities
             }
             startScan(for: normalizedURL, mode: .fullScan)
@@ -171,6 +172,9 @@ final class SourceLibrary: ObservableObject, SourceScanSessionHosting, SourcePer
             updateSource(source.id) { existingSource in
                 existingSource.origin = source.origin
                 existingSource.accessDescriptor = source.accessDescriptor
+                existingSource.providerID = source.accessDescriptor.accessorIdentifier
+                existingSource.edition = source.origin.defaultEdition
+                existingSource.accessStatus = source.origin.defaultAccessStatus(displayName: source.displayName)
                 existingSource.availability = source.availability
                 existingSource.capabilities = source.capabilities
                 if existingSource.bookmarkData == nil {
@@ -183,6 +187,9 @@ final class SourceLibrary: ObservableObject, SourceScanSessionHosting, SourcePer
         } else {
             var resolvedSource = source
             resolvedSource.accessDescriptor = sourceAccessMethod.accessDescriptor(for: resolvedSource)
+            resolvedSource.providerID = resolvedSource.accessDescriptor.accessorIdentifier
+            resolvedSource.edition = resolvedSource.origin.defaultEdition
+            resolvedSource.accessStatus = resolvedSource.origin.defaultAccessStatus(displayName: resolvedSource.displayName)
             resolvedSource.capabilities = resolvedSource.origin.defaultCapabilities
             sources.append(resolvedSource)
             sources.sort { $0.displayName.localizedStandardCompare($1.displayName) == .orderedAscending }
@@ -320,6 +327,7 @@ final class SourceLibrary: ObservableObject, SourceScanSessionHosting, SourcePer
             source.worldPackRelationships = index.worldPackRelationships
             source.displayItems = index.displayItems
             source.displayItemCountsByType = index.displayItemCountsByType
+            source.displayItemCountsByKind = index.displayItemCountsByKind
         }
     }
 
@@ -362,6 +370,7 @@ final class SourceLibrary: ObservableObject, SourceScanSessionHosting, SourcePer
         updateSource(sourceID) { source in
             source.displayItems = snapshot.displayItems
             source.displayItemCountsByType = snapshot.displayItemCountsByType
+            source.displayItemCountsByKind = snapshot.displayItemCountsByKind
             source.rawItems = snapshot.rawItems
             source.logicalPacks = snapshot.logicalPacks
             source.logicalWorlds = snapshot.logicalWorlds

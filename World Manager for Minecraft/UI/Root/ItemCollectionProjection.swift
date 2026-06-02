@@ -81,6 +81,8 @@ enum ItemCollectionProjector {
             return "All Items"
         case .contentType(_, let contentType):
             return sidebarTitle(for: contentType)
+        case .contentKind(_, let contentKind):
+            return sidebarTitle(for: contentKind)
         }
     }
 
@@ -92,6 +94,8 @@ enum ItemCollectionProjector {
             return "Search All Items"
         case .some(.contentType(_, let contentType)):
             return "Search \(sidebarTitle(for: contentType))"
+        case .some(.contentKind(_, let contentKind)):
+            return "Search \(sidebarTitle(for: contentKind))"
         case .none:
             return "Search Library"
         }
@@ -105,6 +109,8 @@ enum ItemCollectionProjector {
             return "All"
         case .some(.contentType(_, let contentType)):
             return sidebarTitle(for: contentType)
+        case .some(.contentKind(_, let contentKind)):
+            return sidebarTitle(for: contentKind)
         case .none:
             return "Library"
         }
@@ -125,6 +131,17 @@ enum ItemCollectionProjector {
             case .behaviorPack, .resourcePack, .skinPack, .worldTemplate:
                 return scopedItemCount == 1 ? "pack" : "packs"
             }
+        case .contentKind(_, let contentKind):
+            switch contentKind {
+            case .world:
+                return scopedItemCount == 1 ? "world" : "worlds"
+            case .mod:
+                return scopedItemCount == 1 ? "mod" : "mods"
+            case .shaderPack:
+                return scopedItemCount == 1 ? "shader pack" : "shader packs"
+            case .behaviorPack, .resourcePack, .dataPack, .skinPack, .worldTemplate:
+                return scopedItemCount == 1 ? "pack" : "packs"
+            }
         }
     }
 
@@ -140,6 +157,27 @@ enum ItemCollectionProjector {
             return "Skin Packs"
         case .worldTemplate:
             return "World Templates"
+        }
+    }
+
+    nonisolated private static func sidebarTitle(for contentKind: MinecraftContentKind) -> String {
+        switch contentKind {
+        case .world:
+            return "Worlds"
+        case .behaviorPack:
+            return "Behavior Packs"
+        case .resourcePack:
+            return "Resource Packs"
+        case .dataPack:
+            return "Data Packs"
+        case .skinPack:
+            return "Skin Packs"
+        case .worldTemplate:
+            return "World Templates"
+        case .shaderPack:
+            return "Shader Packs"
+        case .mod:
+            return "Mods"
         }
     }
 

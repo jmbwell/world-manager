@@ -45,20 +45,32 @@ nonisolated enum DeviceContainerAccessMode: String, Hashable, Sendable, Codable 
 
 nonisolated enum MinecraftSourceOrigin: Hashable, Sendable, Codable {
     case localFolder(bookmarkData: Data?)
+    case javaLocalFolder(bookmarkData: Data?)
     case connectedDevice(device: ConnectedDevice, container: DeviceAppContainer)
 
     nonisolated var defaultAccessorIdentifier: SourceAccessorIdentifier {
         switch self {
         case .localFolder:
             return LocalFolderSourceAccess().accessorIdentifier
+        case .javaLocalFolder:
+            return JavaLocalFolderSourceAccess().accessorIdentifier
         case .connectedDevice:
             return AppleMobileDeviceSourceAccess().accessorIdentifier
         }
     }
 
+    nonisolated var defaultEdition: MinecraftEdition {
+        switch self {
+        case .localFolder, .connectedDevice:
+            return .bedrock
+        case .javaLocalFolder:
+            return .java
+        }
+    }
+
     nonisolated var kind: MinecraftSourceKind {
         switch self {
-        case .localFolder:
+        case .localFolder, .javaLocalFolder:
             return .localFolder
         case .connectedDevice:
             return .connectedDevice
@@ -67,7 +79,7 @@ nonisolated enum MinecraftSourceOrigin: Hashable, Sendable, Codable {
 
     nonisolated var defaultRefreshStrategy: SourceRefreshStrategy {
         switch self {
-        case .localFolder:
+        case .localFolder, .javaLocalFolder:
             return .eagerFullScan
         case .connectedDevice:
             return .staged
@@ -76,10 +88,33 @@ nonisolated enum MinecraftSourceOrigin: Hashable, Sendable, Codable {
 
     nonisolated var defaultCapabilities: SourceCapabilities {
         switch self {
-        case .localFolder:
+        case .localFolder, .javaLocalFolder:
             return .localFolder
         case .connectedDevice:
             return .connectedDevice
+        }
+    }
+
+    nonisolated func defaultAccessStatus(displayName: String) -> SourceAccessStatus {
+        switch self {
+        case .localFolder(let bookmarkData), .javaLocalFolder(let bookmarkData):
+            return SourceAccessStatus(
+                availability: .unknown,
+                mode: bookmarkData == nil ? .localFileSystem : .securityScopedLocalFolder,
+                displayName: displayName,
+                iconSystemName: "folder",
+                statusText: nil,
+                warningText: nil
+            )
+        case .connectedDevice(let device, _):
+            return SourceAccessStatus(
+                availability: .unknown,
+                mode: device.connection == .usb ? .usbDevice : .networkDevice,
+                displayName: displayName,
+                iconSystemName: "iphone.gen3",
+                statusText: nil,
+                warningText: nil
+            )
         }
     }
 }
