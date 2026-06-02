@@ -45,6 +45,7 @@ struct ContentView: View {
     var body: some View {
         let isEmptyLibrary = library.visibleSources.isEmpty && library.connectedDevices.isEmpty
         let resolvedCurrentSource = currentSource
+        let resolvedCurrentSourceCandidate = currentSourceCandidate
         let currentProjectionRequest = ItemCollectionProjectionRequest(
             selection: selectedSidebarSelection,
             searchText: searchText,
@@ -122,6 +123,7 @@ struct ContentView: View {
             ItemDetailColumnView(
                 item: resolvedCurrentSelectedItem,
                 source: resolvedCurrentSource,
+                sourceCandidate: resolvedCurrentSourceCandidate,
                 showsSourceDetails: resolvedCurrentSelectedItem == nil && isSourceOverviewSelection,
                 behaviorPacks: resolvedCurrentSelectedItem.map { logicalPackReferences(for: $0, type: .behaviorPack) } ?? [],
                 resourcePacks: resolvedCurrentSelectedItem.map { logicalPackReferences(for: $0, type: .resourcePack) } ?? [],
@@ -154,7 +156,9 @@ struct ContentView: View {
                     }
 
                     shareItem(item, from: anchorView)
-                }
+                },
+                addCandidateSourceAction: addCandidateSource(_:),
+                revealCandidateAction: revealCandidateInFinder(_:)
             )
             .frame(minWidth: 450)
         }
@@ -253,6 +257,14 @@ struct ContentView: View {
         }
 
         return library.source(withID: sourceID)
+    }
+
+    private var currentSourceCandidate: SourceCandidate? {
+        guard case .sourceCandidate(let candidateID) = selectedSidebarSelection else {
+            return nil
+        }
+
+        return library.sourceCandidates.first { $0.id == candidateID }
     }
 
     private func currentSelectedItem(in source: MinecraftSource?) -> MinecraftContentItem? {
@@ -595,6 +607,10 @@ struct ContentView: View {
         }
     }
 
+    private func revealCandidateInFinder(_ candidate: SourceCandidate) {
+        NSWorkspace.shared.activateFileViewerSelecting([candidate.sourceRootURL])
+    }
+
     private func handleDroppedProviders(_ providers: [NSItemProvider]) -> Bool {
         let fileURLType = UTType.fileURL.identifier
         let supportedProviders = providers.filter { $0.hasItemConformingToTypeIdentifier(fileURLType) }
@@ -654,8 +670,18 @@ struct ContentView: View {
     }
 
     private func syncSelection(with sourceIDs: [URL]) {
-        if let selectedSidebarSelection, !sourceIDs.contains(selectedSidebarSelection.sourceID) {
-            self.selectedSidebarSelection = sourceIDs.first.map { .source(sourceID: $0) }
+        if let selectedSidebarSelection {
+            switch selectedSidebarSelection {
+            case .sourceCandidate(let candidateID):
+                if !library.sourceCandidates.contains(where: { $0.id == candidateID }) {
+                    self.selectedSidebarSelection = sourceIDs.first.map { .source(sourceID: $0) }
+                }
+            case .source, .allContent, .contentType, .contentKind:
+                if let selectedSourceID = selectedSidebarSelection.sourceID,
+                   !sourceIDs.contains(selectedSourceID) {
+                    self.selectedSidebarSelection = sourceIDs.first.map { .source(sourceID: $0) }
+                }
+            }
         } else if self.selectedSidebarSelection == nil, let firstSourceID = sourceIDs.first {
             self.selectedSidebarSelection = .source(sourceID: firstSourceID)
         }

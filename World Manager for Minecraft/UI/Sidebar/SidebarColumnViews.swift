@@ -5,14 +5,17 @@ import SwiftUI
 
 enum SidebarSelection: Hashable, Sendable {
     case source(sourceID: URL)
+    case sourceCandidate(candidateID: String)
     case allContent(sourceID: URL)
     case contentType(sourceID: URL, contentType: MinecraftContentType)
     case contentKind(sourceID: URL, contentKind: MinecraftContentKind)
 
-    var sourceID: URL {
+    var sourceID: URL? {
         switch self {
         case .source(let sourceID), .allContent(let sourceID), .contentType(let sourceID, _), .contentKind(let sourceID, _):
             return sourceID
+        case .sourceCandidate:
+            return nil
         }
     }
 }
@@ -65,9 +68,16 @@ struct SourcesSidebarView: View {
             if !sourceCandidates.isEmpty {
                 Section {
                     ForEach(sourceCandidates) { candidate in
-                        SourceCandidateRow(candidate: candidate) {
-                            addCandidateSourceAction(candidate)
-                        }
+                        SourceCandidateRow(
+                            candidate: candidate,
+                            onSelect: {
+                                selection = .sourceCandidate(candidateID: candidate.id)
+                            },
+                            addAction: {
+                                addCandidateSourceAction(candidate)
+                            }
+                        )
+                        .tag(SidebarSelection.sourceCandidate(candidateID: candidate.id) as SidebarSelection?)
                         .listRowSeparator(.hidden)
                         .listRowInsets(EdgeInsets(top: 4, leading: 8, bottom: 4, trailing: 8))
                     }
@@ -153,6 +163,7 @@ struct SourcesSidebarView: View {
 
 private struct SourceCandidateRow: View {
     let candidate: SourceCandidate
+    let onSelect: () -> Void
     let addAction: () -> Void
 
     var body: some View {
@@ -179,6 +190,8 @@ private struct SourceCandidateRow: View {
             .buttonStyle(.borderless)
             .help("Add Source")
         }
+        .contentShape(Rectangle())
+        .onTapGesture(perform: onSelect)
         .padding(.vertical, 4)
     }
 

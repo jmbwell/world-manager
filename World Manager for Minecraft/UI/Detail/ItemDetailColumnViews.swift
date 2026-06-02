@@ -7,6 +7,7 @@ import SwiftUI
 struct ItemDetailColumnView: View {
     let item: MinecraftContentItem?
     let source: MinecraftSource?
+    let sourceCandidate: SourceCandidate?
     let showsSourceDetails: Bool
     let behaviorPacks: [ContentPackReference]
     let resourcePacks: [ContentPackReference]
@@ -22,6 +23,8 @@ struct ItemDetailColumnView: View {
     let exportAction: () -> Void
     let revealAction: () -> Void
     let shareAction: (NSView?) -> Void
+    let addCandidateSourceAction: (SourceCandidate) -> Void
+    let revealCandidateAction: (SourceCandidate) -> Void
 
     var body: some View {
         Group {
@@ -46,6 +49,16 @@ struct ItemDetailColumnView: View {
                 )
             } else if showsSourceDetails, let source {
                 SourceDetailView(source: source)
+            } else if let sourceCandidate {
+                SourceCandidateDetailView(
+                    candidate: sourceCandidate,
+                    addAction: {
+                        addCandidateSourceAction(sourceCandidate)
+                    },
+                    revealAction: {
+                        revealCandidateAction(sourceCandidate)
+                    }
+                )
             } else {
                 Text("Select a world or pack to see details")
                     .foregroundStyle(.secondary)
