@@ -733,47 +733,49 @@ enum JavaContentScanner {
         let fileManager = FileManager.default
         var discoveredItems: [MinecraftContentItem] = []
 
-        let savesRootURL = existingDirectory(
-            named: "saves",
-            in: searchRootURL,
-            fileManager: fileManager
-        ) ?? searchRootURL
-        let worldItems = try discoverWorlds(in: savesRootURL, fileManager: fileManager)
-        discoveredItems.append(contentsOf: worldItems)
-
-        if let resourcePacksURL = existingDirectory(named: "resourcepacks", in: searchRootURL, fileManager: fileManager) {
-            let resourcePackItems = try discoverResourcePacks(in: resourcePacksURL, fileManager: fileManager)
-            discoveredItems.append(contentsOf: resourcePackItems)
-        }
-
-        if let dataPacksURL = existingDirectory(named: "datapacks", in: searchRootURL, fileManager: fileManager) {
-            discoveredItems.append(contentsOf: try discoverJavaPackages(
-                in: dataPacksURL,
-                contentKind: .dataPack,
-                platformType: .dataPack,
-                packageExtension: "zip",
+        for scanRootURL in contentScanRoots(for: searchRootURL, fileManager: fileManager) {
+            let savesRootURL = existingDirectory(
+                named: "saves",
+                in: scanRootURL,
                 fileManager: fileManager
-            ))
-        }
+            ) ?? scanRootURL
+            let worldItems = try discoverWorlds(in: savesRootURL, fileManager: fileManager)
+            discoveredItems.append(contentsOf: worldItems)
 
-        if let shaderPacksURL = existingDirectory(named: "shaderpacks", in: searchRootURL, fileManager: fileManager) {
-            discoveredItems.append(contentsOf: try discoverJavaPackages(
-                in: shaderPacksURL,
-                contentKind: .shaderPack,
-                platformType: .shaderPack,
-                packageExtension: "zip",
-                fileManager: fileManager
-            ))
-        }
+            if let resourcePacksURL = existingDirectory(named: "resourcepacks", in: scanRootURL, fileManager: fileManager) {
+                let resourcePackItems = try discoverResourcePacks(in: resourcePacksURL, fileManager: fileManager)
+                discoveredItems.append(contentsOf: resourcePackItems)
+            }
 
-        if let modsURL = existingDirectory(named: "mods", in: searchRootURL, fileManager: fileManager) {
-            discoveredItems.append(contentsOf: try discoverJavaPackages(
-                in: modsURL,
-                contentKind: .mod,
-                platformType: .mod,
-                packageExtension: "jar",
-                fileManager: fileManager
-            ))
+            if let dataPacksURL = existingDirectory(named: "datapacks", in: scanRootURL, fileManager: fileManager) {
+                discoveredItems.append(contentsOf: try discoverJavaPackages(
+                    in: dataPacksURL,
+                    contentKind: .dataPack,
+                    platformType: .dataPack,
+                    packageExtension: "zip",
+                    fileManager: fileManager
+                ))
+            }
+
+            if let shaderPacksURL = existingDirectory(named: "shaderpacks", in: scanRootURL, fileManager: fileManager) {
+                discoveredItems.append(contentsOf: try discoverJavaPackages(
+                    in: shaderPacksURL,
+                    contentKind: .shaderPack,
+                    platformType: .shaderPack,
+                    packageExtension: "zip",
+                    fileManager: fileManager
+                ))
+            }
+
+            if let modsURL = existingDirectory(named: "mods", in: scanRootURL, fileManager: fileManager) {
+                discoveredItems.append(contentsOf: try discoverJavaPackages(
+                    in: modsURL,
+                    contentKind: .mod,
+                    platformType: .mod,
+                    packageExtension: "jar",
+                    fileManager: fileManager
+                ))
+            }
         }
 
         discoveredItems.sort(by: WorldScanner.sortItems)
@@ -806,21 +808,32 @@ enum JavaContentScanner {
 
     nonisolated static func collectionSnapshots(in sourceRootURL: URL) -> [CollectionSnapshot] {
         let fileManager = FileManager.default
-        let candidateRoots = [
-            existingDirectory(named: "saves", in: sourceRootURL, fileManager: fileManager),
-            existingDirectory(named: "resourcepacks", in: sourceRootURL, fileManager: fileManager),
-            existingDirectory(named: "datapacks", in: sourceRootURL, fileManager: fileManager),
-            existingDirectory(named: "shaderpacks", in: sourceRootURL, fileManager: fileManager),
-            existingDirectory(named: "mods", in: sourceRootURL, fileManager: fileManager)
-        ]
+        var snapshots: [CollectionSnapshot] = []
+        for scanRootURL in contentScanRoots(for: sourceRootURL, fileManager: fileManager) {
+            let candidateRoots = [
+                existingDirectory(named: "saves", in: scanRootURL, fileManager: fileManager),
+                existingDirectory(named: "resourcepacks", in: scanRootURL, fileManager: fileManager),
+                existingDirectory(named: "datapacks", in: scanRootURL, fileManager: fileManager),
+                existingDirectory(named: "shaderpacks", in: scanRootURL, fileManager: fileManager),
+                existingDirectory(named: "mods", in: scanRootURL, fileManager: fileManager)
+            ]
 
-        return candidateRoots.compactMap { collectionURL in
-            guard let collectionURL else {
-                return nil
+            for collectionURL in candidateRoots {
+                guard let collectionURL else {
+                    continue
+                }
+
+                if let snapshot = collectionSnapshot(
+                    for: collectionURL,
+                    sourceRootURL: sourceRootURL,
+                    fileManager: fileManager
+                ) {
+                    snapshots.append(snapshot)
+                }
             }
-
-            return collectionSnapshot(for: collectionURL, fileManager: fileManager)
         }
+
+        return snapshots
     }
 
     nonisolated private static func discoverWorlds(in savesRootURL: URL, fileManager: FileManager) throws -> [MinecraftContentItem] {
@@ -1080,6 +1093,27 @@ enum JavaContentScanner {
         return folders
     }
 
+    nonisolated private static func contentScanRoots(for sourceRootURL: URL, fileManager: FileManager) -> [URL] {
+        let standardizedRoot = sourceRootURL.standardizedFileURL
+        if javaProbeScore(for: standardizedRoot, fileManager: fileManager).value > 0 {
+            return [standardizedRoot]
+        }
+
+        let discoveredRoots = boundedCandidateFolders(
+            from: standardizedRoot,
+            maxDepth: 4,
+            maxFolderCount: 600,
+            fileManager: fileManager
+        ).filter { candidateURL in
+            candidateURL != standardizedRoot
+                && javaProbeScore(for: candidateURL, fileManager: fileManager).value > 0
+        }
+
+        return uniqueStandardizedURLs(discoveredRoots).sorted {
+            $0.path.localizedStandardCompare($1.path) == .orderedAscending
+        }
+    }
+
     nonisolated private static func uniqueStandardizedURLs(_ urls: [URL]) -> [URL] {
         var seen = Set<String>()
         var result: [URL] = []
@@ -1099,6 +1133,7 @@ enum JavaContentScanner {
 
     nonisolated private static func collectionSnapshot(
         for collectionURL: URL,
+        sourceRootURL: URL,
         fileManager: FileManager
     ) -> CollectionSnapshot? {
         guard fileManager.fileExists(atPath: collectionURL.path) else {
@@ -1135,17 +1170,30 @@ enum JavaContentScanner {
             ].joined(separator: "@")
         }.joined(separator: "|")
 
+        let folderName = relativePath(from: sourceRootURL.standardizedFileURL, to: collectionURL.standardizedFileURL)
+            ?? collectionURL.lastPathComponent
+
         return CollectionSnapshot(
-            folderName: collectionURL.lastPathComponent,
+            folderName: folderName,
             modifiedDate: modifiedDate,
             childDirectoryCount: childSnapshots.count,
             fingerprint: [
-                collectionURL.lastPathComponent,
+                folderName,
                 String(childSnapshots.count),
                 modifiedDate?.timeIntervalSince1970.formatted() ?? "nil",
                 childFingerprint
             ].joined(separator: "::")
         )
+    }
+
+    nonisolated private static func relativePath(from rootURL: URL, to childURL: URL) -> String? {
+        let rootPath = rootURL.standardizedFileURL.path
+        let childPath = childURL.standardizedFileURL.path
+        guard childPath.hasPrefix(rootPath + "/") else {
+            return nil
+        }
+
+        return String(childPath.dropFirst(rootPath.count + 1))
     }
 
     nonisolated private static func displayName(for item: MinecraftContentItem) -> String {

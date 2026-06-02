@@ -385,6 +385,34 @@ struct World_Manager_for_MinecraftTests {
         #expect(candidates.first?.detectedKinds.contains(.mod) == true)
     }
 
+    @Test func javaAggregateRootDiscoversNestedInstanceItems() async throws {
+        let fileManager = FileManager.default
+        let workingURL = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let firstInstanceURL = workingURL.appendingPathComponent("a/b/c", isDirectory: true)
+        let secondInstanceURL = workingURL.appendingPathComponent("a/e/f", isDirectory: true)
+        defer { try? fileManager.removeItem(at: workingURL) }
+
+        try fileManager.createDirectory(
+            at: firstInstanceURL.appendingPathComponent("mods", isDirectory: true),
+            withIntermediateDirectories: true
+        )
+        try Data("jar".utf8).write(to: firstInstanceURL.appendingPathComponent("mods/ExampleMod.jar"))
+
+        try fileManager.createDirectory(
+            at: secondInstanceURL.appendingPathComponent("resourcepacks", isDirectory: true),
+            withIntermediateDirectories: true
+        )
+        try Data("zip".utf8).write(to: secondInstanceURL.appendingPathComponent("resourcepacks/ExamplePack.zip"))
+
+        let items = try JavaContentScanner.discoverItems(in: workingURL)
+        let snapshots = JavaContentScanner.collectionSnapshots(in: workingURL)
+
+        #expect(items.contains { $0.contentKind == .mod && $0.folderName == "ExampleMod.jar" })
+        #expect(items.contains { $0.contentKind == .resourcePack && $0.folderName == "ExamplePack.zip" })
+        #expect(snapshots.map(\.folderName).contains("a/b/c/mods"))
+        #expect(snapshots.map(\.folderName).contains("a/e/f/resourcepacks"))
+    }
+
     @Test func sourceLibraryAddSourceResolvesJavaWrapperFolder() async throws {
         let fileManager = FileManager.default
         let rootURL = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
