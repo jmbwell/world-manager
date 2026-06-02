@@ -359,6 +359,32 @@ struct World_Manager_for_MinecraftTests {
         })
     }
 
+    @Test func javaProviderCollapsesNestedSourceCandidatesToSearchRoot() async throws {
+        let fileManager = FileManager.default
+        let workingURL = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let firstInstanceURL = workingURL.appendingPathComponent("a/b/c", isDirectory: true)
+        let secondInstanceURL = workingURL.appendingPathComponent("a/e/f", isDirectory: true)
+        defer { try? fileManager.removeItem(at: workingURL) }
+
+        for instanceURL in [firstInstanceURL, secondInstanceURL] {
+            try fileManager.createDirectory(
+                at: instanceURL.appendingPathComponent("mods", isDirectory: true),
+                withIntermediateDirectories: true
+            )
+            try Data("jar".utf8).write(to: instanceURL.appendingPathComponent("mods/ExampleMod.jar"))
+        }
+
+        let candidates = JavaContentScanner.discoverSourceCandidates(
+            providerID: JavaLocalFolderSourceAccess().accessorIdentifier,
+            searchRoots: [workingURL]
+        )
+
+        #expect(candidates.count == 1)
+        #expect(candidates.first?.sourceRootURL == workingURL.standardizedFileURL)
+        #expect(candidates.first?.displayName == workingURL.lastPathComponent)
+        #expect(candidates.first?.detectedKinds.contains(.mod) == true)
+    }
+
     @Test func sourceLibraryAddSourceResolvesJavaWrapperFolder() async throws {
         let fileManager = FileManager.default
         let rootURL = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)

@@ -684,6 +684,7 @@ enum JavaContentScanner {
         var candidatesByID: [String: SourceCandidate] = [:]
         for root in roots {
             let candidateFolders = boundedCandidateFolders(from: root, maxDepth: 4, maxFolderCount: 600, fileManager: fileManager)
+            var candidatesForRoot: [SourceCandidate] = []
             for folderURL in candidateFolders {
                 guard let probe = probeLocalFolder(folderURL, providerID: providerID) else {
                     continue
@@ -699,6 +700,14 @@ enum JavaContentScanner {
                     detectedKinds: probe.detectedKinds
                 )
 
+                candidatesForRoot.append(candidate)
+            }
+
+            for candidate in collapsedCandidates(
+                candidatesForRoot,
+                under: root,
+                providerID: providerID
+            ) {
                 if let existingCandidate = candidatesByID[candidate.id],
                    existingCandidate.confidence >= candidate.confidence {
                     continue
@@ -936,6 +945,40 @@ enum JavaContentScanner {
             (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
         })
         return candidates
+    }
+
+    nonisolated private static func collapsedCandidates(
+        _ candidates: [SourceCandidate],
+        under root: URL,
+        providerID: PlatformProviderID
+    ) -> [SourceCandidate] {
+        let uniqueCandidates = Dictionary(grouping: candidates, by: \.sourceRootURL).compactMap { _, groupedCandidates in
+            groupedCandidates.max { lhs, rhs in
+                lhs.confidence < rhs.confidence
+            }
+        }
+
+        guard uniqueCandidates.count > 1 else {
+            return uniqueCandidates
+        }
+
+        let detectedKinds = uniqueCandidates.reduce(into: Set<MinecraftContentKind>()) { result, candidate in
+            result.formUnion(candidate.detectedKinds)
+        }
+        let confidence = uniqueCandidates.map(\.confidence).max() ?? .medium
+        let standardizedRoot = root.standardizedFileURL
+
+        return [
+            SourceCandidate(
+                providerID: providerID,
+                edition: .java,
+                sourceRootURL: standardizedRoot,
+                displayName: standardizedRoot.lastPathComponent,
+                confidence: confidence,
+                reason: "Found multiple Java sources under \(standardizedRoot.lastPathComponent)",
+                detectedKinds: detectedKinds
+            )
+        ]
     }
 
     nonisolated private static func javaProbeScore(for url: URL, fileManager: FileManager) -> (value: Int, kinds: Set<MinecraftContentKind>) {
