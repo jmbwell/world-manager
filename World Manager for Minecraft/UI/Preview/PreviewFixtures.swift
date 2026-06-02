@@ -262,8 +262,12 @@ struct SidebarColumnPreviewContainer: View {
             SourcesSidebarView(
                 sources: PreviewFixtures.allSources,
                 connectedDevices: [],
+                sourceCandidates: [],
+                isDiscoveringSourceCandidates: false,
                 selection: $selection,
                 addSourceAction: {},
+                discoverSourcesAction: {},
+                addCandidateSourceAction: { _ in },
                 addDeviceSourceAction: {},
                 addConnectedDeviceAction: { _ in },
                 rescanSourceAction: { _ in },

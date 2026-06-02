@@ -186,11 +186,32 @@ enum ProviderEvent: Sendable {
 The engine consumes events, updates source state, updates indexes, persists
 snapshots, and exposes UI-ready projections.
 
+### Source Candidate Discovery
+
+Source candidate discovery is separate from source content discovery. Candidate
+discovery answers whether a potential source exists in the current environment;
+content discovery scans an accepted source for worlds, packs, mods, and other
+items.
+
+```text
+Engine asks providers for source candidates
+  -> each provider uses its own bounded discovery process
+  -> providers stream candidate events
+  -> engine deduplicates and filters already-added sources
+  -> UI shows suggestions that the user can accept
+```
+
+For example, the Java local provider can check known macOS launcher roots and
+shallow-search likely instance folders, while Bedrock local folders can remain a
+no-op and rely on folder picking. Connected-device providers can later emit
+device-backed candidates from USB or network discovery.
+
 ## Responsibilities
 
 ### Engine Owns
 
 - Provider registration/routing.
+- Source candidate discovery orchestration and deduplication.
 - Source lifecycle and persistence.
 - Scan task ownership, cancellation, and worker limits.
 - Cache and snapshot persistence hooks.
@@ -200,6 +221,7 @@ snapshots, and exposes UI-ready projections.
 ### Provider Owns
 
 - Access method details.
+- Source candidate discovery strategy.
 - Discovery layout and content markers.
 - Metadata parsing.
 - Platform relationships.

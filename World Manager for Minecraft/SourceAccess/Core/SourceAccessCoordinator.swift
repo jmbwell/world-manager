@@ -11,6 +11,7 @@ enum SourceDiscoveryMode: Sendable {
 protocol SourceAccessMethod: Sendable {
     nonisolated var accessorIdentifier: SourceAccessorIdentifier { get }
     nonisolated func probeLocalFolder(_ url: URL) async -> SourceProbeResult?
+    nonisolated func discoverSourceCandidates() -> AsyncThrowingStream<SourceCandidateEvent, Error>
     nonisolated func accessDescriptor(for source: MinecraftSource) -> SourceAccessDescriptor
     nonisolated func accessStatus(for source: MinecraftSource) async -> SourceAccessStatus
     nonisolated func availability(for source: MinecraftSource) async -> SourceAvailability
@@ -42,6 +43,12 @@ extension SourceAccessMethod {
     nonisolated func probeLocalFolder(_ url: URL) async -> SourceProbeResult? {
         _ = url
         return nil
+    }
+
+    nonisolated func discoverSourceCandidates() -> AsyncThrowingStream<SourceCandidateEvent, Error> {
+        AsyncThrowingStream { continuation in
+            continuation.finish()
+        }
     }
 
     nonisolated func accessDescriptor(for source: MinecraftSource) -> SourceAccessDescriptor {
@@ -249,6 +256,40 @@ struct SourceAccessCoordinator: SourceAccessMethod {
         }
 
         return bestProbe
+    }
+
+    nonisolated func discoverSourceCandidates() -> AsyncThrowingStream<SourceCandidateEvent, Error> {
+        AsyncThrowingStream { continuation in
+            let accessMethods = Array(accessMethodsByIdentifier.values)
+            let task = Task.detached(priority: .userInitiated) {
+                await withTaskGroup(of: Void.self) { group in
+                    for accessMethod in accessMethods {
+                        group.addTask {
+                            do {
+                                for try await event in accessMethod.discoverSourceCandidates() {
+                                    continuation.yield(event)
+                                }
+                            } catch {
+                                continuation.yield(
+                                    .warning(
+                                        ProviderWarning(
+                                            id: "\(accessMethod.accessorIdentifier)-candidate-discovery-failed",
+                                            message: "Source discovery failed",
+                                            detail: error.localizedDescription
+                                        )
+                                    )
+                                )
+                            }
+                        }
+                    }
+                }
+                continuation.finish()
+            }
+
+            continuation.onTermination = { @Sendable _ in
+                task.cancel()
+            }
+        }
     }
 
     nonisolated func discoverItems(

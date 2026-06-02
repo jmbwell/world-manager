@@ -672,6 +672,51 @@ enum JavaContentScanner {
         )
     }
 
+    nonisolated static func discoverSourceCandidates(
+        providerID: PlatformProviderID,
+        searchRoots: [URL]? = nil,
+        fileManager: FileManager = .default
+    ) -> [SourceCandidate] {
+        let roots = uniqueStandardizedURLs(searchRoots ?? defaultCandidateSearchRoots(fileManager: fileManager))
+            .map(\.standardizedFileURL)
+            .filter { fileManager.fileExists(atPath: $0.path) }
+
+        var candidatesByID: [String: SourceCandidate] = [:]
+        for root in roots {
+            let candidateFolders = boundedCandidateFolders(from: root, maxDepth: 4, maxFolderCount: 600, fileManager: fileManager)
+            for folderURL in candidateFolders {
+                guard let probe = probeLocalFolder(folderURL, providerID: providerID) else {
+                    continue
+                }
+
+                let candidate = SourceCandidate(
+                    providerID: probe.providerID,
+                    edition: probe.edition,
+                    sourceRootURL: probe.sourceRootURL,
+                    displayName: probe.displayName,
+                    confidence: probe.confidence,
+                    reason: "Found Java markers near \(root.lastPathComponent)",
+                    detectedKinds: probe.detectedKinds
+                )
+
+                if let existingCandidate = candidatesByID[candidate.id],
+                   existingCandidate.confidence >= candidate.confidence {
+                    continue
+                }
+
+                candidatesByID[candidate.id] = candidate
+            }
+        }
+
+        return candidatesByID.values.sorted {
+            if $0.confidence != $1.confidence {
+                return $0.confidence > $1.confidence
+            }
+
+            return $0.displayName.localizedStandardCompare($1.displayName) == .orderedAscending
+        }
+    }
+
     nonisolated static func discoverItems(
         in searchRootURL: URL,
         onDiscovered: @Sendable (MinecraftContentItem) -> Void = { _ in }
@@ -885,7 +930,7 @@ enum JavaContentScanner {
         let children = (try? fileManager.contentsOfDirectory(
             at: url,
             includingPropertiesForKeys: [.isDirectoryKey],
-            options: [.skipsHiddenFiles]
+            options: []
         )) ?? []
         candidates.append(contentsOf: children.filter {
             (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
@@ -929,6 +974,84 @@ enum JavaContentScanner {
         }
 
         return (score, kinds)
+    }
+
+    nonisolated private static func defaultCandidateSearchRoots(fileManager: FileManager) -> [URL] {
+        let homeURL = fileManager.homeDirectoryForCurrentUser
+        let applicationSupportURL = homeURL
+            .appendingPathComponent("Library", isDirectory: true)
+            .appendingPathComponent("Application Support", isDirectory: true)
+        let documentsURL = homeURL.appendingPathComponent("Documents", isDirectory: true)
+
+        return [
+            applicationSupportURL.appendingPathComponent("minecraft", isDirectory: true),
+            documentsURL.appendingPathComponent("curseforge/minecraft", isDirectory: true),
+            documentsURL.appendingPathComponent("CurseForge/Minecraft", isDirectory: true),
+            applicationSupportURL.appendingPathComponent("PrismLauncher/instances", isDirectory: true),
+            applicationSupportURL.appendingPathComponent("MultiMC/instances", isDirectory: true),
+            applicationSupportURL.appendingPathComponent("PolyMC/instances", isDirectory: true),
+            applicationSupportURL.appendingPathComponent("com.modrinth.theseus/profiles", isDirectory: true),
+            applicationSupportURL.appendingPathComponent("ATLauncher/instances", isDirectory: true),
+            applicationSupportURL.appendingPathComponent("gdlauncher_next/instances", isDirectory: true),
+            applicationSupportURL.appendingPathComponent("GDLauncher_next/instances", isDirectory: true)
+        ]
+    }
+
+    nonisolated private static func boundedCandidateFolders(
+        from rootURL: URL,
+        maxDepth: Int,
+        maxFolderCount: Int,
+        fileManager: FileManager
+    ) -> [URL] {
+        var folders: [URL] = []
+        var queue: [(url: URL, depth: Int)] = [(rootURL, 0)]
+        var seen = Set<String>()
+
+        while !queue.isEmpty && folders.count < maxFolderCount {
+            let current = queue.removeFirst()
+            let normalizedURL = current.url.standardizedFileURL
+            guard seen.insert(normalizedURL.path).inserted else {
+                continue
+            }
+
+            folders.append(normalizedURL)
+            guard current.depth < maxDepth else {
+                continue
+            }
+
+            let children = (try? fileManager.contentsOfDirectory(
+                at: normalizedURL,
+                includingPropertiesForKeys: [.isDirectoryKey],
+                options: []
+            )) ?? []
+
+            let childDirectories = children
+                .filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true }
+                .sorted { lhs, rhs in
+                    lhs.lastPathComponent.localizedStandardCompare(rhs.lastPathComponent) == .orderedAscending
+                }
+
+            queue.append(contentsOf: childDirectories.map { ($0, current.depth + 1) })
+        }
+
+        return folders
+    }
+
+    nonisolated private static func uniqueStandardizedURLs(_ urls: [URL]) -> [URL] {
+        var seen = Set<String>()
+        var result: [URL] = []
+        result.reserveCapacity(urls.count)
+
+        for url in urls {
+            let standardizedURL = url.standardizedFileURL
+            guard seen.insert(standardizedURL.path).inserted else {
+                continue
+            }
+
+            result.append(standardizedURL)
+        }
+
+        return result
     }
 
     nonisolated private static func collectionSnapshot(

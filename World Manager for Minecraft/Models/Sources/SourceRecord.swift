@@ -64,6 +64,23 @@ nonisolated struct SourceProbeResult: Hashable, Sendable {
     let warnings: [String]
 }
 
+nonisolated struct SourceCandidate: Identifiable, Hashable, Sendable {
+    var providerID: PlatformProviderID
+    var edition: MinecraftEdition
+    var sourceRootURL: URL
+    var displayName: String
+    var confidence: SourceProbeConfidence
+    var reason: String
+    var detectedKinds: Set<MinecraftContentKind>
+
+    var id: String {
+        [
+            providerID,
+            sourceRootURL.standardizedFileURL.absoluteString
+        ].joined(separator: "::")
+    }
+}
+
 nonisolated enum WorkStageState: String, Hashable, Sendable, Codable {
     case pending
     case running
@@ -98,6 +115,12 @@ nonisolated enum ProviderEvent: Sendable {
     case stageUpdated(WorkStage)
     case discovered(MinecraftContentItem)
     case inspected(MinecraftContentItem)
+    case warning(ProviderWarning)
+}
+
+nonisolated enum SourceCandidateEvent: Sendable {
+    case stageUpdated(WorkStage)
+    case candidate(SourceCandidate)
     case warning(ProviderWarning)
 }
 

@@ -75,8 +75,14 @@ struct ContentView: View {
             SourcesSidebarView(
                 sources: library.sidebarSources,
                 connectedDevices: library.connectedDevices,
+                sourceCandidates: library.sourceCandidates,
+                isDiscoveringSourceCandidates: library.isDiscoveringSourceCandidates,
                 selection: sidebarSelectionBinding,
                 addSourceAction: pickFolder,
+                discoverSourcesAction: {
+                    library.perform(.discoverSourceCandidates)
+                },
+                addCandidateSourceAction: addCandidateSource(_:),
                 addDeviceSourceAction: { isShowingDeviceSourceSheet = true },
                 addConnectedDeviceAction: addConnectedDeviceSource(from:),
                 rescanSourceAction: { source in
@@ -578,6 +584,14 @@ struct ContentView: View {
                 let sourceID = await library.addSource(at: url)
                 selectSourceIfNeeded(sourceID)
             }
+        }
+    }
+
+    private func addCandidateSource(_ candidate: SourceCandidate) {
+        Task {
+            let sourceID = await library.addSource(candidate: candidate)
+            selectedSidebarSelection = .source(sourceID: sourceID)
+            selectedItemID = nil
         }
     }
 

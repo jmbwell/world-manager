@@ -6,6 +6,11 @@ import Foundation
 import OSLog
 import UniformTypeIdentifiers
 
+enum SourceLibraryCommand: Sendable {
+    case discoverSourceCandidates
+    case refreshAllSources
+}
+
 @MainActor
 final class SourceLibrary: ObservableObject, SourceScanSessionHosting, SourcePersistenceHosting, ConnectedDeviceRuntimeHosting, LocalSourceRuntimeHosting, SourceSyncRuntimeHosting {
     private static let enrichmentWorkerCount = 4
@@ -28,10 +33,13 @@ final class SourceLibrary: ObservableObject, SourceScanSessionHosting, SourcePer
         }
     }
     @Published var connectedDevices: [ConnectedDeviceSidebarEntry] = []
+    @Published var sourceCandidates: [SourceCandidate] = []
+    @Published var isDiscoveringSourceCandidates = false
     @Published var isRestoringPersistedSources = true
 
     private var scanTasks: [URL: Task<Void, Never>] = [:]
     private var automaticSyncTasks: [URL: Task<Void, Never>] = [:]
+    private var candidateDiscoveryTask: Task<Void, Never>?
     private var connectedDeviceRefreshTask: Task<Void, Never>?
     private var localSourceRefreshTask: Task<Void, Never>?
     private let persistenceStore: SourcePersistenceStore
@@ -80,6 +88,7 @@ final class SourceLibrary: ObservableObject, SourceScanSessionHosting, SourcePer
     deinit {
         connectedDeviceRefreshTask?.cancel()
         localSourceRefreshTask?.cancel()
+        candidateDiscoveryTask?.cancel()
         automaticSyncTasks.values.forEach { $0.cancel() }
         scanTasks.values.forEach { $0.cancel() }
     }
@@ -110,6 +119,8 @@ final class SourceLibrary: ObservableObject, SourceScanSessionHosting, SourcePer
         connectedDeviceRefreshTask = nil
         localSourceRefreshTask?.cancel()
         localSourceRefreshTask = nil
+        candidateDiscoveryTask?.cancel()
+        candidateDiscoveryTask = nil
 
         for task in automaticSyncTasks.values {
             task.cancel()
@@ -137,6 +148,17 @@ final class SourceLibrary: ObservableObject, SourceScanSessionHosting, SourcePer
         )
     }
 
+    func perform(_ command: SourceLibraryCommand) {
+        switch command {
+        case .discoverSourceCandidates:
+            discoverSourceCandidates()
+        case .refreshAllSources:
+            for source in visibleSources where source.availability == .available {
+                startScan(for: source.id, mode: .fullScan)
+            }
+        }
+    }
+
     func addSource(at url: URL) async -> URL {
         let selectedURL = url.standardizedFileURL
         let probe = await sourceAccessMethod.probeLocalFolder(selectedURL)
@@ -146,6 +168,7 @@ final class SourceLibrary: ObservableObject, SourceScanSessionHosting, SourcePer
         let edition = probe?.edition ?? .bedrock
 
         if sources.contains(where: { $0.id == normalizedURL }) {
+            sourceCandidates.removeAll { $0.sourceRootURL == normalizedURL }
             updateSource(normalizedURL) { source in
                 if source.bookmarkData == nil {
                     source.bookmarkData = bookmarkData
@@ -184,7 +207,13 @@ final class SourceLibrary: ObservableObject, SourceScanSessionHosting, SourcePer
         if let warning = probe?.warnings.first {
             source.scanDiagnostic = warning
         }
-        return addSource(source, shouldPersist: true, shouldScan: true)
+        let sourceID = addSource(source, shouldPersist: true, shouldScan: true)
+        sourceCandidates.removeAll { $0.sourceRootURL == sourceID }
+        return sourceID
+    }
+
+    func addSource(candidate: SourceCandidate) async -> URL {
+        await addSource(at: candidate.sourceRootURL)
     }
 
     @discardableResult
@@ -236,6 +265,42 @@ final class SourceLibrary: ObservableObject, SourceScanSessionHosting, SourcePer
 
     func rescanSource(withID sourceID: URL) {
         startScan(for: sourceID, mode: .fullScan)
+    }
+
+    func discoverSourceCandidates() {
+        candidateDiscoveryTask?.cancel()
+        isDiscoveringSourceCandidates = true
+        sourceCandidates.removeAll { candidateAlreadyAdded($0) }
+
+        let task = Task { [weak self] in
+            guard let self else {
+                return
+            }
+
+            defer {
+                self.isDiscoveringSourceCandidates = false
+                self.candidateDiscoveryTask = nil
+            }
+
+            do {
+                for try await event in self.sourceAccessMethod.discoverSourceCandidates() {
+                    guard !Task.isCancelled else {
+                        return
+                    }
+
+                    switch event {
+                    case .candidate(let candidate):
+                        self.recordSourceCandidate(candidate)
+                    case .stageUpdated, .warning:
+                        break
+                    }
+                }
+            } catch {
+                return
+            }
+        }
+
+        candidateDiscoveryTask = task
     }
 
     func listContents(for item: MinecraftContentItem, in source: MinecraftSource) async throws -> [DirectoryEntry] {
@@ -558,6 +623,36 @@ final class SourceLibrary: ObservableObject, SourceScanSessionHosting, SourcePer
             }
         }
         sourceIDByItemID = itemIndex
+        sourceCandidates.removeAll { candidateAlreadyAdded($0) }
+    }
+
+    private func recordSourceCandidate(_ candidate: SourceCandidate) {
+        guard !candidateAlreadyAdded(candidate) else {
+            return
+        }
+
+        if let existingIndex = sourceCandidates.firstIndex(where: { $0.id == candidate.id }) {
+            if candidate.confidence > sourceCandidates[existingIndex].confidence {
+                sourceCandidates[existingIndex] = candidate
+            }
+        } else {
+            sourceCandidates.append(candidate)
+        }
+
+        sourceCandidates.sort {
+            if $0.confidence != $1.confidence {
+                return $0.confidence > $1.confidence
+            }
+
+            return $0.displayName.localizedStandardCompare($1.displayName) == .orderedAscending
+        }
+    }
+
+    private func candidateAlreadyAdded(_ candidate: SourceCandidate) -> Bool {
+        sources.contains { source in
+            source.id == candidate.sourceRootURL.standardizedFileURL
+                || source.folderURL == candidate.sourceRootURL.standardizedFileURL
+        }
     }
 
     @discardableResult

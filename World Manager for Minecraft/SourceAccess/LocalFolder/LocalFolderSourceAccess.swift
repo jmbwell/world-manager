@@ -215,11 +215,59 @@ struct BedrockLocalFolderSourceAccess: SourceAccessMethod {
 
 struct JavaLocalFolderSourceAccess: SourceAccessMethod {
     nonisolated let accessorIdentifier: SourceAccessorIdentifier = "java-local-folder"
+    private let candidateDiscoveryRoots: [URL]?
 
-    nonisolated init() {}
+    nonisolated init(candidateDiscoveryRoots: [URL]? = nil) {
+        self.candidateDiscoveryRoots = candidateDiscoveryRoots
+    }
 
     nonisolated func probeLocalFolder(_ url: URL) async -> SourceProbeResult? {
         JavaContentScanner.probeLocalFolder(url, providerID: accessorIdentifier)
+    }
+
+    nonisolated func discoverSourceCandidates() -> AsyncThrowingStream<SourceCandidateEvent, Error> {
+        AsyncThrowingStream { continuation in
+            let roots = candidateDiscoveryRoots
+            let providerID = accessorIdentifier
+            let task = Task.detached(priority: .utility) {
+                continuation.yield(
+                    .stageUpdated(
+                        WorkStage(
+                            id: "\(providerID)-candidate-discovery",
+                            title: "Finding Java sources",
+                            detail: nil,
+                            state: .running,
+                            progress: .indeterminate
+                        )
+                    )
+                )
+
+                let candidates = JavaContentScanner.discoverSourceCandidates(
+                    providerID: providerID,
+                    searchRoots: roots
+                )
+                for candidate in candidates {
+                    continuation.yield(.candidate(candidate))
+                }
+
+                continuation.yield(
+                    .stageUpdated(
+                        WorkStage(
+                            id: "\(providerID)-candidate-discovery",
+                            title: "Finding Java sources",
+                            detail: candidates.isEmpty ? "No Java sources found." : "Found \(candidates.count) Java sources.",
+                            state: .succeeded,
+                            progress: .indeterminate
+                        )
+                    )
+                )
+                continuation.finish()
+            }
+
+            continuation.onTermination = { @Sendable _ in
+                task.cancel()
+            }
+        }
     }
 
     nonisolated func accessDescriptor(for source: MinecraftSource) -> SourceAccessDescriptor {

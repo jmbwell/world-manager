@@ -28,8 +28,12 @@ struct SidebarFilter: Identifiable, Hashable {
 struct SourcesSidebarView: View {
     let sources: [MinecraftSource]
     let connectedDevices: [ConnectedDeviceSidebarEntry]
+    let sourceCandidates: [SourceCandidate]
+    let isDiscoveringSourceCandidates: Bool
     @Binding var selection: SidebarSelection?
     let addSourceAction: () -> Void
+    let discoverSourcesAction: () -> Void
+    let addCandidateSourceAction: (SourceCandidate) -> Void
     let addDeviceSourceAction: () -> Void
     let addConnectedDeviceAction: (ConnectedDeviceSidebarEntry) -> Void
     let rescanSourceAction: (MinecraftSource) -> Void
@@ -57,9 +61,36 @@ struct SourcesSidebarView: View {
                     SidebarSourcesSectionHeaderView(title: "Available Devices")
                 }
             }
+
+            if !sourceCandidates.isEmpty {
+                Section {
+                    ForEach(sourceCandidates) { candidate in
+                        SourceCandidateRow(candidate: candidate) {
+                            addCandidateSourceAction(candidate)
+                        }
+                        .listRowSeparator(.hidden)
+                        .listRowInsets(EdgeInsets(top: 4, leading: 8, bottom: 4, trailing: 8))
+                    }
+                } header: {
+                    SidebarSourcesSectionHeaderView(title: "Found Sources")
+                }
+            }
         }
         .listStyle(.sidebar)
         .toolbar {
+            ToolbarItem {
+                Button(action: discoverSourcesAction) {
+                    if isDiscoveringSourceCandidates {
+                        ProgressView()
+                            .appActivityIndicatorStyle(.small)
+                    } else {
+                        Image(systemName: "magnifyingglass")
+                    }
+                }
+                .disabled(isDiscoveringSourceCandidates)
+                .help("Find Minecraft Sources")
+            }
+
             ToolbarItem {
                 Button(action: addSourceAction) {
                     Image(systemName: "folder.badge.plus")
@@ -117,6 +148,52 @@ struct SourcesSidebarView: View {
         )
         .listRowSeparator(.hidden)
         .listRowInsets(EdgeInsets(top: 6, leading: 8, bottom: 0, trailing: 8))
+    }
+}
+
+private struct SourceCandidateRow: View {
+    let candidate: SourceCandidate
+    let addAction: () -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: symbolName)
+                .foregroundStyle(.secondary)
+                .frame(width: 16)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(candidate.displayName)
+                    .lineLimit(1)
+
+                Text(subtitle)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+
+            Spacer(minLength: 8)
+
+            Button(action: addAction) {
+                Image(systemName: "plus")
+            }
+            .buttonStyle(.borderless)
+            .help("Add Source")
+        }
+        .padding(.vertical, 4)
+    }
+
+    private var symbolName: String {
+        switch candidate.edition {
+        case .bedrock:
+            return "folder"
+        case .java:
+            return "curlybraces"
+        }
+    }
+
+    private var subtitle: String {
+        let editionName = candidate.edition == .java ? "Java" : "Bedrock"
+        return "\(editionName) - \(candidate.sourceRootURL.lastPathComponent)"
     }
 }
 

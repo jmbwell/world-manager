@@ -326,6 +326,39 @@ struct World_Manager_for_MinecraftTests {
         }
     }
 
+    @Test func javaProviderDiscoversSourceCandidatesFromBoundedRoots() async throws {
+        let fileManager = FileManager.default
+        let workingURL = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let instanceRootURL = workingURL
+            .appendingPathComponent("PrismLauncher/instances/Example Instance/.minecraft", isDirectory: true)
+        let modURL = instanceRootURL.appendingPathComponent("mods/ExampleMod.jar")
+        defer { try? fileManager.removeItem(at: workingURL) }
+
+        try fileManager.createDirectory(at: modURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("jar".utf8).write(to: modURL)
+        try fileManager.createDirectory(
+            at: instanceRootURL.appendingPathComponent("resourcepacks", isDirectory: true),
+            withIntermediateDirectories: true
+        )
+
+        let access = JavaLocalFolderSourceAccess(candidateDiscoveryRoots: [workingURL])
+        var candidates: [SourceCandidate] = []
+
+        for try await event in access.discoverSourceCandidates() {
+            if case .candidate(let candidate) = event {
+                candidates.append(candidate)
+            }
+        }
+
+        #expect(candidates.contains { candidate in
+            candidate.providerID == JavaLocalFolderSourceAccess().accessorIdentifier
+                && candidate.edition == .java
+                && candidate.sourceRootURL == instanceRootURL.standardizedFileURL
+                && candidate.detectedKinds.contains(.mod)
+                && candidate.detectedKinds.contains(.resourcePack)
+        })
+    }
+
     @Test func sourceLibraryAddSourceResolvesJavaWrapperFolder() async throws {
         let fileManager = FileManager.default
         let rootURL = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
