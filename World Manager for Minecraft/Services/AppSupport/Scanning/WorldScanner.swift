@@ -965,7 +965,7 @@ enum JavaContentScanner {
         under root: URL,
         providerID: PlatformProviderID
     ) -> [SourceCandidate] {
-        let uniqueCandidates = Dictionary(grouping: candidates, by: \.sourceRootURL).compactMap { _, groupedCandidates in
+        let uniqueCandidates = Dictionary(grouping: candidates, by: { sourceIdentityKey(for: $0.sourceRootURL) }).compactMap { _, groupedCandidates in
             groupedCandidates.max { lhs, rhs in
                 lhs.confidence < rhs.confidence
             }
@@ -1066,7 +1066,7 @@ enum JavaContentScanner {
         while !queue.isEmpty && folders.count < maxFolderCount {
             let current = queue.removeFirst()
             let normalizedURL = current.url.standardizedFileURL
-            guard seen.insert(normalizedURL.path).inserted else {
+            guard seen.insert(sourceIdentityKey(for: normalizedURL)).inserted else {
                 continue
             }
 
@@ -1121,7 +1121,7 @@ enum JavaContentScanner {
 
         for url in urls {
             let standardizedURL = url.standardizedFileURL
-            guard seen.insert(standardizedURL.path).inserted else {
+            guard seen.insert(sourceIdentityKey(for: standardizedURL)).inserted else {
                 continue
             }
 

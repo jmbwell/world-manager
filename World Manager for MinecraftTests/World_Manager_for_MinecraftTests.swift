@@ -385,6 +385,36 @@ struct World_Manager_for_MinecraftTests {
         #expect(candidates.first?.detectedKinds.contains(.mod) == true)
     }
 
+    @Test func javaProviderDeduplicatesCaseVariantSourceRoots() async throws {
+        let fileManager = FileManager.default
+        let workingURL = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let upperRootURL = workingURL.appendingPathComponent("CurseForge/Minecraft", isDirectory: true)
+        let lowerRootURL = workingURL.appendingPathComponent("curseforge/minecraft", isDirectory: true)
+        let firstInstanceURL = upperRootURL.appendingPathComponent("Instances/ExampleOne", isDirectory: true)
+        let secondInstanceURL = upperRootURL.appendingPathComponent("Instances/ExampleTwo", isDirectory: true)
+        defer { try? fileManager.removeItem(at: workingURL) }
+
+        for instanceURL in [firstInstanceURL, secondInstanceURL] {
+            try fileManager.createDirectory(
+                at: instanceURL.appendingPathComponent("mods", isDirectory: true),
+                withIntermediateDirectories: true
+            )
+            try Data("jar".utf8).write(to: instanceURL.appendingPathComponent("mods/ExampleMod.jar"))
+        }
+
+        guard fileManager.fileExists(atPath: lowerRootURL.path) else {
+            return
+        }
+
+        let candidates = JavaContentScanner.discoverSourceCandidates(
+            providerID: JavaLocalFolderSourceAccess().accessorIdentifier,
+            searchRoots: [upperRootURL, lowerRootURL]
+        )
+
+        #expect(candidates.count == 1)
+        #expect(sourceIdentityKey(for: candidates[0].sourceRootURL) == sourceIdentityKey(for: upperRootURL))
+    }
+
     @Test func javaAggregateRootDiscoversNestedInstanceItems() async throws {
         let fileManager = FileManager.default
         let workingURL = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)

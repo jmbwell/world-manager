@@ -183,9 +183,9 @@ final class SourceLibrary: ObservableObject, SourceScanSessionHosting, SourcePer
         let providerID = probe?.providerID ?? LocalFolderSourceAccess().accessorIdentifier
         let edition = probe?.edition ?? .bedrock
 
-        if sources.contains(where: { $0.id == normalizedURL }) {
-            sourceCandidates.removeAll { $0.sourceRootURL == normalizedURL }
-            updateSource(normalizedURL) { source in
+        if let existingSourceID = existingSourceID(matching: normalizedURL) {
+            sourceCandidates.removeAll { sourceIdentityKey(for: $0.sourceRootURL) == sourceIdentityKey(for: normalizedURL) }
+            updateSource(existingSourceID) { source in
                 if source.bookmarkData == nil {
                     source.bookmarkData = bookmarkData
                 }
@@ -204,8 +204,8 @@ final class SourceLibrary: ObservableObject, SourceScanSessionHosting, SourcePer
                     }
                 }
             }
-            startScan(for: normalizedURL, mode: .fullScan)
-            return normalizedURL
+            startScan(for: existingSourceID, mode: .fullScan)
+            return existingSourceID
         }
 
         var source = MinecraftSource(
@@ -224,7 +224,7 @@ final class SourceLibrary: ObservableObject, SourceScanSessionHosting, SourcePer
             source.scanDiagnostic = warning
         }
         let sourceID = addSource(source, shouldPersist: true, shouldScan: true)
-        sourceCandidates.removeAll { $0.sourceRootURL == sourceID }
+        sourceCandidates.removeAll { sourceIdentityKey(for: $0.sourceRootURL) == sourceIdentityKey(for: sourceID) }
         return sourceID
     }
 
@@ -232,8 +232,8 @@ final class SourceLibrary: ObservableObject, SourceScanSessionHosting, SourcePer
         let normalizedURL = candidate.sourceRootURL.standardizedFileURL
         let bookmarkData = securityScopedBookmarkData(for: normalizedURL)
 
-        if sources.contains(where: { $0.id == normalizedURL }) {
-            updateSource(normalizedURL) { source in
+        if let existingSourceID = existingSourceID(matching: normalizedURL) {
+            updateSource(existingSourceID) { source in
                 if source.bookmarkData == nil {
                     source.bookmarkData = bookmarkData
                 }
@@ -247,9 +247,9 @@ final class SourceLibrary: ObservableObject, SourceScanSessionHosting, SourcePer
                 source.displayName = candidate.displayName
                 source.capabilities = source.origin.defaultCapabilities
             }
-            sourceCandidates.removeAll { $0.id == candidate.id || $0.sourceRootURL == normalizedURL }
-            startScan(for: normalizedURL, mode: .fullScan)
-            return normalizedURL
+            removeSourceCandidates(matching: candidate, sourceID: existingSourceID)
+            startScan(for: existingSourceID, mode: .fullScan)
+            return existingSourceID
         }
 
         var source = MinecraftSource(
@@ -266,14 +266,14 @@ final class SourceLibrary: ObservableObject, SourceScanSessionHosting, SourcePer
         source.displayName = candidate.displayName
 
         let sourceID = addSource(source, shouldPersist: true, shouldScan: true)
-        sourceCandidates.removeAll { $0.id == candidate.id || $0.sourceRootURL == sourceID }
+        removeSourceCandidates(matching: candidate, sourceID: sourceID)
         return sourceID
     }
 
     @discardableResult
     func addSource(_ source: MinecraftSource, shouldPersist: Bool = false, shouldScan: Bool = true) -> URL {
-        if sources.contains(where: { $0.id == source.id }) {
-            updateSource(source.id) { existingSource in
+        if let existingSourceID = existingSourceID(matching: source.id) {
+            updateSource(existingSourceID) { existingSource in
                 existingSource.origin = source.origin
                 existingSource.accessDescriptor = source.accessDescriptor
                 existingSource.providerID = source.accessDescriptor.accessorIdentifier
@@ -300,13 +300,13 @@ final class SourceLibrary: ObservableObject, SourceScanSessionHosting, SourcePer
         }
 
         if shouldPersist {
-            persistSourceIfAvailable(withID: source.id)
+            persistSourceIfAvailable(withID: existingSourceID(matching: source.id) ?? source.id)
         }
         if shouldScan {
-            startScan(for: source.id, mode: .fullScan)
+            startScan(for: existingSourceID(matching: source.id) ?? source.id, mode: .fullScan)
         }
 
-        return source.id
+        return existingSourceID(matching: source.id) ?? source.id
     }
 
     func source(withID sourceID: URL) -> MinecraftSource? {
@@ -704,8 +704,26 @@ final class SourceLibrary: ObservableObject, SourceScanSessionHosting, SourcePer
 
     private func candidateAlreadyAdded(_ candidate: SourceCandidate) -> Bool {
         sources.contains { source in
-            source.id == candidate.sourceRootURL.standardizedFileURL
-                || source.folderURL == candidate.sourceRootURL.standardizedFileURL
+            sourceIdentityKey(for: source.id) == sourceIdentityKey(for: candidate.sourceRootURL)
+                || sourceIdentityKey(for: source.folderURL) == sourceIdentityKey(for: candidate.sourceRootURL)
+        }
+    }
+
+    private func existingSourceID(matching url: URL) -> URL? {
+        let identity = sourceIdentityKey(for: url)
+        return sources.first { source in
+            sourceIdentityKey(for: source.id) == identity
+                || sourceIdentityKey(for: source.folderURL) == identity
+        }?.id
+    }
+
+    private func removeSourceCandidates(matching candidate: SourceCandidate, sourceID: URL) {
+        let candidateIdentity = sourceIdentityKey(for: candidate.sourceRootURL)
+        let sourceIdentity = sourceIdentityKey(for: sourceID)
+        sourceCandidates.removeAll {
+            $0.id == candidate.id
+                || sourceIdentityKey(for: $0.sourceRootURL) == candidateIdentity
+                || sourceIdentityKey(for: $0.sourceRootURL) == sourceIdentity
         }
     }
 

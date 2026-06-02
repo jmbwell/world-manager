@@ -76,9 +76,17 @@ nonisolated struct SourceCandidate: Identifiable, Hashable, Sendable {
     var id: String {
         [
             providerID,
-            sourceRootURL.standardizedFileURL.absoluteString
+            sourceIdentityKey(for: sourceRootURL)
         ].joined(separator: "::")
     }
+}
+
+nonisolated func sourceIdentityKey(for url: URL) -> String {
+    if url.isFileURL {
+        return url.standardizedFileURL.resolvingSymlinksInPath().path.lowercased()
+    }
+
+    return url.standardized.absoluteString.lowercased()
 }
 
 nonisolated enum WorkStageState: String, Hashable, Sendable, Codable {
