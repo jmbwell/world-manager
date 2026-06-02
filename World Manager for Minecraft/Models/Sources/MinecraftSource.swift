@@ -115,7 +115,7 @@ nonisolated struct MinecraftSource: Identifiable, Hashable, Sendable {
         }
 
         switch selection {
-        case .sourceCandidate:
+        case .sourceCandidate, .connectedDevice:
             return []
         case .source(let sourceID), .allContent(let sourceID):
             guard sourceID == id else {

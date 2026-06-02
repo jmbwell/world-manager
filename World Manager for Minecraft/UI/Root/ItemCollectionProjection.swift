@@ -79,6 +79,8 @@ enum ItemCollectionProjector {
         switch selection {
         case .sourceCandidate:
             return "Source Candidate"
+        case .connectedDevice:
+            return "Connected Device"
         case .source, .allContent:
             return "All Items"
         case .contentType(_, let contentType):
@@ -90,7 +92,7 @@ enum ItemCollectionProjector {
 
     nonisolated static func searchPrompt(for selection: SidebarSelection?, source: MinecraftSource?) -> String {
         switch selection {
-        case .some(.sourceCandidate):
+        case .some(.sourceCandidate), .some(.connectedDevice):
             return "Search Library"
         case .some(.source):
             return "Search \(source?.displayName ?? "Library")"
@@ -109,6 +111,8 @@ enum ItemCollectionProjector {
         switch selection {
         case .some(.sourceCandidate):
             return "Source Candidate"
+        case .some(.connectedDevice):
+            return "Connected Device"
         case .some(.source):
             return "Library"
         case .some(.allContent):
@@ -128,7 +132,7 @@ enum ItemCollectionProjector {
         }
 
         switch selection {
-        case .sourceCandidate:
+        case .sourceCandidate, .connectedDevice:
             return "items"
         case .source, .allContent:
             return scopedItemCount == 1 ? "item" : "items"

@@ -101,6 +101,22 @@ final class SourceLibrary: ObservableObject, SourceScanSessionHosting, SourcePer
         visibleSources
     }
 
+    var sidebarConnectedDevices: [ConnectedDeviceSidebarEntry] {
+        connectedDevices.filter { entry in
+            guard entry.matchedSourceID == nil else {
+                return false
+            }
+
+            return !sources.contains { source in
+                guard case .connectedDevice(let device, _) = source.origin else {
+                    return false
+                }
+
+                return device.udid == entry.device.udid
+            }
+        }
+    }
+
     func sourceID(forItemID itemID: URL) -> URL? {
         sourceIDByItemID[itemID]
     }

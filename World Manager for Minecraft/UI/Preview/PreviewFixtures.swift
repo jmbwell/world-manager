@@ -356,6 +356,7 @@ struct ItemDetailColumnPreviewContainer: View {
                 item: PreviewFixtures.featuredWorld,
                 source: PreviewFixtures.primarySource,
                 sourceCandidate: nil,
+                connectedDevice: nil,
                 showsSourceDetails: false,
                 behaviorPacks: PreviewFixtures.primarySource.resolvedPackReferences(for: PreviewFixtures.featuredWorld.id, type: .behaviorPack),
                 resourcePacks: PreviewFixtures.primarySource.resolvedPackReferences(for: PreviewFixtures.featuredWorld.id, type: .resourcePack),
@@ -372,7 +373,8 @@ struct ItemDetailColumnPreviewContainer: View {
                 revealAction: {},
                 shareAction: { _ in },
                 addCandidateSourceAction: { _ in },
-                revealCandidateAction: { _ in }
+                revealCandidateAction: { _ in },
+                addConnectedDeviceAction: { _ in }
             )
         }
     }

@@ -6,6 +6,7 @@ import SwiftUI
 enum SidebarSelection: Hashable, Sendable {
     case source(sourceID: URL)
     case sourceCandidate(candidateID: String)
+    case connectedDevice(deviceID: String)
     case allContent(sourceID: URL)
     case contentType(sourceID: URL, contentType: MinecraftContentType)
     case contentKind(sourceID: URL, contentKind: MinecraftContentKind)
@@ -14,7 +15,7 @@ enum SidebarSelection: Hashable, Sendable {
         switch self {
         case .source(let sourceID), .allContent(let sourceID), .contentType(let sourceID, _), .contentKind(let sourceID, _):
             return sourceID
-        case .sourceCandidate:
+        case .sourceCandidate, .connectedDevice:
             return nil
         }
     }
@@ -152,10 +153,14 @@ struct SourcesSidebarView: View {
     private func connectedDeviceSectionRows(for entry: ConnectedDeviceSidebarEntry) -> some View {
         ConnectedDeviceRow(
             entry: entry,
+            onSelect: {
+                selection = .connectedDevice(deviceID: entry.id)
+            },
             addAction: entry.hasMinecraftContainer ? {
                 addConnectedDeviceAction(entry)
             } : nil
         )
+        .tag(SidebarSelection.connectedDevice(deviceID: entry.id) as SidebarSelection?)
         .listRowSeparator(.hidden)
         .listRowInsets(EdgeInsets(top: 6, leading: 8, bottom: 0, trailing: 8))
     }
@@ -185,9 +190,9 @@ private struct SourceCandidateRow: View {
             Spacer(minLength: 8)
 
             Button(action: addAction) {
-                Image(systemName: "plus")
+                Text("Add")
             }
-            .buttonStyle(.borderless)
+            .appMiniProminentButton()
             .help("Add Source")
         }
         .contentShape(Rectangle())
@@ -395,6 +400,7 @@ private struct CircularScanProgressView: View {
 
 private struct ConnectedDeviceRow: View {
     let entry: ConnectedDeviceSidebarEntry
+    let onSelect: () -> Void
     let addAction: (() -> Void)?
 
     var body: some View {
@@ -424,6 +430,8 @@ private struct ConnectedDeviceRow: View {
             }
         }
         .opacity(addAction == nil ? 0.68 : 1)
+        .contentShape(Rectangle())
+        .onTapGesture(perform: onSelect)
     }
 
     private var iconName: String {

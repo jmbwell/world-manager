@@ -8,6 +8,7 @@ struct ItemDetailColumnView: View {
     let item: MinecraftContentItem?
     let source: MinecraftSource?
     let sourceCandidate: SourceCandidate?
+    let connectedDevice: ConnectedDeviceSidebarEntry?
     let showsSourceDetails: Bool
     let behaviorPacks: [ContentPackReference]
     let resourcePacks: [ContentPackReference]
@@ -25,11 +26,11 @@ struct ItemDetailColumnView: View {
     let shareAction: (NSView?) -> Void
     let addCandidateSourceAction: (SourceCandidate) -> Void
     let revealCandidateAction: (SourceCandidate) -> Void
+    let addConnectedDeviceAction: (ConnectedDeviceSidebarEntry) -> Void
 
     var body: some View {
         Group {
-            if isEmpty {
-            } else if let item {
+            if let item {
                 ItemDetailView(
                     item: item,
                     source: source,
@@ -59,6 +60,14 @@ struct ItemDetailColumnView: View {
                         revealCandidateAction(sourceCandidate)
                     }
                 )
+            } else if let connectedDevice {
+                ConnectedDeviceDetailView(
+                    entry: connectedDevice,
+                    addAction: connectedDevice.hasMinecraftContainer ? {
+                        addConnectedDeviceAction(connectedDevice)
+                    } : nil
+                )
+            } else if isEmpty {
             } else {
                 Text("Select a world or pack to see details")
                     .foregroundStyle(.secondary)

@@ -43,9 +43,10 @@ struct ContentView: View {
     }
 
     var body: some View {
-        let isEmptyLibrary = library.visibleSources.isEmpty && library.connectedDevices.isEmpty
+        let isEmptyLibrary = library.visibleSources.isEmpty && library.sidebarConnectedDevices.isEmpty && library.sourceCandidates.isEmpty
         let resolvedCurrentSource = currentSource
         let resolvedCurrentSourceCandidate = currentSourceCandidate
+        let resolvedCurrentConnectedDevice = currentConnectedDevice
         let currentProjectionRequest = ItemCollectionProjectionRequest(
             selection: selectedSidebarSelection,
             searchText: searchText,
@@ -75,7 +76,7 @@ struct ContentView: View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
             SourcesSidebarView(
                 sources: library.sidebarSources,
-                connectedDevices: library.connectedDevices,
+                connectedDevices: library.sidebarConnectedDevices,
                 sourceCandidates: library.sourceCandidates,
                 isDiscoveringSourceCandidates: library.isDiscoveringSourceCandidates,
                 selection: sidebarSelectionBinding,
@@ -124,6 +125,7 @@ struct ContentView: View {
                 item: resolvedCurrentSelectedItem,
                 source: resolvedCurrentSource,
                 sourceCandidate: resolvedCurrentSourceCandidate,
+                connectedDevice: resolvedCurrentConnectedDevice,
                 showsSourceDetails: resolvedCurrentSelectedItem == nil && isSourceOverviewSelection,
                 behaviorPacks: resolvedCurrentSelectedItem.map { logicalPackReferences(for: $0, type: .behaviorPack) } ?? [],
                 resourcePacks: resolvedCurrentSelectedItem.map { logicalPackReferences(for: $0, type: .resourcePack) } ?? [],
@@ -158,7 +160,8 @@ struct ContentView: View {
                     shareItem(item, from: anchorView)
                 },
                 addCandidateSourceAction: addCandidateSource(_:),
-                revealCandidateAction: revealCandidateInFinder(_:)
+                revealCandidateAction: revealCandidateInFinder(_:),
+                addConnectedDeviceAction: addConnectedDeviceSource(from:)
             )
             .frame(minWidth: 450)
         }
@@ -193,7 +196,7 @@ struct ContentView: View {
         .onChange(of: library.sources.map(\.id)) { _, _ in
             syncSelection(with: library.visibleSources.map(\.id))
         }
-        .onChange(of: library.connectedDevices.map { "\($0.id)::\($0.matchedSourceID?.absoluteString ?? "nil")" }) { _, _ in
+        .onChange(of: library.sidebarConnectedDevices.map { "\($0.id)::\($0.matchedSourceID?.absoluteString ?? "nil")" }) { _, _ in
             syncSelection(with: library.visibleSources.map(\.id))
         }
         .task(id: currentProjectionRequest) {
@@ -265,6 +268,14 @@ struct ContentView: View {
         }
 
         return library.sourceCandidates.first { $0.id == candidateID }
+    }
+
+    private var currentConnectedDevice: ConnectedDeviceSidebarEntry? {
+        guard case .connectedDevice(let deviceID) = selectedSidebarSelection else {
+            return nil
+        }
+
+        return library.sidebarConnectedDevices.first { $0.id == deviceID }
     }
 
     private func currentSelectedItem(in source: MinecraftSource?) -> MinecraftContentItem? {
@@ -674,6 +685,10 @@ struct ContentView: View {
             switch selectedSidebarSelection {
             case .sourceCandidate(let candidateID):
                 if !library.sourceCandidates.contains(where: { $0.id == candidateID }) {
+                    self.selectedSidebarSelection = sourceIDs.first.map { .source(sourceID: $0) }
+                }
+            case .connectedDevice(let deviceID):
+                if !library.sidebarConnectedDevices.contains(where: { $0.id == deviceID }) {
                     self.selectedSidebarSelection = sourceIDs.first.map { .source(sourceID: $0) }
                 }
             case .source, .allContent, .contentType, .contentKind:
