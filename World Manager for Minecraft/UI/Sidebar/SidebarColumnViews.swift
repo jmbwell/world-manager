@@ -124,13 +124,14 @@ struct SourcesSidebarView: View {
 
         SourceHeaderRow(
             source: source,
+            isSelected: selection == .source(sourceID: source.id),
             onSelect: {
                 selection = .source(sourceID: source.id)
             }
         )
             .tag(SidebarSelection.source(sourceID: source.id) as SidebarSelection?)
             .listRowSeparator(.hidden)
-            .listRowInsets(EdgeInsets(top: 6, leading: 0, bottom: 0, trailing: 0))
+            .listRowInsets(EdgeInsets(top: 4, leading: 8, bottom: 4, trailing: 8))
             .contextMenu {
                 Button("Rescan \"\(source.displayName)\"") {
                     rescanSourceAction(source)
@@ -246,6 +247,7 @@ private struct SidebarSourcesSectionHeaderView: View {
 
 private struct SourceHeaderRow: View {
     let source: MinecraftSource
+    let isSelected: Bool
     let onSelect: () -> Void
 
     var body: some View {
@@ -273,8 +275,14 @@ private struct SourceHeaderRow: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.leading, 5)
-        .padding(.vertical, 6)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .background {
+            if isSelected {
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(Color.accentColor.opacity(0.18))
+            }
+        }
         .contentShape(Rectangle())
         .onTapGesture(perform: onSelect)
     }
