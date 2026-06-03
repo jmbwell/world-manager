@@ -29,6 +29,21 @@ struct SidebarFilter: Identifiable, Hashable {
     let selection: SidebarSelection
 }
 
+private struct SidebarNode: Identifiable, Hashable {
+    let id: SidebarSelection
+    let row: SidebarNodeRow
+    let children: [SidebarNode]?
+
+    var selection: SidebarSelection { id }
+}
+
+private enum SidebarNodeRow: Hashable {
+    case source(MinecraftSource)
+    case filter(SidebarFilter)
+    case connectedDevice(ConnectedDeviceSidebarEntry)
+    case sourceCandidate(SourceCandidate)
+}
+
 struct SourcesSidebarView: View {
     let sources: [MinecraftSource]
     let connectedDevices: [ConnectedDeviceSidebarEntry]
@@ -46,42 +61,25 @@ struct SourcesSidebarView: View {
 
     var body: some View {
         List(selection: $selection) {
-            if !sources.isEmpty {
+            if !libraryNodes.isEmpty {
                 Section {
-                    ForEach(sources) { source in
-                        sourceSectionRows(for: source)
-                    }
+                    OutlineGroup(libraryNodes, children: \.children, content: sidebarNodeRow)
                 } header: {
                     SidebarSourcesSectionHeaderView(title: "Libraries")
                 }
             }
 
-            if !connectedDevices.isEmpty {
+            if !deviceNodes.isEmpty {
                 Section {
-                    ForEach(connectedDevices) { entry in
-                        connectedDeviceSectionRows(for: entry)
-                    }
+                    OutlineGroup(deviceNodes, children: \.children, content: sidebarNodeRow)
                 } header: {
                     SidebarSourcesSectionHeaderView(title: "Available Devices")
                 }
             }
 
-            if !sourceCandidates.isEmpty {
+            if !candidateNodes.isEmpty {
                 Section {
-                    ForEach(sourceCandidates) { candidate in
-                        SourceCandidateRow(
-                            candidate: candidate,
-                            onSelect: {
-                                selection = .sourceCandidate(candidateID: candidate.id)
-                            },
-                            addAction: {
-                                addCandidateSourceAction(candidate)
-                            }
-                        )
-                        .tag(SidebarSelection.sourceCandidate(candidateID: candidate.id) as SidebarSelection?)
-                        .listRowSeparator(.hidden)
-                        .listRowInsets(EdgeInsets(top: 4, leading: 8, bottom: 4, trailing: 8))
-                    }
+                    OutlineGroup(candidateNodes, children: \.children, content: sidebarNodeRow)
                 } header: {
                     SidebarSourcesSectionHeaderView(title: "Found Sources")
                 }
@@ -118,58 +116,92 @@ struct SourcesSidebarView: View {
         }
     }
 
-    @ViewBuilder
-    private func sourceSectionRows(for source: MinecraftSource) -> some View {
-        let sourceFilters = filters(source)
-
-        SourceHeaderRow(
-            source: source,
-            isSelected: selection == .source(sourceID: source.id),
-            onSelect: {
-                selection = .source(sourceID: source.id)
-            }
-        )
-            .tag(SidebarSelection.source(sourceID: source.id) as SidebarSelection?)
-            .listRowSeparator(.hidden)
-            .listRowInsets(EdgeInsets(top: 4, leading: 8, bottom: 4, trailing: 8))
-            .contextMenu {
-                Button("Rescan \"\(source.displayName)\"") {
-                    rescanSourceAction(source)
-                }
-
-                Divider()
-
-                Button("Remove \"\(source.displayName)\"", role: .destructive) {
-                    removeSourceAction(source)
-                }
+    private var libraryNodes: [SidebarNode] {
+        sources.map { source in
+            let childNodes = filters(source).map { filter in
+                SidebarNode(
+                    id: filter.selection,
+                    row: .filter(filter),
+                    children: nil
+                )
             }
 
-        ForEach(sourceFilters) { filter in
-            SidebarFilterRow(filter: filter, isIndented: true)
-                .tag(filter.selection as SidebarSelection?)
+            return SidebarNode(
+                id: .source(sourceID: source.id),
+                row: .source(source),
+                children: childNodes.isEmpty ? nil : childNodes
+            )
+        }
+    }
+
+    private var deviceNodes: [SidebarNode] {
+        connectedDevices.map { entry in
+            SidebarNode(
+                id: .connectedDevice(deviceID: entry.id),
+                row: .connectedDevice(entry),
+                children: nil
+            )
+        }
+    }
+
+    private var candidateNodes: [SidebarNode] {
+        sourceCandidates.map { candidate in
+            SidebarNode(
+                id: .sourceCandidate(candidateID: candidate.id),
+                row: .sourceCandidate(candidate),
+                children: nil
+            )
         }
     }
 
     @ViewBuilder
-    private func connectedDeviceSectionRows(for entry: ConnectedDeviceSidebarEntry) -> some View {
-        ConnectedDeviceRow(
-            entry: entry,
-            onSelect: {
-                selection = .connectedDevice(deviceID: entry.id)
-            },
-            addAction: entry.hasMinecraftContainer ? {
-                addConnectedDeviceAction(entry)
-            } : nil
-        )
-        .tag(SidebarSelection.connectedDevice(deviceID: entry.id) as SidebarSelection?)
-        .listRowSeparator(.hidden)
-        .listRowInsets(EdgeInsets(top: 6, leading: 8, bottom: 0, trailing: 8))
+    private func sidebarNodeRow(_ node: SidebarNode) -> some View {
+        switch node.row {
+        case .source(let source):
+            SourceHeaderRow(source: source)
+                .tag(node.selection as SidebarSelection?)
+                .listRowSeparator(.hidden)
+                .listRowInsets(EdgeInsets(top: 4, leading: 8, bottom: 4, trailing: 8))
+                .contextMenu {
+                    Button("Rescan \"\(source.displayName)\"") {
+                        rescanSourceAction(source)
+                    }
+
+                    Divider()
+
+                    Button("Remove \"\(source.displayName)\"", role: .destructive) {
+                        removeSourceAction(source)
+                    }
+                }
+        case .filter(let filter):
+            SidebarFilterRow(filter: filter)
+                .tag(node.selection as SidebarSelection?)
+        case .connectedDevice(let entry):
+            ConnectedDeviceRow(
+                entry: entry,
+                addAction: entry.hasMinecraftContainer ? {
+                    addConnectedDeviceAction(entry)
+                } : nil
+            )
+            .tag(node.selection as SidebarSelection?)
+            .listRowSeparator(.hidden)
+            .listRowInsets(EdgeInsets(top: 6, leading: 8, bottom: 0, trailing: 8))
+        case .sourceCandidate(let candidate):
+            SourceCandidateRow(
+                candidate: candidate,
+                addAction: {
+                    addCandidateSourceAction(candidate)
+                }
+            )
+            .tag(node.selection as SidebarSelection?)
+            .listRowSeparator(.hidden)
+            .listRowInsets(EdgeInsets(top: 4, leading: 8, bottom: 4, trailing: 8))
+        }
     }
 }
 
 private struct SourceCandidateRow: View {
     let candidate: SourceCandidate
-    let onSelect: () -> Void
     let addAction: () -> Void
 
     var body: some View {
@@ -196,8 +228,6 @@ private struct SourceCandidateRow: View {
             .appMiniProminentButton()
             .help("Add Source")
         }
-        .contentShape(Rectangle())
-        .onTapGesture(perform: onSelect)
         .padding(.vertical, 4)
     }
 
@@ -218,7 +248,6 @@ private struct SourceCandidateRow: View {
 
 private struct SidebarFilterRow: View {
     let filter: SidebarFilter
-    let isIndented: Bool
 
     var body: some View {
         HStack(spacing: 10) {
@@ -233,7 +262,6 @@ private struct SidebarFilterRow: View {
             Text(filter.count, format: .number)
                 .foregroundStyle(.secondary)
         }
-        .padding(.leading, isIndented ? 16 : 0)
     }
 }
 
@@ -247,8 +275,6 @@ private struct SidebarSourcesSectionHeaderView: View {
 
 private struct SourceHeaderRow: View {
     let source: MinecraftSource
-    let isSelected: Bool
-    let onSelect: () -> Void
 
     var body: some View {
         HStack(spacing: 8) {
@@ -277,14 +303,6 @@ private struct SourceHeaderRow: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 8)
         .padding(.vertical, 5)
-        .background {
-            if isSelected {
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(Color.accentColor.opacity(0.18))
-            }
-        }
-        .contentShape(Rectangle())
-        .onTapGesture(perform: onSelect)
     }
 
     private var connection: DeviceConnection? {
@@ -408,7 +426,6 @@ private struct CircularScanProgressView: View {
 
 private struct ConnectedDeviceRow: View {
     let entry: ConnectedDeviceSidebarEntry
-    let onSelect: () -> Void
     let addAction: (() -> Void)?
 
     var body: some View {
@@ -438,8 +455,6 @@ private struct ConnectedDeviceRow: View {
             }
         }
         .opacity(addAction == nil ? 0.68 : 1)
-        .contentShape(Rectangle())
-        .onTapGesture(perform: onSelect)
     }
 
     private var iconName: String {
