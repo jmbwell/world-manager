@@ -152,7 +152,7 @@ nonisolated struct CollectionSnapshot: Identifiable, Hashable, Sendable, Codable
     let childDirectoryCount: Int
     let fingerprint: String
 
-    var id: String { folderName }
+    var id: String { "\(folderName)::\(fingerprint)" }
 }
 
 nonisolated struct SourceSnapshot: Hashable, Sendable, Codable {

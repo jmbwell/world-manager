@@ -443,6 +443,60 @@ struct World_Manager_for_MinecraftTests {
         #expect(snapshots.map(\.folderName).contains("a/e/f/resourcepacks"))
     }
 
+    @Test func sourceRestorationComparesDuplicateCollectionNamesWithoutCrashing() async throws {
+        let fileManager = FileManager.default
+        let workingURL = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? fileManager.removeItem(at: workingURL) }
+        try fileManager.createDirectory(at: workingURL, withIntermediateDirectories: true)
+
+        let collectionSnapshots = [
+            CollectionSnapshot(
+                folderName: "mods",
+                modifiedDate: Date(timeIntervalSince1970: 100),
+                childDirectoryCount: 1,
+                fingerprint: "a/b/c/mods::1::100"
+            ),
+            CollectionSnapshot(
+                folderName: "mods",
+                modifiedDate: Date(timeIntervalSince1970: 200),
+                childDirectoryCount: 2,
+                fingerprint: "x/y/z/mods::2::200"
+            )
+        ]
+        var source = MinecraftSource(
+            folderURL: workingURL,
+            origin: .javaLocalFolder(bookmarkData: nil),
+            accessDescriptor: SourceAccessDescriptor(
+                accessorIdentifier: JavaLocalFolderSourceAccess().accessorIdentifier,
+                kind: .localFolder,
+                refreshStrategy: .eagerFullScan
+            ),
+            availability: .available
+        )
+        source.edition = .java
+        source.snapshot = SourceSnapshot(
+            sourceID: workingURL,
+            rootModifiedDate: nil,
+            collectionSnapshots: collectionSnapshots,
+            itemSnapshots: []
+        )
+
+        #expect(SourceRestoration.needsReconcile(source) { _, _ in collectionSnapshots } == false)
+        #expect(
+            SourceRestoration.needsReconcile(source) { _, _ in
+                [
+                    collectionSnapshots[0],
+                    CollectionSnapshot(
+                        folderName: "mods",
+                        modifiedDate: Date(timeIntervalSince1970: 300),
+                        childDirectoryCount: 3,
+                        fingerprint: "x/y/z/mods::3::300"
+                    )
+                ]
+            } == true
+        )
+    }
+
     @Test func sourceLibraryAddSourceCandidatePreservesJavaAggregateProvider() async throws {
         let fileManager = FileManager.default
         let workingURL = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)

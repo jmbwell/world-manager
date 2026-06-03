@@ -214,20 +214,18 @@ enum SourceRestoration {
         _ currentCollections: [CollectionSnapshot],
         persistedCollections: [CollectionSnapshot]
     ) -> Bool {
-        let currentCollectionsByName = Dictionary(
-            uniqueKeysWithValues: currentCollections.map { ($0.folderName, $0) }
-        )
-        let persistedCollectionsByName = Dictionary(
-            uniqueKeysWithValues: persistedCollections.map { ($0.folderName, $0) }
-        )
+        let currentCollectionsByName = Dictionary(grouping: currentCollections, by: \.folderName)
+            .mapValues { $0.map(\.fingerprint).sorted() }
+        let persistedCollectionsByName = Dictionary(grouping: persistedCollections, by: \.folderName)
+            .mapValues { $0.map(\.fingerprint).sorted() }
 
         if currentCollectionsByName.count != persistedCollectionsByName.count {
             return true
         }
 
-        for (folderName, persistedCollection) in persistedCollectionsByName {
-            guard let currentCollection = currentCollectionsByName[folderName],
-                  currentCollection.fingerprint == persistedCollection.fingerprint else {
+        for (folderName, persistedFingerprints) in persistedCollectionsByName {
+            guard let currentFingerprints = currentCollectionsByName[folderName],
+                  currentFingerprints == persistedFingerprints else {
                 return true
             }
         }
