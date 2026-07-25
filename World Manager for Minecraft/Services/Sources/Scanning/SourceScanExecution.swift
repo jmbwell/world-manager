@@ -227,23 +227,6 @@ enum SourceScanExecutor {
             }
             host.persistSourceIfAvailable(withID: sourceID)
 
-            if source.origin.kind == .connectedDevice {
-                try await finishConnectedDeviceScan(
-                    sourceID: sourceID,
-                    source: source,
-                    host: host,
-                    sourceAccessMethod: sourceAccessMethod,
-                    notificationService: notificationService,
-                    index: index,
-                    discoveredCount: discoveredCount,
-                    scanStartTime: scanStartTime,
-                    scanContextURL: scanContextURL,
-                    performanceContext: performanceContext,
-                    minimumVisibleScanDuration: minimumVisibleScanDuration
-                )
-                return
-            }
-
             let sizeQueue = EnrichmentWorkQueue()
             sizeWorkerTasks = (0..<resolvedSizeWorkerCount).map { _ in
                 Task.detached(priority: .utility) {
@@ -320,52 +303,6 @@ enum SourceScanExecutor {
             }
             host.persistSourceIfAvailable(withID: sourceID)
         }
-    }
-
-    private static func finishConnectedDeviceScan(
-        sourceID: URL,
-        source: MinecraftSource,
-        host: SourceScanSessionHosting,
-        sourceAccessMethod: SourceAccessMethod,
-        notificationService: ScanNotificationServicing,
-        index: SourceIndexActor,
-        discoveredCount: Int,
-        scanStartTime: Date,
-        scanContextURL: URL,
-        performanceContext: String,
-        minimumVisibleScanDuration: TimeInterval
-    ) async throws {
-        let sizeStageStartTime = Date()
-        let sizeSeedItems = await index.currentItems()
-        let sizedItems = await sourceAccessMethod.loadSizeAssets(
-            for: sizeSeedItems.filter { !$0.sizeLoaded },
-            in: source
-        )
-        for sizedItem in sizedItems {
-            if let snapshot = await index.applySizedItem(sizedItem) {
-                host.applySnapshot(snapshot, to: sourceID)
-            }
-        }
-
-        host.logScanStage(
-            "Size",
-            elapsed: Date().timeIntervalSince(sizeStageStartTime),
-            context: performanceContext,
-            itemCount: discoveredCount
-        )
-
-        try await finishScan(
-            sourceID: sourceID,
-            source: source,
-            host: host,
-            notificationService: notificationService,
-            index: index,
-            discoveredCount: discoveredCount,
-            scanStartTime: scanStartTime,
-            scanContextURL: scanContextURL,
-            performanceContext: performanceContext,
-            minimumVisibleScanDuration: minimumVisibleScanDuration
-        )
     }
 
     private static func finishScan(
