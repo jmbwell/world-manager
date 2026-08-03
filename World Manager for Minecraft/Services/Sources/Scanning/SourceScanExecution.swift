@@ -750,7 +750,8 @@ private actor SourceIndexActor {
             } else if sizeLoadedCount == 0 {
                 scanStatus = "Preparing size calculations..."
             } else {
-                scanStatus = "Calculating sizes for \(sizeLoadedCount) of \(indexedItemCount) items..."
+                let remainingCount = max(indexedItemCount - sizeLoadedCount, 0)
+                scanStatus = "Calculating sizes for \(remainingCount) of \(indexedItemCount) items..."
             }
         } else {
             scanStatus = indexedItemCount == 0

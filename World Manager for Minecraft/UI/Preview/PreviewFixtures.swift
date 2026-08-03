@@ -262,6 +262,9 @@ struct SidebarColumnPreviewContainer: View {
                 addConnectedDeviceAction: { _ in },
                 rescanSourceAction: { _ in },
                 removeSourceAction: { _ in },
+                importSourceAction: { _ in },
+                importDropAction: { _, _ in false },
+                installationState: { _ in nil },
                 filters: { source in
                     let allFilter = SidebarFilter(
                         title: "All Content",
@@ -331,6 +334,7 @@ struct ItemListColumnPreviewContainer: View {
                 searchPrompt: "Search Worlds",
                 chooseFolderAction: {},
                 dropAction: { _ in false },
+                dragProvider: { _ in NSItemProvider() },
                 itemContextMenu: { item in
                     Button("Reveal \(item.displayName)") {}
                 }
@@ -345,6 +349,7 @@ struct ItemDetailColumnPreviewContainer: View {
             ItemDetailColumnView(
                 item: PreviewFixtures.featuredWorld,
                 source: PreviewFixtures.primarySource,
+                installationState: nil,
                 showsSourceDetails: false,
                 behaviorPacks: PreviewFixtures.primarySource.resolvedPackReferences(for: PreviewFixtures.featuredWorld.id, type: .behaviorPack),
                 resourcePacks: PreviewFixtures.primarySource.resolvedPackReferences(for: PreviewFixtures.featuredWorld.id, type: .resourcePack),
@@ -359,7 +364,8 @@ struct ItemDetailColumnPreviewContainer: View {
                 exportTitle: PreviewFixtures.featuredWorld.contentType.exportTitle,
                 exportAction: {},
                 revealAction: {},
-                shareAction: { _ in }
+                shareAction: { _ in },
+                importAction: { _ in }
             )
         }
     }

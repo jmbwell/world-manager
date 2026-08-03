@@ -365,6 +365,31 @@ struct AppleMobileDeviceSourceAccess: ConnectedDeviceSourceAccessMethod {
         }
     }
 
+    nonisolated func install(_ payload: InstallationPayload, in source: MinecraftSource) async throws -> InstalledContentItem {
+        guard case .connectedDevice(_, let container) = source.origin else {
+            throw SourceAccessError.accessFailed(reason: "The selected source is not a connected device.")
+        }
+        let minecraftRoot = container.minecraftFolderRelativePath?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !minecraftRoot.isEmpty else {
+            throw SourceAccessError.accessFailed(reason: "The connected device is missing its Minecraft content path.")
+        }
+
+        let destinationName = try await AppleMobileDeviceAccess.installDirectory(
+            deviceIdentifier: container.deviceUDID,
+            bundleIdentifier: container.appID,
+            minecraftRootRelativePath: minecraftRoot,
+            collectionFolderName: payload.contentType.collectionFolderName,
+            preferredDestinationName: payload.suggestedFolderName,
+            sourceDirectoryURL: payload.preparedDirectoryURL
+        )
+        return InstalledContentItem(
+            contentType: payload.contentType,
+            displayName: payload.displayName,
+            destinationName: destinationName
+        )
+    }
+
     nonisolated func purgeCachedArtifacts(for source: MinecraftSource) async {
         guard source.origin.kind == .connectedDevice else {
             return

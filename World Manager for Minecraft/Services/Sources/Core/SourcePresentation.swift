@@ -120,7 +120,8 @@ enum SourcePresentation {
         case .discovering, .metadata, .previews:
             return "Loading previews for \(source.previewLoadedCount) of \(source.indexedItemCount) items..."
         case .sizing:
-            return "Calculating sizes for \(source.sizeLoadedCount) of \(source.indexedItemCount) items..."
+            let remainingCount = max(source.indexedItemCount - source.sizeLoadedCount, 0)
+            return "Calculating sizes for \(remainingCount) of \(source.indexedItemCount) items..."
         case .completed:
             return source.indexedItemCount == 0 ? "No Minecraft items found." : "Loaded \(source.indexedDetailCount) items."
         case .idle:

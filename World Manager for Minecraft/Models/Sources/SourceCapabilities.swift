@@ -7,16 +7,19 @@ nonisolated struct SourceCapabilities: Hashable, Sendable, Codable {
     var canScan: Bool = true
     var canMaterializeItems: Bool = true
     var canExportPortablePackages: Bool = true
+    var canInstallItems: Bool = false
 
     static let localFolder = SourceCapabilities(
         canScan: true,
         canMaterializeItems: true,
-        canExportPortablePackages: true
+        canExportPortablePackages: true,
+        canInstallItems: true
     )
 
     static let connectedDevice = SourceCapabilities(
         canScan: true,
         canMaterializeItems: true,
-        canExportPortablePackages: true
+        canExportPortablePackages: true,
+        canInstallItems: true
     )
 }

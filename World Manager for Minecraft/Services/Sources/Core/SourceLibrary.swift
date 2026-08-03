@@ -29,6 +29,7 @@ final class SourceLibrary: ObservableObject, SourceScanSessionHosting, SourcePer
     }
     @Published var connectedDevices: [ConnectedDeviceSidebarEntry] = []
     @Published var isRestoringPersistedSources = true
+    @Published var installationStateBySourceID: [URL: SourceInstallationState] = [:]
 
     private var scanTasks: [URL: Task<Void, Never>] = [:]
     private var automaticSyncTasks: [URL: Task<Void, Never>] = [:]
@@ -247,6 +248,143 @@ final class SourceLibrary: ObservableObject, SourceScanSessionHosting, SourcePer
                 contentType: itemActionService.archiveContentType(for: item),
                 isTemporary: true
             )
+        }
+    }
+
+    func installPackages(at packageURLs: [URL], into sourceID: URL) async throws -> [InstalledContentItem] {
+        guard
+            let destinationSource = source(withID: sourceID),
+            destinationSource.availability == .available,
+            destinationSource.capabilities.canInstallItems
+        else {
+            throw SourceAccessError.accessFailed(reason: "This source is not currently available for installation.")
+        }
+        guard !packageURLs.isEmpty else {
+            return []
+        }
+
+        scanTasks[sourceID]?.cancel()
+        installationStateBySourceID[sourceID] = SourceInstallationState(
+            completedCount: 0,
+            totalCount: packageURLs.count,
+            status: "Preparing import..."
+        )
+
+        var plans: [InstallationPlan] = []
+        var installedItems: [InstalledContentItem] = []
+        var totalPayloadCount = 0
+        do {
+            for packageURL in packageURLs {
+                let plan = try await Task.detached(priority: .userInitiated) {
+                    let accessedSecurityScope = packageURL.startAccessingSecurityScopedResource()
+                    defer {
+                        if accessedSecurityScope {
+                            packageURL.stopAccessingSecurityScopedResource()
+                        }
+                    }
+                    return try MinecraftPackageInstaller.preparePackage(at: packageURL)
+                }.value
+                plans.append(plan)
+            }
+
+            let payloads = plans.flatMap(\.payloads)
+            totalPayloadCount = payloads.count
+            try validatePackConflicts(payloads, destinationSource: destinationSource)
+            installationStateBySourceID[sourceID] = SourceInstallationState(
+                completedCount: 0,
+                totalCount: payloads.count,
+                status: payloads.count == 1 ? "Installing item..." : "Installing \(payloads.count) items..."
+            )
+
+            for payload in payloads {
+                guard let currentDestination = source(withID: sourceID) else {
+                    throw SourceAccessError.accessFailed(reason: "The destination source was removed during installation.")
+                }
+                let installedItem = try await sourceAccessMethod.install(payload, in: currentDestination)
+                installedItems.append(installedItem)
+                installationStateBySourceID[sourceID] = SourceInstallationState(
+                    completedCount: installedItems.count,
+                    totalCount: payloads.count,
+                    status: "Installed \(installedItems.count) of \(payloads.count)..."
+                )
+            }
+
+            plans.forEach { $0.cleanup() }
+            installationStateBySourceID[sourceID] = nil
+            startScan(for: sourceID, mode: .fullScan)
+            return installedItems
+        } catch {
+            plans.forEach { $0.cleanup() }
+            installationStateBySourceID[sourceID] = nil
+            if !installedItems.isEmpty {
+                startScan(for: sourceID, mode: .fullScan)
+                throw MinecraftPackageInstaller.InstallError.partialInstallation(
+                    completed: installedItems.count,
+                    total: totalPayloadCount,
+                    reason: error.localizedDescription
+                )
+            }
+            throw error
+        }
+    }
+
+    func copyItem(
+        _ item: MinecraftContentItem,
+        from sourceID: URL,
+        into destinationSourceID: URL
+    ) async throws -> [InstalledContentItem] {
+        guard let source = source(withID: sourceID) else {
+            throw SourceAccessError.accessFailed(reason: "The source item is no longer available.")
+        }
+
+        let representation = try await externalRepresentation(
+            for: item,
+            in: source,
+            preferredKind: .portablePackage
+        )
+        defer {
+            if representation.isTemporary {
+                try? FileManager.default.removeItem(at: representation.url)
+            }
+        }
+        return try await installPackages(at: [representation.url], into: destinationSourceID)
+    }
+
+    private func validatePackConflicts(
+        _ payloads: [InstallationPayload],
+        destinationSource: MinecraftSource
+    ) throws {
+        var existingIdentities = Set(
+            destinationSource.rawItems.compactMap { item -> String? in
+                guard
+                    item.contentType == .behaviorPack ||
+                    item.contentType == .resourcePack ||
+                    item.contentType == .skinPack,
+                    let uuid = item.packUUID?.lowercased()
+                else {
+                    return nil
+                }
+                return "\(item.contentType.rawValue)::\(uuid)"
+            }
+        )
+
+        for payload in payloads {
+            guard
+                payload.contentType == .behaviorPack ||
+                payload.contentType == .resourcePack ||
+                payload.contentType == .skinPack,
+                let uuid = payload.packUUID?.lowercased()
+            else {
+                continue
+            }
+            let identity = "\(payload.contentType.rawValue)::\(uuid)"
+            guard !existingIdentities.contains(identity) else {
+                throw MinecraftPackageInstaller.InstallError.duplicatePack(
+                    name: payload.displayName,
+                    version: payload.packVersion
+                )
+            }
+            existingIdentities.insert(identity)
         }
     }
 

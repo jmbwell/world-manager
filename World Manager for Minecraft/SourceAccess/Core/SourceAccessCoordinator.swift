@@ -25,6 +25,7 @@ protocol SourceAccessMethod: Sendable {
     nonisolated func loadSizeAssets(for items: [MinecraftContentItem], in source: MinecraftSource) async -> [MinecraftContentItem]
     nonisolated func listItemContents(for item: MinecraftContentItem, in source: MinecraftSource) async throws -> [DirectoryEntry]
     nonisolated func materializeItem(for item: MinecraftContentItem, in source: MinecraftSource) async throws -> URL
+    nonisolated func install(_ payload: InstallationPayload, in source: MinecraftSource) async throws -> InstalledContentItem
     nonisolated func purgeCachedArtifacts(for source: MinecraftSource) async
 }
 
@@ -106,6 +107,12 @@ extension SourceAccessMethod {
     nonisolated func materializeItem(for item: MinecraftContentItem, in source: MinecraftSource) async throws -> URL {
         _ = source
         return item.folderURL
+    }
+
+    nonisolated func install(_ payload: InstallationPayload, in source: MinecraftSource) async throws -> InstalledContentItem {
+        _ = payload
+        _ = source
+        throw SourceAccessError.accessFailed(reason: "This source does not support installing Minecraft content.")
     }
 
     nonisolated func purgeCachedArtifacts(for source: MinecraftSource) async {
@@ -202,6 +209,10 @@ struct SourceAccessCoordinator: SourceAccessMethod {
 
     nonisolated func materializeItem(for item: MinecraftContentItem, in source: MinecraftSource) async throws -> URL {
         return try await accessMethod(for: source).materializeItem(for: item, in: source)
+    }
+
+    nonisolated func install(_ payload: InstallationPayload, in source: MinecraftSource) async throws -> InstalledContentItem {
+        return try await accessMethod(for: source).install(payload, in: source)
     }
 
     nonisolated func purgeCachedArtifacts(for source: MinecraftSource) async {

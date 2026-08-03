@@ -122,7 +122,11 @@ typedef int (*AFCKeyValueReadFn)(AFCIteratorRef iterator, char **key, char **val
 typedef int (*AFCKeyValueCloseFn)(AFCIteratorRef iterator);
 typedef int (*AFCFileRefOpenFn)(AFCConnectionRef connection, const char *path, uint64_t mode, AFCFileDescriptorRef *fileDescriptor);
 typedef int (*AFCFileRefReadFn)(AFCConnectionRef connection, AFCFileDescriptorRef fileDescriptor, void *buffer, size_t *length);
+typedef int (*AFCFileRefWriteFn)(AFCConnectionRef connection, AFCFileDescriptorRef fileDescriptor, const void *buffer, uint32_t length);
 typedef int (*AFCFileRefCloseFn)(AFCConnectionRef connection, AFCFileDescriptorRef fileDescriptor);
+typedef int (*AFCDirectoryCreateFn)(AFCConnectionRef connection, const char *path);
+typedef int (*AFCRenamePathFn)(AFCConnectionRef connection, const char *sourcePath, const char *destinationPath);
+typedef int (*AFCRemovePathFn)(AFCConnectionRef connection, const char *path);
 
 typedef struct {
     void *handle;
@@ -159,7 +163,11 @@ typedef struct {
     AFCKeyValueCloseFn AFCKeyValueClose;
     AFCFileRefOpenFn AFCFileRefOpen;
     AFCFileRefReadFn AFCFileRefRead;
+    AFCFileRefWriteFn AFCFileRefWrite;
     AFCFileRefCloseFn AFCFileRefClose;
+    AFCDirectoryCreateFn AFCDirectoryCreate;
+    AFCRenamePathFn AFCRenamePath;
+    AFCRemovePathFn AFCRemovePath;
 } WMMMobileDeviceFunctions;
 
 typedef struct {
@@ -237,7 +245,11 @@ static BOOL WMMLoadFunctions(WMMMobileDeviceFunctions *functions, NSError **erro
     functions->AFCKeyValueClose = (AFCKeyValueCloseFn)WMMLoadSymbol(frameworkHandle, "AFCKeyValueClose");
     functions->AFCFileRefOpen = (AFCFileRefOpenFn)WMMLoadSymbol(frameworkHandle, "AFCFileRefOpen");
     functions->AFCFileRefRead = (AFCFileRefReadFn)WMMLoadSymbol(frameworkHandle, "AFCFileRefRead");
+    functions->AFCFileRefWrite = (AFCFileRefWriteFn)WMMLoadSymbol(frameworkHandle, "AFCFileRefWrite");
     functions->AFCFileRefClose = (AFCFileRefCloseFn)WMMLoadSymbol(frameworkHandle, "AFCFileRefClose");
+    functions->AFCDirectoryCreate = (AFCDirectoryCreateFn)WMMLoadSymbol(frameworkHandle, "AFCDirectoryCreate");
+    functions->AFCRenamePath = (AFCRenamePathFn)WMMLoadSymbol(frameworkHandle, "AFCRenamePath");
+    functions->AFCRemovePath = (AFCRemovePathFn)WMMLoadSymbol(frameworkHandle, "AFCRemovePath");
 
     if (functions->AMDeviceNotificationSubscribe == NULL ||
         functions->AMDeviceNotificationUnsubscribe == NULL ||
@@ -1034,6 +1046,163 @@ static BOOL WMMCopyAFCTreeToLocalURL(
     }
 
     return WMMCopyAFCFileToLocalURL(functions, afcConnection, remotePath, localURL, error);
+}
+
+static BOOL WMMEnsureAFCDirectory(
+    WMMMobileDeviceFunctions *functions,
+    AFCConnectionRef afcConnection,
+    NSString *remotePath,
+    NSError **error
+) {
+    NSMutableArray<NSString *> *existingEntries = nil;
+    if (WMMReadAFCDirectory(functions, afcConnection, remotePath, &existingEntries) == 0) {
+        return YES;
+    }
+
+    const int createStatus = functions->AFCDirectoryCreate(
+        afcConnection,
+        remotePath.fileSystemRepresentation
+    );
+    if (createStatus != 0) {
+        if (error != NULL) {
+            *error = WMMMakeError(
+                createStatus,
+                [NSString stringWithFormat:@"AFCDirectoryCreate failed for %@ (%d).", remotePath, createStatus]
+            );
+        }
+        return NO;
+    }
+    return YES;
+}
+
+static BOOL WMMCopyLocalFileToAFCPath(
+    WMMMobileDeviceFunctions *functions,
+    AFCConnectionRef afcConnection,
+    NSURL *localFileURL,
+    NSString *remotePath,
+    NSError **error
+) {
+    AFCFileDescriptorRef fileDescriptor = NULL;
+    const int openStatus = functions->AFCFileRefOpen(
+        afcConnection,
+        remotePath.fileSystemRepresentation,
+        3,
+        &fileDescriptor
+    );
+    if (openStatus != 0 || fileDescriptor == NULL) {
+        if (error != NULL) {
+            *error = WMMMakeError(
+                openStatus,
+                [NSString stringWithFormat:@"AFCFileRefOpen for writing failed for %@ (%d).", remotePath, openStatus]
+            );
+        }
+        return NO;
+    }
+
+    NSFileHandle *handle = [NSFileHandle fileHandleForReadingFromURL:localFileURL error:error];
+    if (handle == nil) {
+        functions->AFCFileRefClose(afcConnection, fileDescriptor);
+        return NO;
+    }
+
+    BOOL success = YES;
+    while (true) {
+        @autoreleasepool {
+            NSData *chunk = [handle readDataOfLength:64 * 1024];
+            if (chunk.length == 0) {
+                break;
+            }
+            const int writeStatus = functions->AFCFileRefWrite(
+                afcConnection,
+                fileDescriptor,
+                chunk.bytes,
+                (uint32_t)chunk.length
+            );
+            if (writeStatus != 0) {
+                if (error != NULL) {
+                    *error = WMMMakeError(
+                        writeStatus,
+                        [NSString stringWithFormat:@"AFCFileRefWrite failed for %@ (%d).", remotePath, writeStatus]
+                    );
+                }
+                success = NO;
+                break;
+            }
+        }
+    }
+
+    [handle closeFile];
+    functions->AFCFileRefClose(afcConnection, fileDescriptor);
+    return success;
+}
+
+static BOOL WMMCopyLocalTreeToAFCPath(
+    WMMMobileDeviceFunctions *functions,
+    AFCConnectionRef afcConnection,
+    NSURL *localURL,
+    NSString *remotePath,
+    NSError **error
+) {
+    NSNumber *isDirectory = nil;
+    if (![localURL getResourceValue:&isDirectory forKey:NSURLIsDirectoryKey error:error]) {
+        return NO;
+    }
+
+    if (!isDirectory.boolValue) {
+        return WMMCopyLocalFileToAFCPath(functions, afcConnection, localURL, remotePath, error);
+    }
+
+    if (!WMMEnsureAFCDirectory(functions, afcConnection, remotePath, error)) {
+        return NO;
+    }
+
+    NSArray<NSURL *> *children = [[NSFileManager defaultManager] contentsOfDirectoryAtURL:localURL
+                                                              includingPropertiesForKeys:@[NSURLIsDirectoryKey, NSURLIsSymbolicLinkKey]
+                                                                                 options:0
+                                                                                   error:error];
+    if (children == nil) {
+        return NO;
+    }
+
+    for (NSURL *childURL in children) {
+        NSNumber *isSymbolicLink = nil;
+        if (![childURL getResourceValue:&isSymbolicLink forKey:NSURLIsSymbolicLinkKey error:error]) {
+            return NO;
+        }
+        if (isSymbolicLink.boolValue) {
+            if (error != NULL) {
+                *error = WMMMakeError(17, [NSString stringWithFormat:@"Symbolic links cannot be installed: %@", childURL.path]);
+            }
+            return NO;
+        }
+
+        NSString *childRemotePath = [remotePath stringByAppendingPathComponent:childURL.lastPathComponent];
+        if (!WMMCopyLocalTreeToAFCPath(functions, afcConnection, childURL, childRemotePath, error)) {
+            return NO;
+        }
+    }
+    return YES;
+}
+
+static BOOL WMMRemoveAFCTree(
+    WMMMobileDeviceFunctions *functions,
+    AFCConnectionRef afcConnection,
+    NSString *remotePath
+) {
+    NSMutableArray<NSString *> *entries = nil;
+    if (WMMReadAFCDirectory(functions, afcConnection, remotePath, &entries) == 0) {
+        for (NSString *entry in entries) {
+            if ([entry isEqualToString:@"."] || [entry isEqualToString:@".."]) {
+                continue;
+            }
+            WMMRemoveAFCTree(
+                functions,
+                afcConnection,
+                [remotePath stringByAppendingPathComponent:entry]
+            );
+        }
+    }
+    return functions->AFCRemovePath(afcConnection, remotePath.fileSystemRepresentation) == 0;
 }
 
 static NSString *WMMNormalizedAFCPath(NSString *path) {
@@ -2380,4 +2549,123 @@ WMMCopyConnectedDeviceAppSubtreeToLocalDirectory(
     }
 
     return success;
+}
+
+NSString * _Nullable
+WMMInstallLocalDirectoryInConnectedDeviceApp(
+    NSString *deviceIdentifier,
+    NSString *bundleIdentifier,
+    NSString *minecraftRootRelativePath,
+    NSString *collectionFolderName,
+    NSString *preferredDestinationName,
+    NSURL *sourceDirectoryURL,
+    NSError **error
+) {
+    if (bundleIdentifier.length == 0 ||
+        minecraftRootRelativePath.length == 0 ||
+        collectionFolderName.length == 0 ||
+        preferredDestinationName.length == 0 ||
+        sourceDirectoryURL == nil ||
+        !sourceDirectoryURL.isFileURL) {
+        if (error != NULL) {
+            *error = WMMMakeError(16, @"A device, Minecraft path, collection, destination name, and local source directory are required.");
+        }
+        return nil;
+    }
+
+    WMMMobileDeviceFunctions functions;
+    if (!WMMLoadFunctions(&functions, error)) {
+        return nil;
+    }
+    if (functions.AFCFileRefWrite == NULL ||
+        functions.AFCDirectoryCreate == NULL ||
+        functions.AFCRenamePath == NULL ||
+        functions.AFCRemovePath == NULL) {
+        if (error != NULL) {
+            *error = WMMMakeError(17, @"This version of MobileDevice.framework does not provide the required AFC write operations.");
+        }
+        return nil;
+    }
+
+    AMDeviceRef device = WMMCopyConnectedDevice(&functions, deviceIdentifier, error);
+    if (device == NULL) {
+        return nil;
+    }
+    if (!WMMConnectAndValidateDevice(&functions, device, YES, error)) {
+        functions.AMDeviceRelease(device);
+        return nil;
+    }
+
+    AMDServiceConnectionRef backingServiceConnection = NULL;
+    AFCConnectionRef afcConnection = WMMCreateVendAFCConnection(
+        &functions,
+        device,
+        bundleIdentifier,
+        &backingServiceConnection,
+        error
+    );
+    if (afcConnection == NULL) {
+        WMMCloseVendSession(&functions, device, YES, NULL, backingServiceConnection);
+        functions.AMDeviceRelease(device);
+        return nil;
+    }
+
+    NSString *minecraftRoot = WMMNormalizedAFCPath(minecraftRootRelativePath);
+    NSString *stagingRoot = [minecraftRoot stringByAppendingPathComponent:@".world-manager-staging"];
+    NSString *stagedItemPath = [stagingRoot stringByAppendingPathComponent:NSUUID.UUID.UUIDString];
+    NSString *collectionPath = [minecraftRoot stringByAppendingPathComponent:collectionFolderName];
+
+    BOOL success =
+        WMMEnsureAFCDirectory(&functions, afcConnection, stagingRoot, error) &&
+        WMMEnsureAFCDirectory(&functions, afcConnection, stagedItemPath, error) &&
+        WMMCopyLocalTreeToAFCPath(&functions, afcConnection, sourceDirectoryURL, stagedItemPath, error) &&
+        WMMEnsureAFCDirectory(&functions, afcConnection, collectionPath, error);
+
+    NSString *destinationName = nil;
+    if (success) {
+        NSMutableArray<NSString *> *existingEntries = nil;
+        const int listStatus = WMMReadAFCDirectory(&functions, afcConnection, collectionPath, &existingEntries);
+        if (listStatus != 0) {
+            if (error != NULL) {
+                *error = WMMMakeError(
+                    listStatus,
+                    [NSString stringWithFormat:@"Could not list the destination collection %@ (%d).", collectionPath, listStatus]
+                );
+            }
+            success = NO;
+        } else {
+            NSSet<NSString *> *existingNames = [NSSet setWithArray:existingEntries ?: @[]];
+            destinationName = preferredDestinationName;
+            NSUInteger suffix = 2;
+            while ([existingNames containsObject:destinationName]) {
+                destinationName = [NSString stringWithFormat:@"%@-%lu", preferredDestinationName, (unsigned long)suffix];
+                suffix += 1;
+            }
+
+            NSString *destinationPath = [collectionPath stringByAppendingPathComponent:destinationName];
+            const int renameStatus = functions.AFCRenamePath(
+                afcConnection,
+                stagedItemPath.fileSystemRepresentation,
+                destinationPath.fileSystemRepresentation
+            );
+            if (renameStatus != 0) {
+                if (error != NULL) {
+                    *error = WMMMakeError(
+                        renameStatus,
+                        [NSString stringWithFormat:@"AFCRenamePath failed from %@ to %@ (%d).", stagedItemPath, destinationPath, renameStatus]
+                    );
+                }
+                success = NO;
+            }
+        }
+    }
+
+    if (!success) {
+        WMMRemoveAFCTree(&functions, afcConnection, stagedItemPath);
+        destinationName = nil;
+    }
+
+    WMMCloseVendSession(&functions, device, YES, afcConnection, backingServiceConnection);
+    functions.AMDeviceRelease(device);
+    return destinationName;
 }

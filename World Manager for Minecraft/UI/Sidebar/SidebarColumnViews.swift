@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import SwiftUI
+import UniformTypeIdentifiers
 
 enum SidebarSelection: Hashable, Sendable {
     case source(sourceID: URL)
@@ -33,6 +34,9 @@ struct SourcesSidebarView: View {
     let addConnectedDeviceAction: (ConnectedDeviceSidebarEntry) -> Void
     let rescanSourceAction: (MinecraftSource) -> Void
     let removeSourceAction: (MinecraftSource) -> Void
+    let importSourceAction: (MinecraftSource) -> Void
+    let importDropAction: (MinecraftSource, [NSItemProvider]) -> Bool
+    let installationState: (MinecraftSource) -> SourceInstallationState?
     let filters: (MinecraftSource) -> [SidebarFilter]
 
     var body: some View {
@@ -81,8 +85,12 @@ struct SourcesSidebarView: View {
 
         SourceHeaderRow(
             source: source,
+            installationState: installationState(source),
             onSelect: {
                 selection = .source(sourceID: source.id)
+            },
+            dropAction: { providers in
+                importDropAction(source, providers)
             }
         )
             .tag(SidebarSelection.source(sourceID: source.id) as SidebarSelection?)
@@ -92,6 +100,11 @@ struct SourcesSidebarView: View {
                 Button("Rescan \"\(source.displayName)\"") {
                     rescanSourceAction(source)
                 }
+
+                Button("Import into \"\(source.displayName)\"...") {
+                    importSourceAction(source)
+                }
+                .disabled(source.availability != .available || !source.capabilities.canInstallItems)
 
                 Divider()
 
@@ -150,7 +163,10 @@ private struct SidebarSourcesSectionHeaderView: View {
 
 private struct SourceHeaderRow: View {
     let source: MinecraftSource
+    let installationState: SourceInstallationState?
     let onSelect: () -> Void
+    let dropAction: ([NSItemProvider]) -> Bool
+    @State private var isDropTargeted = false
 
     var body: some View {
         HStack(spacing: 8) {
@@ -179,8 +195,23 @@ private struct SourceHeaderRow: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.leading, 5)
         .padding(.vertical, 6)
+        .background(
+            isDropTargeted ? Color.accentColor.opacity(0.16) : Color.clear,
+            in: RoundedRectangle(cornerRadius: 7, style: .continuous)
+        )
         .contentShape(Rectangle())
         .onTapGesture(perform: onSelect)
+        .onDrop(
+            of: [
+                UTType.fileURL.identifier,
+                UTType.minecraftWorld.identifier,
+                UTType.minecraftPack.identifier,
+                UTType.minecraftTemplate.identifier,
+                UTType.minecraftAddon.identifier
+            ],
+            isTargeted: $isDropTargeted,
+            perform: dropAction
+        )
     }
 
     private var connection: DeviceConnection? {
@@ -224,12 +255,23 @@ private struct SourceHeaderRow: View {
     }
 
     private var showsStatusAccessory: Bool {
-        source.isScanning
+        source.isScanning || installationState != nil
     }
 
     @ViewBuilder
     private var statusAccessory: some View {
-            if source.isScanning {
+            if let installationState {
+                if installationState.totalCount > 0 {
+                    CircularScanProgressView(
+                        progress: Double(installationState.completedCount) / Double(installationState.totalCount)
+                    )
+                    .help(installationState.status)
+                } else {
+                    ProgressView()
+                        .appActivityIndicatorStyle(.small)
+                        .help(installationState.status)
+                }
+            } else if source.isScanning {
                 if let scanProgress = source.scanProgress {
                     CircularScanProgressView(progress: scanProgress)
                 } else {

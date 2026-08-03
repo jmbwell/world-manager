@@ -41,6 +41,7 @@ struct ItemListColumnView<MenuContent: View>: View {
     let searchPrompt: String
     let chooseFolderAction: () -> Void
     let dropAction: ([NSItemProvider]) -> Bool
+    let dragProvider: (MinecraftContentItem) -> NSItemProvider
     let itemContextMenu: (MinecraftContentItem) -> MenuContent
 
     var body: some View {
@@ -55,6 +56,14 @@ struct ItemListColumnView<MenuContent: View>: View {
                 List(items, selection: $selectedItemID) { item in
                     ContentRowView(item: item)
                         .tag(item.id)
+                        .onDrag {
+                            dragProvider(item)
+                        }
+                        .simultaneousGesture(
+                            TapGesture().onEnded {
+                                selectedItemID = item.id
+                            }
+                        )
                         .contextMenu {
                             itemContextMenu(item)
                         }

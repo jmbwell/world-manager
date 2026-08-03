@@ -98,4 +98,15 @@ WMMCopyConnectedDeviceAppSubtreeToLocalDirectory(
     NSError **error
 );
 
+FOUNDATION_EXPORT NSString * _Nullable
+WMMInstallLocalDirectoryInConnectedDeviceApp(
+    NSString *deviceIdentifier,
+    NSString *bundleIdentifier,
+    NSString *minecraftRootRelativePath,
+    NSString *collectionFolderName,
+    NSString *preferredDestinationName,
+    NSURL *sourceDirectoryURL,
+    NSError **error
+);
+
 NS_ASSUME_NONNULL_END

@@ -771,6 +771,119 @@ struct World_Manager_for_MinecraftTests {
         }
     }
 
+    @Test func packageInstallerPreparesCompleteWorldContents() async throws {
+        let fileManager = FileManager.default
+        let workingURL = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let worldURL = workingURL.appendingPathComponent("World", isDirectory: true)
+        let archiveURL = workingURL.appendingPathComponent("World.mcworld", isDirectory: false)
+        defer { try? fileManager.removeItem(at: workingURL) }
+
+        try fileManager.createDirectory(
+            at: worldURL.appendingPathComponent("db", isDirectory: true),
+            withIntermediateDirectories: true
+        )
+        try Data([1, 2, 3]).write(to: worldURL.appendingPathComponent("level.dat"))
+        try Data([4, 5, 6]).write(to: worldURL.appendingPathComponent("db/chunk.bin"))
+        try makeArchive(from: worldURL, to: archiveURL)
+
+        let plan = try MinecraftPackageInstaller.preparePackage(at: archiveURL)
+        defer { plan.cleanup() }
+
+        #expect(plan.payloads.count == 1)
+        #expect(plan.payloads[0].contentType == .world)
+        #expect(
+            fileManager.fileExists(
+                atPath: plan.payloads[0].preparedDirectoryURL.appendingPathComponent("db/chunk.bin").path
+            )
+        )
+    }
+
+    @Test func packageInstallerExpandsNestedAddonPackages() async throws {
+        let fileManager = FileManager.default
+        let workingURL = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let behaviorURL = workingURL.appendingPathComponent("Behavior", isDirectory: true)
+        let resourceURL = workingURL.appendingPathComponent("Resource", isDirectory: true)
+        let addonRootURL = workingURL.appendingPathComponent("Addon", isDirectory: true)
+        let behaviorArchiveURL = addonRootURL.appendingPathComponent("Behavior.mcpack")
+        let resourceArchiveURL = addonRootURL.appendingPathComponent("Resource.mcpack")
+        let addonURL = workingURL.appendingPathComponent("Combined.mcaddon")
+        defer { try? fileManager.removeItem(at: workingURL) }
+
+        try fileManager.createDirectory(at: behaviorURL, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: resourceURL, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: addonRootURL, withIntermediateDirectories: true)
+        try testPackManifest(name: "Behavior", uuid: "11111111-1111-1111-1111-111111111111", moduleType: "data")
+            .write(to: behaviorURL.appendingPathComponent("manifest.json"), atomically: true, encoding: .utf8)
+        try testPackManifest(name: "Resource", uuid: "22222222-2222-2222-2222-222222222222", moduleType: "resources")
+            .write(to: resourceURL.appendingPathComponent("manifest.json"), atomically: true, encoding: .utf8)
+        try makeArchive(from: behaviorURL, to: behaviorArchiveURL)
+        try makeArchive(from: resourceURL, to: resourceArchiveURL)
+        try makeArchive(from: addonRootURL, to: addonURL)
+
+        let plan = try MinecraftPackageInstaller.preparePackage(at: addonURL)
+        defer { plan.cleanup() }
+
+        #expect(Set(plan.payloads.map(\.contentType)) == [.behaviorPack, .resourcePack])
+    }
+
+    @Test func localFolderInstallerUsesUniqueAdditiveDestinations() async throws {
+        let fileManager = FileManager.default
+        let workingURL = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let sourceWorldURL = workingURL.appendingPathComponent("PreparedWorld", isDirectory: true)
+        let destinationRootURL = workingURL.appendingPathComponent("Destination", isDirectory: true)
+        defer { try? fileManager.removeItem(at: workingURL) }
+
+        try fileManager.createDirectory(at: sourceWorldURL, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: destinationRootURL, withIntermediateDirectories: true)
+        try Data([1]).write(to: sourceWorldURL.appendingPathComponent("level.dat"))
+
+        let plan = try MinecraftPackageInstaller.prepareDirectory(at: sourceWorldURL, contentType: .world)
+        defer { plan.cleanup() }
+        let source = MinecraftSource(folderURL: destinationRootURL, availability: .available)
+        let access = LocalFolderSourceAccess()
+
+        let first = try await access.install(plan.payloads[0], in: source)
+        let second = try await access.install(plan.payloads[0], in: source)
+
+        #expect(first.destinationName != second.destinationName)
+        #expect(
+            fileManager.fileExists(
+                atPath: destinationRootURL
+                    .appendingPathComponent("minecraftWorlds/\(first.destinationName)/level.dat")
+                    .path
+            )
+        )
+        #expect(
+            fileManager.fileExists(
+                atPath: destinationRootURL
+                    .appendingPathComponent("minecraftWorlds/\(second.destinationName)/level.dat")
+                    .path
+            )
+        )
+    }
+
+    @Test func zipReaderRejectsParentTraversalEntry() async throws {
+        let fileManager = FileManager.default
+        let workingURL = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let archiveURL = workingURL.appendingPathComponent("Unsafe.mcworld")
+        defer { try? fileManager.removeItem(at: workingURL) }
+
+        try fileManager.createDirectory(at: workingURL, withIntermediateDirectories: true)
+        try makeStoredArchive(entries: [("../escape.txt", Data("escape".utf8))], to: archiveURL)
+
+        do {
+            _ = try ZipArchiveReader(url: archiveURL)
+            Issue.record("Expected the unsafe archive path to be rejected.")
+        } catch let error as ZipArchiveReaderError {
+            switch error {
+            case .unsafeEntryPath(let path):
+                #expect(path == "../escape.txt")
+            default:
+                Issue.record("Expected unsafeEntryPath but received \(error).")
+            }
+        }
+    }
+
     @Test func sourcePersistenceStoreRoundTripsCachedSource() async throws {
         let fileManager = FileManager.default
         let workingURL = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -1122,6 +1235,24 @@ struct World_Manager_for_MinecraftTests {
         #expect(ScanNotificationService.completionMessage(itemCount: 42) == "Found 42 items.")
     }
 
+    @Test func liveScanStatusCountsItemsRemainingDuringSizeCalculation() async throws {
+        var source = MinecraftSource(
+            folderURL: URL(fileURLWithPath: "/tmp/test-source", isDirectory: true)
+        )
+        source.displayName = "Test Source"
+        source.isScanning = true
+        source.indexedItemCount = 22
+        source.previewLoadedCount = 22
+        source.sizeLoadedCount = 12
+        source.scanProgress = 0.88
+        source.scanStatus = "Calculating sizes"
+
+        #expect(
+            SourcePresentation.liveScanStatusTitle(for: source)
+                == "Calculating sizes for 10 of 22 items..."
+        )
+    }
+
     @Test func scanNotificationServiceOnlyNotifiesForLongBackgroundScans() async throws {
         let service = ScanNotificationService()
 
@@ -1249,6 +1380,82 @@ private func makeArchive(from sourceDirectoryURL: URL, to archiveURL: URL) throw
         let output = String(data: outputData, encoding: .utf8) ?? ""
         throw ArchiveTestError.failedToCreateArchive(output)
     }
+}
+
+private func testPackManifest(name: String, uuid: String, moduleType: String) -> String {
+    """
+    {
+      "format_version": 2,
+      "header": {
+        "name": "\(name)",
+        "description": "\(name)",
+        "uuid": "\(uuid)",
+        "version": [1, 0, 0]
+      },
+      "modules": [
+        {
+          "type": "\(moduleType)",
+          "uuid": "\(UUID().uuidString)",
+          "version": [1, 0, 0]
+        }
+      ]
+    }
+    """
+}
+
+private func makeStoredArchive(entries: [(String, Data)], to archiveURL: URL) throws {
+    var archive = Data()
+    var centralDirectory = Data()
+
+    for (path, contents) in entries {
+        let pathData = Data(path.utf8)
+        let localHeaderOffset = UInt32(archive.count)
+
+        appendLE(UInt32(0x04034b50), to: &archive)
+        appendLE(UInt16(20), to: &archive)
+        appendLE(UInt16(0), to: &archive)
+        appendLE(UInt16(0), to: &archive)
+        appendLE(UInt16(0), to: &archive)
+        appendLE(UInt16(0), to: &archive)
+        appendLE(UInt32(0), to: &archive)
+        appendLE(UInt32(contents.count), to: &archive)
+        appendLE(UInt32(contents.count), to: &archive)
+        appendLE(UInt16(pathData.count), to: &archive)
+        appendLE(UInt16(0), to: &archive)
+        archive.append(pathData)
+        archive.append(contents)
+
+        appendLE(UInt32(0x02014b50), to: &centralDirectory)
+        appendLE(UInt16(20), to: &centralDirectory)
+        appendLE(UInt16(20), to: &centralDirectory)
+        appendLE(UInt16(0), to: &centralDirectory)
+        appendLE(UInt16(0), to: &centralDirectory)
+        appendLE(UInt16(0), to: &centralDirectory)
+        appendLE(UInt16(0), to: &centralDirectory)
+        appendLE(UInt32(0), to: &centralDirectory)
+        appendLE(UInt32(contents.count), to: &centralDirectory)
+        appendLE(UInt32(contents.count), to: &centralDirectory)
+        appendLE(UInt16(pathData.count), to: &centralDirectory)
+        appendLE(UInt16(0), to: &centralDirectory)
+        appendLE(UInt16(0), to: &centralDirectory)
+        appendLE(UInt16(0), to: &centralDirectory)
+        appendLE(UInt16(0), to: &centralDirectory)
+        appendLE(UInt32(0), to: &centralDirectory)
+        appendLE(localHeaderOffset, to: &centralDirectory)
+        centralDirectory.append(pathData)
+    }
+
+    let centralDirectoryOffset = UInt32(archive.count)
+    archive.append(centralDirectory)
+    appendLE(UInt32(0x06054b50), to: &archive)
+    appendLE(UInt16(0), to: &archive)
+    appendLE(UInt16(0), to: &archive)
+    appendLE(UInt16(entries.count), to: &archive)
+    appendLE(UInt16(entries.count), to: &archive)
+    appendLE(UInt32(centralDirectory.count), to: &archive)
+    appendLE(centralDirectoryOffset, to: &archive)
+    appendLE(UInt16(0), to: &archive)
+    try archive.write(to: archiveURL, options: .atomic)
 }
 
 private enum ArchiveTestError: LocalizedError {

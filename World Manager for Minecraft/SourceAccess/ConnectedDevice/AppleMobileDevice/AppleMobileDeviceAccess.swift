@@ -177,6 +177,37 @@ enum AppleMobileDeviceAccess {
         }
     }
 
+    static func installDirectory(
+        deviceIdentifier: String,
+        bundleIdentifier: String,
+        minecraftRootRelativePath: String,
+        collectionFolderName: String,
+        preferredDestinationName: String,
+        sourceDirectoryURL: URL
+    ) async throws -> String {
+        try await AppleMobileDeviceOperationLimiter.shared.run(for: deviceIdentifier) {
+            try await Task.detached(priority: .userInitiated) {
+                var error: NSError?
+                guard let installedName = WMMInstallLocalDirectoryInConnectedDeviceApp(
+                    deviceIdentifier,
+                    bundleIdentifier,
+                    minecraftRootRelativePath,
+                    collectionFolderName,
+                    preferredDestinationName,
+                    sourceDirectoryURL,
+                    &error
+                ) else {
+                    throw error ?? NSError(
+                        domain: "AppleMobileDeviceAccess",
+                        code: 16,
+                        userInfo: [NSLocalizedDescriptionKey: "The MobileDevice content installation failed."]
+                    )
+                }
+                return installedName
+            }.value
+        }
+    }
+
     static func listApplications(deviceIdentifier: String) async throws -> [AppleMobileDeviceApplicationSummary] {
         try await AppleMobileDeviceOperationLimiter.shared.run(for: deviceIdentifier) {
             try await Task.detached(priority: .userInitiated) {

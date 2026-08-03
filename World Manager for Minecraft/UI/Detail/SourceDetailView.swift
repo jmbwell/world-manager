@@ -20,12 +20,37 @@ struct SourceDetailView: View {
     }
 
     let source: MinecraftSource
+    let installationState: SourceInstallationState?
+    let importAction: () -> Void
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
-                Text(source.displayName)
-                    .font(.largeTitle.weight(.semibold))
+                HStack(alignment: .firstTextBaseline) {
+                    Text(source.displayName)
+                        .font(.largeTitle.weight(.semibold))
+
+                    Spacer()
+
+                    Button("Import...", action: importAction)
+                        .disabled(
+                            source.availability != .available ||
+                            !source.capabilities.canInstallItems ||
+                            installationState != nil
+                        )
+                }
+
+                if let installationState {
+                    VStack(alignment: .leading, spacing: 8) {
+                        ProgressView(
+                            value: Double(installationState.completedCount),
+                            total: Double(max(installationState.totalCount, 1))
+                        )
+                        Text(installationState.status)
+                            .appTextStyle(.supporting)
+                    }
+                    .appDetailSectionCard()
+                }
 
                 if showsStatusSection {
                     sourceStatusSection

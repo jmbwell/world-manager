@@ -14,6 +14,7 @@ struct ContentView: View {
     @State private var isDropTargeted = false
     @State private var isPerformingItemAction = false
     @State private var isShowingDeviceSourceSheet = false
+    @State private var importErrorMessage: String?
     @State private var sortMode: ItemSortMode = .name
     @State private var directoryPreviewContents: [DirectoryEntry] = []
     @State private var showsProjectionLoadingState = false
@@ -87,6 +88,11 @@ struct ContentView: View {
                 removeSourceAction: { source in
                     removeSource(source.id)
                 },
+                importSourceAction: importIntoSource(_:),
+                importDropAction: handleImportDrop(on:providers:),
+                installationState: { source in
+                    library.installationStateBySourceID[source.id]
+                },
                 filters: sidebarFilters(for:)
             )
             .navigationSplitViewColumnWidth(min: 280, ideal: 320, max: 380)
@@ -109,6 +115,7 @@ struct ContentView: View {
                 searchPrompt: resolvedItemListProjection.searchPrompt,
                 chooseFolderAction: pickFolder,
                 dropAction: handleDroppedProviders(_:),
+                dragProvider: dragProvider(for:),
                 itemContextMenu: itemContextMenu(for:)
             )
             .navigationSplitViewColumnWidth(min: 340, ideal: 400, max: 460)
@@ -116,6 +123,7 @@ struct ContentView: View {
             ItemDetailColumnView(
                 item: resolvedCurrentSelectedItem,
                 source: resolvedCurrentSource,
+                installationState: resolvedCurrentSource.flatMap { library.installationStateBySourceID[$0.id] },
                 showsSourceDetails: resolvedCurrentSelectedItem == nil && isSourceOverviewSelection,
                 behaviorPacks: resolvedCurrentSelectedItem.map { logicalPackReferences(for: $0, type: .behaviorPack) } ?? [],
                 resourcePacks: resolvedCurrentSelectedItem.map { logicalPackReferences(for: $0, type: .resourcePack) } ?? [],
@@ -148,7 +156,8 @@ struct ContentView: View {
                     }
 
                     shareItem(item, from: anchorView)
-                }
+                },
+                importAction: importIntoSource(_:)
             )
             .frame(minWidth: 450)
         }
@@ -168,6 +177,23 @@ struct ContentView: View {
                     isShowingDeviceSourceSheet = false
                 }
             )
+        }
+        .alert(
+            "Import Failed",
+            isPresented: Binding(
+                get: { importErrorMessage != nil },
+                set: { isPresented in
+                    if !isPresented {
+                        importErrorMessage = nil
+                    }
+                }
+            )
+        ) {
+            Button("OK") {
+                importErrorMessage = nil
+            }
+        } message: {
+            Text(importErrorMessage ?? "The Minecraft content could not be imported.")
         }
         .task {
             AppTerminationCoordinator.shared.register(library: library)
@@ -523,6 +549,166 @@ struct ContentView: View {
         for url in panel.urls {
             let sourceID = library.addSource(at: url)
             selectSourceIfNeeded(sourceID)
+        }
+    }
+
+    private func importIntoSource(_ source: MinecraftSource) {
+        guard source.availability == .available, source.capabilities.canInstallItems else {
+            return
+        }
+
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = true
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        panel.title = "Import Minecraft Content into \(source.displayName)"
+        panel.prompt = "Import"
+        panel.allowedContentTypes = [
+            .minecraftWorld,
+            .minecraftPack,
+            .minecraftTemplate,
+            .minecraftAddon
+        ]
+
+        guard panel.runModal() == .OK else {
+            return
+        }
+        Task {
+            await performImport(packageURLs: panel.urls, into: source.id)
+        }
+    }
+
+    private func handleImportDrop(
+        on source: MinecraftSource,
+        providers: [NSItemProvider]
+    ) -> Bool {
+        guard
+            source.availability == .available,
+            source.capabilities.canInstallItems,
+            providers.contains(where: isSupportedImportProvider(_:))
+        else {
+            return false
+        }
+
+        Task {
+            let materializedDrop = await materializeDroppedPackages(from: providers)
+            defer {
+                try? FileManager.default.removeItem(at: materializedDrop.temporaryRootURL)
+            }
+            guard !materializedDrop.packageURLs.isEmpty else {
+                await MainActor.run {
+                    importErrorMessage = "The dropped items did not contain a supported .mcworld, .mcpack, .mctemplate, or .mcaddon file."
+                }
+                return
+            }
+            await performImport(packageURLs: materializedDrop.packageURLs, into: source.id)
+        }
+        return true
+    }
+
+    @MainActor
+    private func performImport(packageURLs: [URL], into sourceID: URL) async {
+        do {
+            _ = try await library.installPackages(at: packageURLs, into: sourceID)
+            selectedSidebarSelection = .source(sourceID: sourceID)
+            selectedItemID = nil
+        } catch {
+            importErrorMessage = error.localizedDescription
+        }
+    }
+
+    private func isSupportedImportProvider(_ provider: NSItemProvider) -> Bool {
+        importTypeIdentifiers.contains {
+            provider.hasItemConformingToTypeIdentifier($0)
+        }
+    }
+
+    private var importTypeIdentifiers: [String] {
+        [
+            UTType.minecraftWorld.identifier,
+            UTType.minecraftPack.identifier,
+            UTType.minecraftTemplate.identifier,
+            UTType.minecraftAddon.identifier,
+            UTType.fileURL.identifier
+        ]
+    }
+
+    private func materializeDroppedPackages(
+        from providers: [NSItemProvider]
+    ) async -> (packageURLs: [URL], temporaryRootURL: URL) {
+        let temporaryRootURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MinecraftImportDrop", isDirectory: true)
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try? FileManager.default.createDirectory(at: temporaryRootURL, withIntermediateDirectories: true)
+
+        var packageURLs: [URL] = []
+        for provider in providers where isSupportedImportProvider(provider) {
+            if let packageURL = await materializeDroppedPackage(
+                from: provider,
+                in: temporaryRootURL
+            ) {
+                packageURLs.append(packageURL)
+            }
+        }
+        return (packageURLs, temporaryRootURL)
+    }
+
+    private func materializeDroppedPackage(
+        from provider: NSItemProvider,
+        in temporaryRootURL: URL
+    ) async -> URL? {
+        let packageDefinitions = MinecraftPackageTypes.all
+        if let definition = packageDefinitions.first(where: {
+            provider.hasItemConformingToTypeIdentifier($0.utTypeIdentifier)
+        }) {
+            return await withCheckedContinuation { continuation in
+                provider.loadFileRepresentation(forTypeIdentifier: definition.utTypeIdentifier) { url, _ in
+                    guard let url else {
+                        continuation.resume(returning: nil)
+                        return
+                    }
+                    let baseName = provider.suggestedName.map {
+                        URL(fileURLWithPath: $0).deletingPathExtension().lastPathComponent
+                    } ?? UUID().uuidString
+                    let destinationURL = temporaryRootURL
+                        .appendingPathComponent(baseName)
+                        .appendingPathExtension(definition.pathExtension)
+                    do {
+                        try FileManager.default.copyItem(at: url, to: destinationURL)
+                        continuation.resume(returning: destinationURL)
+                    } catch {
+                        continuation.resume(returning: nil)
+                    }
+                }
+            }
+        }
+
+        guard provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) else {
+            return nil
+        }
+        return await withCheckedContinuation { continuation in
+            provider.loadDataRepresentation(forTypeIdentifier: UTType.fileURL.identifier) { data, _ in
+                guard
+                    let data,
+                    let sourceURL = NSURL(
+                        absoluteURLWithDataRepresentation: data,
+                        relativeTo: nil
+                    ) as URL?,
+                    MinecraftPackageInspector.supportedPathExtensions.contains(
+                        sourceURL.pathExtension.lowercased()
+                    )
+                else {
+                    continuation.resume(returning: nil)
+                    return
+                }
+                let destinationURL = temporaryRootURL.appendingPathComponent(sourceURL.lastPathComponent)
+                do {
+                    try FileManager.default.copyItem(at: sourceURL, to: destinationURL)
+                    continuation.resume(returning: destinationURL)
+                } catch {
+                    continuation.resume(returning: nil)
+                }
+            }
         }
     }
 

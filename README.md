@@ -17,6 +17,8 @@ This thing is called "World Manager," and it happens to pertain to someone else'
 - Detect worlds, resource packs, behavior packs, and world templates.
 - Inspect package metadata, pack relationships, icons, versions, UUIDs, and basic world facts.
 - Export worlds and packs as portable `.mcworld`, `.mcpack`, `.mctemplate`, and `.mcaddon` packages, or share them via Messages, AirDrop, etc. via the "Share" sheet.
+- Import `.mcworld`, `.mcpack`, `.mctemplate`, and nested-package `.mcaddon` files into writable folder and connected-device sources.
+- Copy an item between sources by dragging it onto the destination source in the sidebar.
 - Preview and thumbnail supported Minecraft package files with Quick Look extensions.
 
 ## Usage
@@ -42,6 +44,14 @@ Click an item in the item list to inspect it. The detail view shows the metadata
 From an item's detail view, you can export it to a Minecraft package file on your Mac or share it directly through the macOS share sheet. Worlds export as `.mcworld`, packs as `.mcpack`, and templates as `.mctemplate`.
 
 If you share to another device with AirDrop, Messages, or a similar route, opening the received file on that device should launch Minecraft and begin Minecraft's normal import flow.
+
+### Importing and Copying
+
+Select a source and use `Import...` on its overview, or drop a supported Minecraft package onto the source row in the sidebar. World Manager inspects the package and places each item in the collection appropriate to its content type.
+
+You can also drag an existing world or pack from the item list onto another source. The app exports a temporary portable representation, validates it through the same import path, and installs it in the destination.
+
+Imports are additive. Existing worlds are never overwritten. A second world import receives a unique directory name. Packs with a UUID already present in the destination are rejected instead of being silently replaced.
 
 ## Requirements
 
@@ -97,7 +107,7 @@ See [docs/ios-device-access.md](docs/ios-device-access.md) for the current devic
 
 ## Project Status
 
-This is pre-release software. Make sure Minecraft worlds and packs are being backed up by other means before using this app. The project is currently focused on read-only library access and export, and connected-device discovery, so it shouldn't be doing anything that can break your existing libraries.
+This is pre-release software. Make sure Minecraft worlds and packs are being backed up by other means before using this app. Connected-device installation writes through private Apple MobileDevice interfaces and should be treated as best-effort. The initial implementation installs only into new directories and does not replace or remove existing content.
 
 ## Trademarks
 

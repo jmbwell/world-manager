@@ -147,7 +147,7 @@ enum MinecraftPackageInspector {
         return contentRootURL
     }
 
-    nonisolated private static func resolvedContentRootPath(
+    nonisolated static func resolvedContentRootPath(
         in entries: [ZipArchiveEntry],
         archivePathExtension: String
     ) throws -> String {
@@ -181,7 +181,7 @@ enum MinecraftPackageInspector {
         return root
     }
 
-    nonisolated private static func containsContentMarkers(in filePaths: [String], prefix: String) -> Bool {
+    nonisolated static func containsContentMarkers(in filePaths: [String], prefix: String) -> Bool {
         let normalizedPrefix = prefix.isEmpty ? "" : prefix + "/"
 
         let worldMarkers = ["level.dat", "levelname.txt"]

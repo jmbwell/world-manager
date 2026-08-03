@@ -2,7 +2,7 @@
 
 ## Summary
 
-World Manager can browse Minecraft Bedrock content from a trusted iPhone or iPad on macOS using Apple's private `MobileDevice.framework` and the House Arrest service.
+World Manager can browse and install Minecraft Bedrock content on a trusted iPhone or iPad from macOS using Apple's private `MobileDevice.framework` and the House Arrest service.
 
 Connected-device sources are modeled as normal `MinecraftSource` values, but they are not scanned through a live filesystem mirror. The current implementation asks the device for library item summaries, metadata, icons, sizes, and directory listings through `AppleMobileDeviceSourceAccess`. Only explicit materialization operations, such as reveal/export/share, mirror an item subtree into a temporary local directory.
 
@@ -87,6 +87,18 @@ During materialization:
 - `ContentPackageExporter` mirrors the selected item into archive staging when exporting connected-device content.
 - Temporary materialized folders are treated as disposable.
 
+During installation:
+
+- Package contents are fully extracted and validated on the Mac.
+- The bridge creates an operation directory under `Documents/games/com.mojang/.world-manager-staging`.
+- Files are uploaded through `AFCFileRefWrite`.
+- The destination collection is created if needed.
+- `AFCRenamePath` moves the completed staging directory into the appropriate collection.
+- A unique destination directory is selected, so an existing world or folder is not overwritten.
+- Failed staging trees are removed recursively through AFC.
+
+The write symbols are loaded opportunistically. Their absence prevents installation but does not disable read-only device access.
+
 ## Persistence
 
 Connected-device sources are persisted in the SQLite source cache with:
@@ -132,3 +144,6 @@ These commands require a trusted connected device and generally need to run outs
 - Behavior can change across macOS, iOS, iPadOS, and Minecraft releases.
 - Device access requires trust, unlock state, and a vendable app container.
 - Connected-device export/reveal operations may be slower than local folder operations because they materialize remote content on demand.
+- Device writes are serialized with scans and exports for the same device.
+- Multi-item imports can be partially completed if the device disconnects between items. The app reports the completed count and rescans the destination when it reconnects.
+- Pack replacement and removal are intentionally not implemented in the additive first version.

@@ -133,6 +133,97 @@ struct LocalFolderSourceAccess: SourceAccessMethod {
         return item.folderURL
     }
 
+    nonisolated func install(_ payload: InstallationPayload, in source: MinecraftSource) async throws -> InstalledContentItem {
+        let sourceRootURL = try resolvedSourceRootURL(for: source)
+        let accessedSecurityScope = sourceRootURL.startAccessingSecurityScopedResource()
+        defer {
+            if accessedSecurityScope {
+                sourceRootURL.stopAccessingSecurityScopedResource()
+            }
+        }
+
+        let fileManager = FileManager.default
+        let contentRootURL = try resolvedContentRootURL(for: source, sourceRootURL: sourceRootURL)
+        let collectionURL = contentRootURL.appendingPathComponent(
+            payload.contentType.collectionFolderName,
+            isDirectory: true
+        )
+        let stagingRootURL = contentRootURL
+            .appendingPathComponent(".world-manager-staging", isDirectory: true)
+        let stagedItemURL = stagingRootURL
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+
+        try fileManager.createDirectory(at: stagingRootURL, withIntermediateDirectories: true)
+        do {
+            try fileManager.copyItem(at: payload.preparedDirectoryURL, to: stagedItemURL)
+            try fileManager.createDirectory(at: collectionURL, withIntermediateDirectories: true)
+            let destinationURL = uniqueDestinationURL(
+                in: collectionURL,
+                preferredName: payload.suggestedFolderName,
+                fileManager: fileManager
+            )
+            try fileManager.moveItem(at: stagedItemURL, to: destinationURL)
+            return InstalledContentItem(
+                contentType: payload.contentType,
+                displayName: payload.displayName,
+                destinationName: destinationURL.lastPathComponent
+            )
+        } catch {
+            try? fileManager.removeItem(at: stagedItemURL)
+            throw error
+        }
+    }
+
+    nonisolated private func resolvedSourceRootURL(for source: MinecraftSource) throws -> URL {
+        guard case .localFolder(let bookmarkData) = source.origin, let bookmarkData else {
+            return source.folderURL
+        }
+
+        var isStale = false
+        return try URL(
+            resolvingBookmarkData: bookmarkData,
+            options: [.withSecurityScope],
+            relativeTo: nil,
+            bookmarkDataIsStale: &isStale
+        ).standardizedFileURL
+    }
+
+    nonisolated private func resolvedContentRootURL(
+        for source: MinecraftSource,
+        sourceRootURL: URL
+    ) throws -> URL {
+        let observedRoots = Set(source.rawItems.map {
+            $0.collectionRootURL.deletingLastPathComponent().standardizedFileURL
+        })
+        if let minimumDepth = observedRoots.map(\.pathComponents.count).min() {
+            let shallowestRoots = observedRoots.filter { $0.pathComponents.count == minimumDepth }
+            if shallowestRoots.count == 1, let observedRoot = shallowestRoots.first {
+                return observedRoot
+            }
+            if shallowestRoots.count > 1 {
+                throw SourceAccessError.accessFailed(
+                    reason: "This source contains more than one Minecraft content root. Choose the specific com.mojang folder before importing."
+                )
+            }
+        }
+
+        return sourceRootURL
+    }
+
+    nonisolated private func uniqueDestinationURL(
+        in collectionURL: URL,
+        preferredName: String,
+        fileManager: FileManager
+    ) -> URL {
+        var candidateURL = collectionURL.appendingPathComponent(preferredName, isDirectory: true)
+        var suffix = 2
+        while fileManager.fileExists(atPath: candidateURL.path) {
+            candidateURL = collectionURL.appendingPathComponent("\(preferredName)-\(suffix)", isDirectory: true)
+            suffix += 1
+        }
+        return candidateURL
+    }
+
     nonisolated private func discoverItemsByReconcilingCache(
         for source: MinecraftSource,
         snapshot: SourceSnapshot,

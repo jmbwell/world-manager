@@ -11,12 +11,14 @@ nonisolated struct ZipArchiveEntry: Sendable, Hashable {
     let uncompressedSize: UInt32
     let localHeaderOffset: UInt32
     let isDirectory: Bool
+    let isSymbolicLink: Bool
 }
 
 nonisolated enum ZipArchiveReaderError: LocalizedError {
     case invalidArchive
     case unsupportedCompressionMethod(UInt16)
     case unsupportedFeatures(String)
+    case unsafeEntryPath(String)
     case entryNotFound(String)
     case decompressionFailed(Int32)
 
@@ -28,6 +30,8 @@ nonisolated enum ZipArchiveReaderError: LocalizedError {
             return "Unsupported ZIP compression method: \(method)."
         case .unsupportedFeatures(let message):
             return message
+        case .unsafeEntryPath(let path):
+            return "The ZIP archive contains an unsafe entry path: \(path)"
         case .entryNotFound(let path):
             return "ZIP entry not found: \(path)"
         case .decompressionFailed(let code):
@@ -41,7 +45,7 @@ nonisolated struct ZipArchiveReader {
     let entries: [ZipArchiveEntry]
 
     init(url: URL) throws {
-        self.data = try Data(contentsOf: url)
+        self.data = try Data(contentsOf: url, options: .mappedIfSafe)
         self.entries = try ZipArchiveReader.parseEntries(in: data)
     }
 
@@ -78,6 +82,9 @@ nonisolated struct ZipArchiveReader {
 
         switch entry.compressionMethod {
         case 0:
+            guard compressedData.count == Int(entry.uncompressedSize) else {
+                throw ZipArchiveReaderError.invalidArchive
+            }
             return compressedData
         case 8:
             return try Self.inflateRawDeflate(compressedData, expectedSize: Int(entry.uncompressedSize))
@@ -115,6 +122,7 @@ nonisolated struct ZipArchiveReader {
             let extraFieldLength = Int(data.readUInt16LE(at: offset + 30))
             let fileCommentLength = Int(data.readUInt16LE(at: offset + 32))
             let localHeaderOffset = data.readUInt32LE(at: offset + 42)
+            let externalAttributes = data.readUInt32LE(at: offset + 38)
 
             let filenameStart = offset + 46
             let filenameEnd = filenameStart + filenameLength
@@ -127,7 +135,9 @@ nonisolated struct ZipArchiveReader {
                 throw ZipArchiveReaderError.invalidArchive
             }
 
+            try validateEntryPath(filename)
             let normalizedPath = Self.normalizedPath(filename)
+            let unixMode = UInt16((externalAttributes >> 16) & 0xffff)
             entries.append(
                 ZipArchiveEntry(
                     path: normalizedPath,
@@ -135,7 +145,8 @@ nonisolated struct ZipArchiveReader {
                     compressedSize: compressedSize,
                     uncompressedSize: uncompressedSize,
                     localHeaderOffset: localHeaderOffset,
-                    isDirectory: normalizedPath.hasSuffix("/")
+                    isDirectory: normalizedPath.hasSuffix("/"),
+                    isSymbolicLink: unixMode & 0o170000 == 0o120000
                 )
             )
 
@@ -176,6 +187,18 @@ nonisolated struct ZipArchiveReader {
             return joined + "/"
         }
         return joined
+    }
+
+    private static func validateEntryPath(_ path: String) throws {
+        let replaced = path.replacingOccurrences(of: "\\", with: "/")
+        let components = replaced.split(separator: "/", omittingEmptySubsequences: false)
+        guard
+            !replaced.hasPrefix("/"),
+            !replaced.contains("\0"),
+            !components.contains(where: { $0 == ".." })
+        else {
+            throw ZipArchiveReaderError.unsafeEntryPath(path)
+        }
     }
 
     private static func inflateRawDeflate(_ data: Data, expectedSize: Int) throws -> Data {
@@ -228,11 +251,17 @@ nonisolated struct ZipArchiveReader {
                     let producedByteCount = bufferPointer.count - Int(stream.avail_out)
                     if producedByteCount > 0 {
                         output.append(contentsOf: bufferPointer.prefix(producedByteCount))
+                        guard output.count <= expectedSize else {
+                            throw ZipArchiveReaderError.invalidArchive
+                        }
                     }
                 }
             } while status != Z_STREAM_END
         }
 
+        guard output.count == expectedSize else {
+            throw ZipArchiveReaderError.invalidArchive
+        }
         return output
     }
 }
