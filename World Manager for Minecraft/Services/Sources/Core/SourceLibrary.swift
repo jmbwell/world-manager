@@ -59,28 +59,35 @@ final class SourceLibrary: ObservableObject, SourceScanSessionHosting, SourcePer
         sourceAccessMethod: SourceAccessMethod = LocalFolderSourceAccess(),
         connectedDeviceAccessMethod: ConnectedDeviceSourceAccessMethod? = nil,
         notificationService: ScanNotificationServicing? = nil,
-        itemActionService: ContentItemActionService = ContentItemActionService()
+        itemActionService: ContentItemActionService = ContentItemActionService(),
+        restoresPersistedSources: Bool = true,
+        startsBackgroundRefresh: Bool = true
     ) {
         self.persistenceStore = persistenceStore
         self.sourceAccessMethod = sourceAccessMethod
         self.connectedDeviceAccessMethod = connectedDeviceAccessMethod
         self.notificationService = notificationService ?? ScanNotificationService.shared
         self.itemActionService = itemActionService
+        self.isRestoringPersistedSources = restoresPersistedSources
 
-        Task { [weak self] in
-            guard let self else {
-                return
+        if restoresPersistedSources {
+            Task { [weak self] in
+                guard let self else {
+                    return
+                }
+                await SourcePersistenceCoordinator.restoreSources(on: self, using: self.persistenceStore)
             }
-            await SourcePersistenceCoordinator.restoreSources(on: self, using: self.persistenceStore)
         }
 
-        localSourceRefreshTask = Task { [weak self] in
-            await self?.runLocalSourceRefreshLoop()
-        }
+        if startsBackgroundRefresh {
+            localSourceRefreshTask = Task { [weak self] in
+                await self?.runLocalSourceRefreshLoop()
+            }
 
-        if connectedDeviceAccessMethod != nil {
-            connectedDeviceRefreshTask = Task { [weak self] in
-                await self?.runConnectedDeviceRefreshLoop()
+            if connectedDeviceAccessMethod != nil {
+                connectedDeviceRefreshTask = Task { [weak self] in
+                    await self?.runConnectedDeviceRefreshLoop()
+                }
             }
         }
     }

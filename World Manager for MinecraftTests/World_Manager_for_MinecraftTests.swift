@@ -250,9 +250,15 @@ struct World_Manager_for_MinecraftTests {
 
         [[mods]]
         modId = "examplemod"
+        version = "1.2.3"
         displayName = "Example Java Mod"
         logoFile = "icon.png"
+        authors = "Alex, Sam"
         description = "A test mod."
+
+        [[dependencies.examplemod]]
+        modId = "minecraft"
+        versionRange = "[1.21,)"
         """.write(
             to: modSourceURL.appendingPathComponent("META-INF/neoforge.mods.toml"),
             atomically: true,
@@ -274,7 +280,11 @@ struct World_Manager_for_MinecraftTests {
         {
           "pack": {
             "description": "Example Resource Pack",
-            "pack_format": 34
+            "pack_format": 34,
+            "supported_formats": {
+              "min_inclusive": 34,
+              "max_inclusive": 42
+            }
           }
         }
         """.write(to: resourceSourceURL.appendingPathComponent("pack.mcmeta"), atomically: true, encoding: .utf8)
@@ -313,6 +323,11 @@ struct World_Manager_for_MinecraftTests {
         if case .java(let metadata) = enrichedMod.platformMetadata {
             #expect(metadata.pack?.description == "Example Mod Resources")
             #expect(metadata.pack?.packFormat == 31)
+            #expect(metadata.mod?.modID == "examplemod")
+            #expect(metadata.mod?.version == "1.2.3")
+            #expect(metadata.mod?.description == "A test mod.")
+            #expect(metadata.mod?.authors == ["Alex", "Sam"])
+            #expect(metadata.mod?.minecraftVersionRequirement == "[1.21,)")
         } else {
             Issue.record("Expected Java metadata")
         }
@@ -321,6 +336,7 @@ struct World_Manager_for_MinecraftTests {
         if case .java(let metadata) = enrichedResource.platformMetadata {
             #expect(metadata.pack?.description == "Example Resource Pack")
             #expect(metadata.pack?.packFormat == 34)
+            #expect(metadata.pack?.supportedFormats == "34-42")
         } else {
             Issue.record("Expected Java metadata")
         }

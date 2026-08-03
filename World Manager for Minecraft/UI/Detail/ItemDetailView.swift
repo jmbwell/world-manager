@@ -162,7 +162,7 @@ struct ItemDetailView: View {
                     recordSection(title: "Technical Details") {
                         VStack(alignment: .leading, spacing: 14) {
                             detailRow(title: "Folder ID", value: item.folderID)
-                            detailRow(title: "Type", value: item.contentType.rawValue)
+                            detailRow(title: "Type", value: item.platformType.displayName)
                             detailRow(title: "Collection Folder", value: item.collectionRootURL.lastPathComponent)
                             if let spawn = item.worldMetadata?.spawn {
                                 detailValueRow(title: "Spawn", value: spawn)
@@ -249,11 +249,47 @@ struct ItemDetailView: View {
                 )
             }
 
-            if item.contentType == .behaviorPack || item.contentType == .resourcePack {
+            if item.sourceEdition == .bedrock && (item.contentType == .behaviorPack || item.contentType == .resourcePack) {
                 detailValueRow(title: "UUID", value: item.packUUID ?? "Unavailable")
                 detailValueRow(title: "Version", value: item.packVersion ?? "Unavailable")
                 if let minimumEngineVersion = item.packMetadataDetails?.minimumEngineVersion {
                     detailValueRow(title: "Minimum Engine", value: minimumEngineVersion)
+                }
+            }
+
+            if let javaPackMetadata {
+                if let description = javaPackMetadata.description {
+                    detailRow(title: javaModMetadata == nil ? "Description" : "Pack Description", value: description)
+                }
+                if let packFormat = javaPackMetadata.packFormat {
+                    detailValueRow(title: "Pack Format", value: String(packFormat))
+                }
+                if let supportedFormats = javaPackMetadata.supportedFormats {
+                    detailValueRow(title: "Supported Formats", value: supportedFormats)
+                }
+            }
+
+            if let javaModMetadata {
+                if let modID = javaModMetadata.modID {
+                    detailValueRow(title: "Mod ID", value: modID)
+                }
+                if let version = javaModMetadata.version {
+                    detailValueRow(title: "Mod Version", value: version)
+                }
+                if let description = javaModMetadata.description {
+                    detailRow(title: "Mod Description", value: description)
+                }
+                if !javaModMetadata.authors.isEmpty {
+                    detailValueRow(title: "Authors", value: javaModMetadata.authors.joined(separator: ", "))
+                }
+                if let license = javaModMetadata.license {
+                    detailValueRow(title: "License", value: license)
+                }
+                if let environment = javaModMetadata.environment {
+                    detailValueRow(title: "Environment", value: environment)
+                }
+                if let minecraftRequirement = javaModMetadata.minecraftVersionRequirement {
+                    detailValueRow(title: "Minecraft", value: minecraftRequirement)
                 }
             }
         }
@@ -349,7 +385,13 @@ struct ItemDetailView: View {
     }
 
     private var heroMetadata: [String] {
-        var chips = [item.contentType.rawValue, sizeText, "\(item.displayDateLabel) \(displayDateText)"]
+        var chips = [item.platformType.displayName, sizeText, "\(item.displayDateLabel) \(displayDateText)"]
+
+        if let modID = javaModMetadata?.modID {
+            chips.append(modID)
+        } else if let packFormat = javaPackMetadata?.packFormat {
+            chips.append("Format \(packFormat)")
+        }
 
         if item.contentType == .world {
             let packCount = behaviorPacks.count + resourcePacks.count
@@ -386,6 +428,22 @@ struct ItemDetailView: View {
         })
 
         return max(0, relatedWorldIDs.subtracting([item.id]).count)
+    }
+
+    private var javaPackMetadata: JavaPackMetadata? {
+        if case .java(let metadata) = item.platformMetadata {
+            return metadata.pack
+        }
+
+        return nil
+    }
+
+    private var javaModMetadata: JavaModMetadata? {
+        if case .java(let metadata) = item.platformMetadata {
+            return metadata.mod
+        }
+
+        return nil
     }
 
     private var actionRowExportTitle: String {

@@ -6,7 +6,7 @@ import SwiftUI
 
 #if DEBUG
 
-enum PreviewFixtures {
+nonisolated enum PreviewFixtures {
     static let baseDate = Date(timeIntervalSinceReferenceDate: 770_000_000)
 
     static let sourceOneURL = URL(fileURLWithPath: "/tmp/preview-library-1")
@@ -132,7 +132,7 @@ enum PreviewFixtures {
     )
 
     static let primarySource: MinecraftSource = {
-        var source = MinecraftSource(folderURL: sourceOneURL)
+        var source = MinecraftSource(folderURL: sourceOneURL, availability: .available)
         source.displayName = "Kid iPad Imports"
         source.displayItems = [
             featuredWorld,
@@ -226,7 +226,7 @@ enum PreviewFixtures {
     }()
 
     static let secondarySource: MinecraftSource = {
-        var source = MinecraftSource(folderURL: sourceTwoURL)
+        var source = MinecraftSource(folderURL: sourceTwoURL, availability: .available)
         source.displayName = "Downloads"
         source.displayItems = [secondLibraryPack]
         source.displayItemCountsByType = source.displayItems.reduce(into: [MinecraftContentType: Int]()) { counts, item in
@@ -251,6 +251,87 @@ enum PreviewFixtures {
         DirectoryEntry(name: "world_icon.jpeg", isDirectory: false),
         DirectoryEntry(name: "resource_packs", isDirectory: true)
     ]
+}
+
+struct PreviewSourceAccess: SourceAccessMethod {
+    nonisolated let accessorIdentifier: SourceAccessorIdentifier = "preview-source"
+
+    nonisolated init() {}
+
+    nonisolated func accessStatus(for source: MinecraftSource) async -> SourceAccessStatus {
+        SourceAccessStatus(
+            availability: .available,
+            mode: .localFileSystem,
+            displayName: source.displayName,
+            iconSystemName: "folder",
+            statusText: nil,
+            warningText: nil
+        )
+    }
+
+    nonisolated func capabilities(for source: MinecraftSource) async -> SourceCapabilities {
+        _ = source
+        return .localFolder
+    }
+
+    nonisolated func discoverItems(
+        for source: MinecraftSource,
+        mode: SourceDiscoveryMode,
+        onDiscovered: @escaping @Sendable (MinecraftContentItem) -> Void
+    ) async throws {
+        _ = mode
+        for item in source.displayItems {
+            onDiscovered(item)
+        }
+    }
+
+    nonisolated func listItemContents(for item: MinecraftContentItem, in source: MinecraftSource) async throws -> [DirectoryEntry] {
+        _ = item
+        _ = source
+        return PreviewFixtures.directoryEntries
+    }
+
+    nonisolated func materializeItem(for item: MinecraftContentItem, in source: MinecraftSource) async throws -> URL {
+        _ = source
+        return item.folderURL
+    }
+}
+
+@MainActor
+extension SourceLibrary {
+    static func makePreview() -> SourceLibrary {
+        let library = SourceLibrary(
+            sourceAccessMethod: PreviewSourceAccess(),
+            restoresPersistedSources: false,
+            startsBackgroundRefresh: false
+        )
+        library.sources = PreviewFixtures.allSources
+        library.sourceCandidates = [
+            SourceCandidate(
+                providerID: LocalFolderSourceAccess().accessorIdentifier,
+                edition: .bedrock,
+                sourceRootURL: URL(fileURLWithPath: "/tmp/preview-candidate"),
+                displayName: "Found Minecraft Folder",
+                confidence: .strong,
+                reason: "Contains Minecraft content folders",
+                detectedKinds: [.world, .resourcePack]
+            )
+        ]
+        return library
+    }
+}
+
+extension ContentViewDependencies {
+    @MainActor
+    static func makePreview() -> ContentViewDependencies {
+        let connectedDeviceAccess = AppleMobileDeviceSourceAccess()
+        return ContentViewDependencies(
+            library: .makePreview(),
+            connectedDeviceAccess: connectedDeviceAccess,
+            deviceSourceFactory: ConnectedDeviceSourceFactory(),
+            itemActionService: ContentItemActionService()
+        )
+    }
 }
 
 @MainActor

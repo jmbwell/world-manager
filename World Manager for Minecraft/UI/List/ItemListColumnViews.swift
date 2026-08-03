@@ -73,8 +73,8 @@ struct ItemListColumnView<MenuContent: View>: View {
                     sourceName: sourceName,
                     showsSourceName: showsSourceName,
                     title: title,
-                    subtitle: subtitle,
-                    showsSubtitle: showsSubtitle,
+                    subtitle: navigationSubtitleText,
+                    showsSubtitle: showsSubtitle || showsProjectionLoadingState,
                     isRefreshing: isRefreshing,
                     showsProjectionLoadingState: showsProjectionLoadingState
                 )
@@ -82,7 +82,7 @@ struct ItemListColumnView<MenuContent: View>: View {
         }
         .searchable(text: $searchText, prompt: searchPrompt)
         .navigationTitle(isEmpty ? "Library" : title)
-        .navigationSubtitle(isEmpty ? "" : subtitle)
+        .navigationSubtitle(isEmpty ? "" : navigationSubtitleText)
         .toolbar {
             if !isEmpty {
                 ToolbarItemGroup {
@@ -99,6 +99,13 @@ struct ItemListColumnView<MenuContent: View>: View {
                 }
             }
         }
+    }
+
+    private var navigationSubtitleText: String {
+        if showsProjectionLoadingState {
+            return "Loading items..."
+        }
+        return subtitle
     }
 }
 
@@ -130,8 +137,8 @@ private struct ItemListHeaderView: View {
                 }
             }
 
-            if showsSubtitle || showsProjectionLoadingState {
-                Text(displaySubtitle)
+            if showsSubtitle {
+                Text(subtitle)
                     .appTextStyle(.supporting)
             }
         }
@@ -140,14 +147,6 @@ private struct ItemListHeaderView: View {
         .padding(.top, 10)
         .padding(.bottom, 12)
         .appListHeaderSurface()
-    }
-
-    private var displaySubtitle: String {
-        if showsProjectionLoadingState {
-            return "Loading items..."
-        }
-
-        return subtitle
     }
 }
 

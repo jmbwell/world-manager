@@ -86,6 +86,9 @@ struct SourcesSidebarView: View {
             }
         }
         .listStyle(.sidebar)
+        .transaction { transaction in
+            transaction.animation = nil
+        }
         .toolbar {
             ToolbarItem {
                 Button(action: discoverSourcesAction) {
@@ -158,10 +161,9 @@ struct SourcesSidebarView: View {
     private func sidebarNodeRow(_ node: SidebarNode) -> some View {
         switch node.row {
         case .source(let source):
-            SourceHeaderRow(source: source)
+            SourceHeaderRow(source: source, isSelected: selection == node.selection)
                 .tag(node.selection as SidebarSelection?)
                 .listRowSeparator(.hidden)
-                .listRowInsets(EdgeInsets(top: 4, leading: 8, bottom: 4, trailing: 8))
                 .contextMenu {
                     Button("Rescan \"\(source.displayName)\"") {
                         rescanSourceAction(source)
@@ -185,7 +187,6 @@ struct SourcesSidebarView: View {
             )
             .tag(node.selection as SidebarSelection?)
             .listRowSeparator(.hidden)
-            .listRowInsets(EdgeInsets(top: 6, leading: 8, bottom: 0, trailing: 8))
         case .sourceCandidate(let candidate):
             SourceCandidateRow(
                 candidate: candidate,
@@ -195,7 +196,6 @@ struct SourcesSidebarView: View {
             )
             .tag(node.selection as SidebarSelection?)
             .listRowSeparator(.hidden)
-            .listRowInsets(EdgeInsets(top: 4, leading: 8, bottom: 4, trailing: 8))
         }
     }
 }
@@ -206,18 +206,19 @@ private struct SourceCandidateRow: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            Image(systemName: symbolName)
-                .foregroundStyle(.secondary)
-                .frame(width: 16)
+            Label {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(candidate.displayName)
+                        .lineLimit(1)
 
-            VStack(alignment: .leading, spacing: 2) {
-                Text(candidate.displayName)
-                    .lineLimit(1)
-
-                Text(subtitle)
-                    .font(.caption)
+                    Text(subtitle)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            } icon: {
+                Image(systemName: symbolName)
                     .foregroundStyle(.secondary)
-                    .lineLimit(1)
             }
 
             Spacer(minLength: 8)
@@ -250,12 +251,13 @@ private struct SidebarFilterRow: View {
     let filter: SidebarFilter
 
     var body: some View {
-        HStack(spacing: 10) {
-            Image(systemName: filter.iconName)
-                .frame(width: 16)
-                .foregroundStyle(.secondary)
-
-            Text(filter.title)
+        HStack {
+            Label {
+                Text(filter.title)
+            } icon: {
+                Image(systemName: filter.iconName)
+                    .foregroundStyle(.secondary)
+            }
 
             Spacer()
 
@@ -275,24 +277,31 @@ private struct SidebarSourcesSectionHeaderView: View {
 
 private struct SourceHeaderRow: View {
     let source: MinecraftSource
+    let isSelected: Bool
 
     var body: some View {
-        HStack(spacing: 8) {
-            Image(systemName: headerSymbolName)
-                .foregroundStyle(.secondary)
-
-            Text(source.displayName)
-                .lineLimit(1)
+        HStack {
+            Label {
+                Text(source.displayName)
+                    .lineLimit(1)
+            } icon: {
+                Image(systemName: headerSymbolName)
+                    .foregroundStyle(.secondary)
+            }
 
             Spacer(minLength: 8)
 
             HStack(spacing: 8) {
                 if let availabilityBadgeText {
-                    SourceAvailabilityBadge(text: availabilityBadgeText, emphasis: availabilityBadgeEmphasis)
+                    SourceAvailabilityBadge(
+                        text: availabilityBadgeText,
+                        emphasis: availabilityBadgeEmphasis,
+                        isSelected: isSelected
+                    )
                 }
 
                 if let connection {
-                    SourceConnectionBadge(connection: connection)
+                    SourceConnectionBadge(connection: connection, isSelected: isSelected)
                 }
 
                 if showsStatusAccessory {
@@ -301,8 +310,6 @@ private struct SourceHeaderRow: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 8)
-        .padding(.vertical, 5)
     }
 
     private var connection: DeviceConnection? {
@@ -351,23 +358,24 @@ private struct SourceHeaderRow: View {
 
     @ViewBuilder
     private var statusAccessory: some View {
-            if source.isScanning {
-                if let scanProgress = source.scanProgress {
-                    CircularScanProgressView(progress: scanProgress)
-                } else {
-                    ProgressView()
-                        .appActivityIndicatorStyle(.small)
-                }
+        if source.isScanning {
+            if let scanProgress = source.scanProgress {
+                CircularScanProgressView(progress: scanProgress, isSelected: isSelected)
+            } else {
+                ProgressView()
+                    .appActivityIndicatorStyle(.small)
             }
         }
+    }
 }
 
 private struct SourceConnectionBadge: View {
     let connection: DeviceConnection
+    let isSelected: Bool
 
     var body: some View {
         Image(systemName: symbolName)
-            .appCapsuleLabelStyle(.sidebarSubtle)
+            .appCapsuleLabelStyle(isSelected ? .sidebarSelected : .sidebarSubtle)
             .help(helpText)
             .accessibilityLabel(helpText)
     }
@@ -394,30 +402,35 @@ private struct SourceConnectionBadge: View {
 private struct SourceAvailabilityBadge: View {
     let text: String
     let emphasis: Bool
+    let isSelected: Bool
 
     var body: some View {
         Text(text)
-            .appCapsuleLabelStyle(emphasis ? .sidebarAccent : .sidebarSubtle)
+            .appCapsuleLabelStyle(isSelected ? .sidebarSelected : emphasis ? .sidebarAccent : .sidebarSubtle)
     }
 }
 
 private struct CircularScanProgressView: View {
     let progress: Double
+    let isSelected: Bool
+
+    private let size: CGFloat = 17
+    private let lineWidth: CGFloat = 1.4
 
     var body: some View {
         ZStack {
             Circle()
-                .stroke(.secondary.opacity(0.18), lineWidth: 3)
+                .stroke(isSelected ? .white.opacity(0.18) : Color.secondary.opacity(0.24), lineWidth: lineWidth)
 
             Circle()
-                .trim(from: 0, to: max(0.02, min(progress, 1)))
+                .trim(from: 0, to: max(0, min(progress, 1)))
                 .stroke(
-                    Color.appAccent,
-                    style: StrokeStyle(lineWidth: 3, lineCap: .round)
+                    isSelected ? .white.opacity(0.86) : Color.appAccent,
+                    style: StrokeStyle(lineWidth: lineWidth, lineCap: .round)
                 )
                 .rotationEffect(.degrees(-90))
         }
-        .frame(width: 18, height: 18)
+        .frame(width: size, height: size)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Scan progress")
         .accessibilityValue(Text("\(Int((progress * 100).rounded())) percent"))
@@ -429,20 +442,22 @@ private struct ConnectedDeviceRow: View {
     let addAction: (() -> Void)?
 
     var body: some View {
-        HStack(alignment: .top, spacing: 10) {
-            ConnectedDeviceTransportIcon(
-                baseSymbolName: iconName,
-                connection: entry.device.connection,
-                tint: iconColor
-            )
+        HStack(alignment: .top) {
+            Label {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(entry.device.name)
+                        .appTextStyle(.rowTitle)
+                        .foregroundStyle(titleColor)
 
-            VStack(alignment: .leading, spacing: 4) {
-                Text(entry.device.name)
-                    .appTextStyle(.rowTitle)
-                    .foregroundStyle(titleColor)
-
-                Text(statusText)
-                    .appTextStyle(.supportingCompact)
+                    Text(statusText)
+                        .appTextStyle(.supportingCompact)
+                }
+            } icon: {
+                ConnectedDeviceTransportIcon(
+                    baseSymbolName: iconName,
+                    connection: entry.device.connection,
+                    tint: iconColor
+                )
             }
 
             Spacer(minLength: 12)

@@ -32,14 +32,19 @@ struct ContentView: View {
     private let directoryPreviewLimit = 12
     private let projectionLoadingDelay: Duration = .milliseconds(150)
 
-    init() {
-        let dependencies = ContentViewDependencies.makeDefault()
+    init(
+        dependencies: ContentViewDependencies = ContentViewDependencies.makeDefault(),
+        initialSidebarSelection: SidebarSelection? = nil,
+        initialItemID: MinecraftContentItem.ID? = nil
+    ) {
         self.connectedDeviceAccess = dependencies.connectedDeviceAccess
         self.deviceSourceFactory = dependencies.deviceSourceFactory
         self.itemActionService = dependencies.itemActionService
         _library = StateObject(
             wrappedValue: dependencies.library
         )
+        _selectedSidebarSelection = State(initialValue: initialSidebarSelection)
+        _selectedItemID = State(initialValue: initialItemID)
     }
 
     var body: some View {
@@ -919,8 +924,19 @@ struct ContentView: View {
     }
 }
 
+#if DEBUG
 struct ContentView_Previews: PreviewProvider {
     static var previews: some View {
-        ContentView()
+        ContentView(
+            dependencies: .makePreview(),
+            initialSidebarSelection: .contentKind(
+                sourceID: PreviewFixtures.primarySource.id,
+                contentKind: .world
+            ),
+            initialItemID: PreviewFixtures.featuredWorld.id
+        )
+        .frame(width: 1_440, height: 900)
+        .previewDisplayName("Full Window")
     }
 }
+#endif

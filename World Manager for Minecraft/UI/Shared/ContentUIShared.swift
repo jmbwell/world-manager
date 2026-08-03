@@ -160,6 +160,7 @@ private struct AppTransportBadgeBubbleModifier: ViewModifier {
 enum AppCapsuleLabelStyle {
     case sidebarSubtle
     case sidebarAccent
+    case sidebarSelected
     case heroMetadata
 }
 
@@ -181,6 +182,8 @@ private struct AppCapsuleLabelModifier: ViewModifier {
             return AnyShapeStyle(.secondary)
         case .sidebarAccent:
             return AnyShapeStyle(Color.appAccent)
+        case .sidebarSelected:
+            return AnyShapeStyle(.white.opacity(0.92))
         case .heroMetadata:
             return AnyShapeStyle(.white.opacity(0.95))
         }
@@ -192,6 +195,8 @@ private struct AppCapsuleLabelModifier: ViewModifier {
             return AnyShapeStyle(.secondary.opacity(0.12))
         case .sidebarAccent:
             return AnyShapeStyle(Color.appAccent.opacity(0.14))
+        case .sidebarSelected:
+            return AnyShapeStyle(.white.opacity(0.16))
         case .heroMetadata:
             return AnyShapeStyle(.white.opacity(0.14))
         }
@@ -201,7 +206,7 @@ private struct AppCapsuleLabelModifier: ViewModifier {
         switch style {
         case .heroMetadata:
             return 10
-        case .sidebarSubtle, .sidebarAccent:
+        case .sidebarSubtle, .sidebarAccent, .sidebarSelected:
             return 7
         }
     }
@@ -210,7 +215,7 @@ private struct AppCapsuleLabelModifier: ViewModifier {
         switch style {
         case .heroMetadata:
             return 7
-        case .sidebarSubtle, .sidebarAccent:
+        case .sidebarSubtle, .sidebarAccent, .sidebarSelected:
             return 4
         }
     }

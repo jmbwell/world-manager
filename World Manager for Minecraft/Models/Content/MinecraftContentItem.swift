@@ -265,15 +265,18 @@ nonisolated struct BedrockContentMetadata: Hashable, Sendable, Codable {
 nonisolated struct JavaContentMetadata: Hashable, Sendable, Codable {
     var world: JavaWorldMetadata?
     var pack: JavaPackMetadata?
+    var mod: JavaModMetadata?
     var dataPacks: [JavaPackReference]
 
     nonisolated init(
         world: JavaWorldMetadata? = nil,
         pack: JavaPackMetadata? = nil,
+        mod: JavaModMetadata? = nil,
         dataPacks: [JavaPackReference] = []
     ) {
         self.world = world
         self.pack = pack
+        self.mod = mod
         self.dataPacks = dataPacks
     }
 }
@@ -288,7 +291,46 @@ nonisolated struct JavaWorldMetadata: Hashable, Sendable, Codable {
 
 nonisolated struct JavaPackMetadata: Hashable, Sendable, Codable {
     var packFormat: Int?
+    var supportedFormats: String?
     var description: String?
+
+    nonisolated init(
+        packFormat: Int? = nil,
+        supportedFormats: String? = nil,
+        description: String? = nil
+    ) {
+        self.packFormat = packFormat
+        self.supportedFormats = supportedFormats
+        self.description = description
+    }
+}
+
+nonisolated struct JavaModMetadata: Hashable, Sendable, Codable {
+    var modID: String?
+    var version: String?
+    var description: String?
+    var authors: [String]
+    var license: String?
+    var environment: String?
+    var minecraftVersionRequirement: String?
+
+    nonisolated init(
+        modID: String? = nil,
+        version: String? = nil,
+        description: String? = nil,
+        authors: [String] = [],
+        license: String? = nil,
+        environment: String? = nil,
+        minecraftVersionRequirement: String? = nil
+    ) {
+        self.modID = modID
+        self.version = version
+        self.description = description
+        self.authors = authors
+        self.license = license
+        self.environment = environment
+        self.minecraftVersionRequirement = minecraftVersionRequirement
+    }
 }
 
 nonisolated struct JavaPackReference: Identifiable, Hashable, Sendable, Codable {
@@ -434,6 +476,23 @@ nonisolated struct MinecraftContentItem: Identifiable, Hashable, Sendable, Codab
         values.append(packMetadataDetails?.minimumEngineVersion ?? "")
         values.append(packReferences.map(\.name).joined(separator: " "))
         values.append(packReferences.compactMap(\.uuid).joined(separator: " "))
+        if case .java(let metadata) = platformMetadata {
+            values.append(metadata.world?.dataVersion ?? "")
+            values.append(metadata.world?.gameMode ?? "")
+            values.append(metadata.world?.difficulty ?? "")
+            values.append(metadata.world?.seed ?? "")
+            values.append(metadata.pack?.description ?? "")
+            values.append(metadata.pack?.packFormat.map(String.init) ?? "")
+            values.append(metadata.pack?.supportedFormats ?? "")
+            values.append(metadata.mod?.modID ?? "")
+            values.append(metadata.mod?.version ?? "")
+            values.append(metadata.mod?.description ?? "")
+            values.append(metadata.mod?.authors.joined(separator: " ") ?? "")
+            values.append(metadata.mod?.license ?? "")
+            values.append(metadata.mod?.environment ?? "")
+            values.append(metadata.mod?.minecraftVersionRequirement ?? "")
+            values.append(metadata.dataPacks.map(\.name).joined(separator: " "))
+        }
 
         return values
             .filter { !$0.isEmpty }

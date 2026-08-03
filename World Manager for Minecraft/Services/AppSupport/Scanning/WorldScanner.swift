@@ -788,8 +788,11 @@ enum JavaContentScanner {
         let metadata = JavaContentMetadataReader.metadata(for: item)
         enrichedItem.displayName = metadata?.displayName ?? displayName(for: item)
         enrichedItem.iconURL = await JavaContentMetadataReader.cachedIconURL(for: item, metadata: metadata)
-        if let packMetadata = metadata?.pack {
-            enrichedItem.platformMetadata = .java(JavaContentMetadata(pack: packMetadata))
+        if metadata?.pack != nil || metadata?.mod != nil {
+            enrichedItem.platformMetadata = .java(JavaContentMetadata(
+                pack: metadata?.pack,
+                mod: metadata?.mod
+            ))
         }
         enrichedItem.hasKnownIcon = enrichedItem.iconURL != nil
         enrichedItem.modifiedDate = WorldScanner.modifiedDate(for: item.folderURL)
